@@ -272,6 +272,11 @@ struct FocusSnapshotResolver {
         // Two extra attribute reads, and only when the field-relative read came back empty.
         let appFocusedWindowTitle = (resolvedCandidate.isSecure || !(windowTitle ?? "").isEmpty)
             ? nil : AXHelper.focusedWindowTitle(processIdentifier: application.processIdentifier)
+        // Only for chat apps with a known header (WhatsApp), and bounded: see `titleOfElement`.
+        let conversationTitle = resolvedCandidate.isSecure ? nil : ConversationHeaderPolicy
+            .headerIdentifier(forBundleIdentifier: bundleIdentifier)
+            .flatMap { AXHelper.titleOfElement(withIdentifier: $0, near: resolvedCandidate.element) }
+            .flatMap(ConversationHeaderPolicy.cleanedTitle)
         let fieldPlaceholder = resolvedCandidate.isSecure ? nil : AXHelper.stringValue(
             for: kAXPlaceholderValueAttribute as CFString, on: resolvedCandidate.element
         )
@@ -342,6 +347,7 @@ struct FocusSnapshotResolver {
             windowTitle: windowTitle,
             fieldPlaceholder: fieldPlaceholder,
             appFocusedWindowTitle: appFocusedWindowTitle,
+            conversationTitle: conversationTitle,
             hostTextMetrics: Self.mergingRunLinePitch(hostTextMetrics, edges: observedContentEdges),
             elementFrameRect: resolvedCandidate.elementFrameRect,
             hostMarkedTextRange: resolvedCandidate.markedTextRange ?? chromiumCompletionRange ?? smartComposeRange

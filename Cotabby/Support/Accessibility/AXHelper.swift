@@ -1073,6 +1073,39 @@ enum AXHelper {
         return stringValue(for: kAXTitleAttribute as CFString, on: window)
     }
 
+    /// Title (or description) of the nearest element with `identifier`, searched from `element`'s
+    /// ancestors a few levels down: a chat's header sits beside its composer, not above it. Bounded to
+    /// `maximumAncestors` levels up, `maximumDepth` down and `maximumNodes` reads in all, so a poll never
+    /// pays a whole-window walk; nil when the element is not that close.
+    static func titleOfElement(
+        withIdentifier identifier: String,
+        near element: AXUIElement,
+        maximumAncestors: Int = 12,
+        maximumDepth: Int = 4,
+        maximumNodes: Int = 400
+    ) -> String? {
+        var visited = 0
+        var ancestor: AXUIElement? = element
+        for _ in 0..<maximumAncestors {
+            guard let current = ancestor else { return nil }
+            var frontier = [(current, 0)]
+            while !frontier.isEmpty, visited < maximumNodes {
+                let (node, depth) = frontier.removeFirst()
+                visited += 1
+                if stringValue(for: "AXIdentifier" as CFString, on: node) == identifier {
+                    return stringValue(for: kAXTitleAttribute as CFString, on: node)
+                        ?? stringValue(for: kAXDescriptionAttribute as CFString, on: node)
+                }
+                if depth < maximumDepth {
+                    frontier += childElements(of: node).map { ($0, depth + 1) }
+                }
+            }
+            guard visited < maximumNodes else { return nil }
+            ancestor = parentElement(of: current)
+        }
+        return nil
+    }
+
     /// Best-effort read of the page URL for local navigation identity and per-site rules.
     /// Browsers expose `kAXURLAttribute` on the web area or window rather than the focused field, so
     /// this walks up a bounded number of ancestors. It returns nil on any miss (non-browser focus, an
