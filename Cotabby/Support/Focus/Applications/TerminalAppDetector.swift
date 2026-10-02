@@ -38,6 +38,18 @@ nonisolated enum TerminalAppDetector {
         return terminalScreenFieldBundleIdentifiers.contains(bundleIdentifier)
     }
 
+    /// Terminal screen hosts whose text area reports no cursor at all: the insertion point is
+    /// always 0 of the whole scrollback and no character bounds are answered (Ghostty, measured
+    /// 2026-10-02). Their cursor is measured from their pixels (`TerminalCursorTracker`).
+    private static let noCursorBundleIdentifiers: Set<String> = [
+        "com.mitchellh.ghostty"
+    ]
+
+    static func reportsNoCursor(bundleIdentifier: String?) -> Bool {
+        guard let bundleIdentifier else { return false }
+        return noCursorBundleIdentifiers.contains(bundleIdentifier)
+    }
+
     /// DOM class prefix xterm.js stamps on every node of its terminal subtree — most importantly the
     /// focusable `xterm-helper-textarea` that receives the caret.
     private static let integratedTerminalClassPrefix = "xterm"

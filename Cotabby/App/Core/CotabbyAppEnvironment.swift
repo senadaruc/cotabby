@@ -86,6 +86,9 @@ final class CotabbyAppEnvironment {
         // Stop the deep AX walk when Cotabby is disabled for the focused app or while Calendar's
         // fragile date/time editor is active. The latter is interaction-scoped: Calendar text fields
         // still resolve normally, unlike the old app-wide suppression workaround for #544.
+        // Measures the cursor of terminals that report none (Ghostty) from their pixels; lives as long
+        // as focus tracking, which it asks to resolve again whenever it has a new measurement.
+        let terminalCursorTracker = TerminalCursorTracker()
         let focusModel = FocusTrackingModel(
             permissionProvider: { permissionManager.accessibilityGranted },
             ignoredBundleIdentifier: Bundle.main.bundleIdentifier,
@@ -103,8 +106,12 @@ final class CotabbyAppEnvironment {
                 return calendarAccessibilityCaptureGuard.shouldSuppressCapture(
                     for: bundleIdentifier
                 )
-            }
+            },
+            terminalCursorProvider: terminalCursorTracker
         )
+        terminalCursorTracker.onFixUpdated = { [weak focusModel] in
+            focusModel?.refreshNow()
+        }
         // The snapshot is poll-based, so after a fast app switch the closure may briefly
         // evaluate against the previous app's identity until the next AX poll fires. This
         // is the same race the downstream evaluator already has — not a new regression.
