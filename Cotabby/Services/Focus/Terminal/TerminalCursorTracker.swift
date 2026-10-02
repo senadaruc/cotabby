@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import Logging
 import ScreenCaptureKit
 
 /// File overview:
@@ -70,7 +71,26 @@ final class TerminalCursorTracker: TerminalCursorProviding {
         lastCaptureStart = Date()
         let configuration = loadConfiguration()
         Task { [weak self] in
-            let measured = await Self.measure(key: key, configuration: configuration)
+            let outcome = await Self.measure(key: key, configuration: configuration)
+            let measured: TerminalCursorFix?
+            switch outcome {
+            case let .success(fix):
+                measured = fix
+                CotabbyLogger.focus.debug(
+                    "Terminal cursor measured",
+                    metadata: [
+                        "stage": .string("terminal-cursor"),
+                        "column": .stringConvertible(fix.column),
+                        "rows_above_last_ink": .stringConvertible(fix.rowsAboveLastInk)
+                    ]
+                )
+            case let .failure(failure):
+                measured = nil
+                CotabbyLogger.focus.debug(
+                    "Terminal cursor not measured",
+                    metadata: ["stage": .string("terminal-cursor"), "reason": .string(failure.reason)]
+                )
+            }
             guard let self else { return }
             self.captureInFlight = false
             // A capture for a text area that is no longer focused must not overwrite the new one.
@@ -86,16 +106,24 @@ final class TerminalCursorTracker: TerminalCursorProviding {
         }
     }
 
-    /// Captures the text area and measures the cursor, or nil when the window is not capturable or
+    /// Why a measurement produced no fix, for the debug log.
+    private struct MeasurementFailure: Error {
+        let reason: String
+    }
+
+    /// Captures the text area and measures the cursor; fails when the window is not capturable or
     /// the cursor is not visible in this frame (blink, scrolled away, ambiguous).
-    private static func measure(key: Key, configuration: GhosttyConfiguration) async -> TerminalCursorFix? {
-        guard CGPreflightScreenCaptureAccess(),
-              let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true),
-              let window = content.windows.first(where: {
-                  $0.owningApplication?.processID == key.processIdentifier
-                      && $0.frame.contains(CGPoint(x: key.elementFrame.midX, y: key.elementFrame.midY))
-              })
-        else { return nil }
+    private static func measure(
+        key: Key,
+        configuration: GhosttyConfiguration
+    ) async -> Result<TerminalCursorFix, MeasurementFailure> {
+        guard CGPreflightScreenCaptureAccess() else { return .failure(.init(reason: "no-screen-recording")) }
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        else { return .failure(.init(reason: "no-shareable-content")) }
+        guard let window = content.windows.first(where: {
+            $0.owningApplication?.processID == key.processIdentifier
+                && $0.frame.contains(CGPoint(x: key.elementFrame.midX, y: key.elementFrame.midY))
+        }) else { return .failure(.init(reason: "no-window")) }
 
         // ScreenCaptureKit and Accessibility share global top-left display points; the crop is
         // window-relative.
@@ -118,20 +146,20 @@ final class TerminalCursorTracker: TerminalCursorProviding {
         configurationSC.showsCursor = false
         let filter = SCContentFilter(desktopIndependentWindow: window)
         guard let image = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configurationSC)
-        else { return nil }
+        else { return .failure(.init(reason: "capture-failed")) }
 
         let color = configuration.cursorColor
         let measurement = await Task.detached(priority: .userInitiated) { () -> TerminalCursorDetector.Measurement? in
             guard let buffer = TerminalPixelBuffer(image: image) else { return nil }
             return TerminalCursorDetector.measure(buffer, cursorColor: color)
         }.value
-        guard let measurement else { return nil }
+        guard let measurement else { return .failure(.init(reason: "cursor-not-found")) }
 
         let pixelScale = CGFloat(image.width) / key.elementFrame.width
         let cellWidth = CGFloat(measurement.columnPitch) / pixelScale
         let cursorX = CGFloat(measurement.cursorX) / pixelScale
         let column = Int(((cursorX - configuration.paddingX) / cellWidth).rounded())
-        return TerminalCursorFix(
+        return .success(TerminalCursorFix(
             elementFrame: key.elementFrame,
             caretRect: CGRect(
                 x: key.elementFrame.minX + cursorX,
@@ -142,6 +170,6 @@ final class TerminalCursorTracker: TerminalCursorProviding {
             rowsAboveLastInk: measurement.rowsFromCursorToLastInk,
             column: max(0, column),
             measuredAt: Date()
-        )
+        ))
     }
 }

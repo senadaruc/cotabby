@@ -1429,7 +1429,13 @@ struct FocusSnapshotResolver {
               let offset = TerminalScreenTextMapper.caretOffset(
                   in: tail, rowsAboveLastInk: fix.rowsAboveLastInk, column: fix.column
               )
-        else { return nil }
+        else {
+            CotabbyLogger.focus.debug(
+                "Terminal cursor not mapped to text",
+                metadata: ["stage": .string("terminal-cursor"), "rows_above_last_ink": .stringConvertible(fix.rowsAboveLastInk)]
+            )
+            return nil
+        }
         return (
             NSRange(location: length - tailLength + offset, length: 0),
             AXHelper.cocoaRect(fromAccessibilityRect: fix.caretRect)
