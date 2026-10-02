@@ -100,7 +100,8 @@ nonisolated enum TerminalCursorDetector {
         // The cursor comes first and calibrates the grid: autocorrelation alone cannot tell a pitch
         // from its multiples on a real screen (measured live: rows alternating with blank rows
         // scored 78 px far above the true 39 px, and columns scored 17 and 34 px within 1%).
-        guard let cursor = cursorBox(buffer, color: cursorColor) else { return nil }
+        let backgroundColor = backgroundColor(buffer)
+        guard let cursor = cursorBox(buffer, color: cursorColor, background: backgroundColor) else { return nil }
         let background = backgroundLuminance(buffer)
         let rows = rowInkProfile(buffer, background: background)
         let columns = columnInkProfile(buffer, background: background)
@@ -126,6 +127,21 @@ nonisolated enum TerminalCursorDetector {
     }
 
     // MARK: - Grid
+
+    /// The per-channel median of a sparse sample: a terminal screen is mostly background.
+    static func backgroundColor(_ buffer: TerminalPixelBuffer) -> TerminalRGBColor {
+        var reds: [UInt8] = [], greens: [UInt8] = [], blues: [UInt8] = []
+        let step = max(1, (buffer.width * buffer.height) / 4000)
+        var index = 0
+        while index < buffer.width * buffer.height {
+            reds.append(buffer.rgba[index * 4])
+            greens.append(buffer.rgba[index * 4 + 1])
+            blues.append(buffer.rgba[index * 4 + 2])
+            index += step
+        }
+        func median(_ values: [UInt8]) -> UInt8 { values.sorted()[values.count / 2] }
+        return TerminalRGBColor(red: median(reds), green: median(greens), blue: median(blues))
+    }
 
     /// The median luminance of a sparse sample: a terminal screen is mostly background.
     static func backgroundLuminance(_ buffer: TerminalPixelBuffer) -> Int {
@@ -193,12 +209,16 @@ nonisolated enum TerminalCursorDetector {
     /// hollow box two, a block many. Glyphs drawn in the same colour make shorter strokes (measured
     /// 26 px against the cursor's 37 px) and are ignored; two equally tall groups are ambiguous, so
     /// the answer is none rather than a guess that would put the ghost on the wrong line.
-    static func cursorBox(_ buffer: TerminalPixelBuffer, color: TerminalRGBColor) -> (x: Int, top: Int, width: Int, height: Int)? {
+    static func cursorBox(
+        _ buffer: TerminalPixelBuffer,
+        color: TerminalRGBColor,
+        background: TerminalRGBColor
+    ) -> (x: Int, top: Int, width: Int, height: Int)? {
         var strokes: [(x: Int, top: Int, height: Int)] = []
         for x in 0..<buffer.width {
             var run = 0
             for y in 0...buffer.height {
-                if y < buffer.height, matches(buffer, pixel: y * buffer.width + x, color: color) {
+                if y < buffer.height, matches(buffer, pixel: y * buffer.width + x, color: color, background: background) {
                     run += 1
                     continue
                 }
@@ -240,10 +260,39 @@ nonisolated enum TerminalCursorDetector {
         return (Int(buffer.rgba[offset]) * 299 + Int(buffer.rgba[offset + 1]) * 587 + Int(buffer.rgba[offset + 2]) * 114) / 1000
     }
 
-    private static func matches(_ buffer: TerminalPixelBuffer, pixel: Int, color: TerminalRGBColor) -> Bool {
+    /// Whether a pixel is the cursor colour, or that colour partly covering the background. Ghostty's
+    /// focused bar is one device pixel wide and lands between pixels, so it reads as a blend
+    /// (measured (188, 192, 199) for #e6edf3 over the background: 79% in every channel). A blend has
+    /// the same coverage in every channel; ink in another colour does not.
+    private static func matches(
+        _ buffer: TerminalPixelBuffer,
+        pixel: Int,
+        color: TerminalRGBColor,
+        background: TerminalRGBColor
+    ) -> Bool {
+        // Plain scalars: this runs for every pixel of a 3272 x 2398 capture.
         let offset = pixel * 4
-        return abs(Int(buffer.rgba[offset]) - Int(color.red)) <= colorTolerance
-            && abs(Int(buffer.rgba[offset + 1]) - Int(color.green)) <= colorTolerance
-            && abs(Int(buffer.rgba[offset + 2]) - Int(color.blue)) <= colorTolerance
+        let red = Int(buffer.rgba[offset]), green = Int(buffer.rgba[offset + 1]), blue = Int(buffer.rgba[offset + 2])
+        let cursorRed = Int(color.red), cursorGreen = Int(color.green), cursorBlue = Int(color.blue)
+        if abs(red - cursorRed) <= colorTolerance, abs(green - cursorGreen) <= colorTolerance,
+           abs(blue - cursorBlue) <= colorTolerance {
+            return true
+        }
+        var lowest = Double.infinity, highest = -Double.infinity
+        func include(_ value: Int, _ cursor: Int, _ ground: Int) {
+            let span = cursor - ground
+            // A channel where the cursor and background agree says nothing about coverage.
+            guard abs(span) >= 40 else { return }
+            let coverage = Double(value - ground) / Double(span)
+            lowest = min(lowest, coverage)
+            highest = max(highest, coverage)
+        }
+        include(red, cursorRed, Int(background.red))
+        include(green, cursorGreen, Int(background.green))
+        include(blue, cursorBlue, Int(background.blue))
+        return lowest.isFinite && lowest >= minimumCoverage && highest <= 1.1 && highest - lowest <= 0.12
     }
+
+    /// Least share of the cursor colour a blended pixel must carry to count as cursor.
+    static let minimumCoverage = 0.5
 }
