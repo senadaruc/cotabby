@@ -288,7 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let windowKey = WindowFeatureScope.windowKey(
-            bundleIdentifier: snapshot.bundleIdentifier, windowTitle: context.windowTitle
+            bundleIdentifier: snapshot.bundleIdentifier, windowTitle: context.featureScopeWindowTitle
         )
         let disabledApps = WindowFeatureScope.effectiveDisabledApps(
             settings.disabledAppBundleIdentifiers,
@@ -317,7 +317,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let target = FieldScopeTarget(
             bundleIdentifier: bundleIdentifier,
             applicationName: snapshot.applicationName,
-            windowTitle: snapshot.context?.windowTitle
+            windowTitle: snapshot.context?.featureScopeWindowTitle
         )
         let menu = FieldScopeMenuView(
             target: target,
@@ -351,7 +351,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let bundleIdentifier = snapshot.bundleIdentifier
         else { return }
         let windowKey = WindowFeatureScope.windowKey(
-            bundleIdentifier: bundleIdentifier, windowTitle: snapshot.context?.windowTitle
+            bundleIdentifier: bundleIdentifier, windowTitle: snapshot.context?.featureScopeWindowTitle
         )
         if bundleIdentifier != target.bundleIdentifier
             || (windowKey != nil && target.windowKey != nil && windowKey != target.windowKey) {

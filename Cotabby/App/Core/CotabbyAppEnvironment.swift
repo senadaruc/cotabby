@@ -382,7 +382,7 @@ final class CotabbyAppEnvironment {
             windowFeatureOverrides?.override(
                 for: .autocomplete,
                 windowKey: WindowFeatureScope.windowKey(
-                    bundleIdentifier: snapshot.bundleIdentifier, windowTitle: snapshot.context?.windowTitle
+                    bundleIdentifier: snapshot.bundleIdentifier, windowTitle: snapshot.context?.featureScopeWindowTitle
                 )
             )
         }
