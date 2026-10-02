@@ -29,6 +29,10 @@ final class TerminalCursorTracker: TerminalCursorProviding {
     /// A fix older than this is re-measured even with unchanged text: a cursor moved with the arrow
     /// keys changes no text.
     static let refreshAge: TimeInterval = 1.0
+    /// Captures tried per measurement before giving up on a blinked-off cursor, and the gap between
+    /// them: four over 450 ms always land inside one visible phase of a one-second blink.
+    static let captureAttempts = 4
+    static let retryDelayNanoseconds: UInt64 = 150_000_000
 
     private let loadConfiguration: () -> GhosttyConfiguration
     private var fix: TerminalCursorFix?
@@ -145,15 +149,25 @@ final class TerminalCursorTracker: TerminalCursorProviding {
         configurationSC.height = max(1, Int((key.elementFrame.height * scale).rounded(.up)))
         configurationSC.showsCursor = false
         let filter = SCContentFilter(desktopIndependentWindow: window)
-        guard let image = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configurationSC)
-        else { return .failure(.init(reason: "capture-failed")) }
-
         let color = configuration.cursorColor
-        let measurement = await Task.detached(priority: .userInitiated) { () -> TerminalCursorDetector.Measurement? in
-            guard let buffer = TerminalPixelBuffer(image: image) else { return nil }
-            return TerminalCursorDetector.measure(buffer, cursorColor: color)
-        }.value
-        guard let measurement else { return .failure(.init(reason: "cursor-not-found")) }
+        // Ghostty's cursor blinks (about half of each second off, measured: two of three captures
+        // missed it), so a capture without a cursor is retried a few times within one blink cycle.
+        var found: (image: CGImage, measurement: TerminalCursorDetector.Measurement)?
+        for attempt in 0..<Self.captureAttempts {
+            if attempt > 0 { try? await Task.sleep(nanoseconds: Self.retryDelayNanoseconds) }
+            guard let image = try? await SCScreenshotManager.captureImage(
+                contentFilter: filter, configuration: configurationSC
+            ) else { return .failure(.init(reason: "capture-failed")) }
+            let measurement = await Task.detached(priority: .userInitiated) { () -> TerminalCursorDetector.Measurement? in
+                guard let buffer = TerminalPixelBuffer(image: image) else { return nil }
+                return TerminalCursorDetector.measure(buffer, cursorColor: color)
+            }.value
+            if let measurement {
+                found = (image, measurement)
+                break
+            }
+        }
+        guard let (image, measurement) = found else { return .failure(.init(reason: "cursor-not-found")) }
 
         let pixelScale = CGFloat(image.width) / key.elementFrame.width
         let cellWidth = CGFloat(measurement.columnPitch) / pixelScale
