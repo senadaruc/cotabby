@@ -43,7 +43,7 @@ struct PerAppShortcutRowsView: View {
                             conflictChecker: conflictChecker(action)
                         )
                     } else {
-                        Text("Uses global (\(binding.label))")
+                        Text("Uses global (\(inheritedLabel(action, binding: binding)))")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Button("Change") { recordingAction = action }
@@ -77,6 +77,13 @@ struct PerAppShortcutRowsView: View {
                 systemImage: action == .acceptWord ? "arrow.right.to.line" : "text.insert"
             )
         }
+    }
+
+    /// The inherited shortcut as this app sees it; for full acceptance that may be a double tap of
+    /// the app's own Accept Word key.
+    private func inheritedLabel(_ action: PerAppShortcutAction, binding: ShortcutResolver.ResolvedBinding) -> String {
+        guard action == .acceptEntireSuggestion else { return binding.label }
+        return suggestionSettings.inheritedFullAcceptanceDisplayLabel(forBundleIdentifier: bundleIdentifier)
     }
 
     private func resolvedBinding(_ action: PerAppShortcutAction) -> ShortcutResolver.ResolvedBinding {
