@@ -152,6 +152,14 @@ final class TranslationCoordinator {
 
         do {
             let window = try await capture.captureActiveWindow(processIdentifier: app.processIdentifier)
+            // Read where the chat's messages are *now*, with the pixels: OCR and translation take
+            // hundreds of ms, and a scroll meanwhile must move the finished labels with the chat.
+            let captureClip = TranslationScrollFollow.clipRegion(
+                windowFrame: window.windowFrame, composeFrame: composeFrame(forPID: app.processIdentifier)
+            )
+            let captureAnchors = TranslationAnchorReader.anchors(
+                in: captureClip, processIdentifier: app.processIdentifier
+            )
             // The window title is only known now; a chat turned off from the field icon stays off
             // even though its app is on the translation list (and vice versa). Chat apps whose window
             // title never changes (WhatsApp) are scoped by the open chat, as the field icon is.
@@ -207,16 +215,30 @@ final class TranslationCoordinator {
             // The user may have switched apps or chats while this ran; never draw over the wrong window.
             guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else { return }
             lastCaptureSignature = (window.windowID, window.windowFrame, hash)
-            let clip = TranslationScrollFollow.clipRegion(
-                windowFrame: window.windowFrame, composeFrame: composeFrame(forPID: app.processIdentifier)
-            )
-            let anchors = labels.compactMap {
-                TranslationAnchorReader.anchor(
-                    at: CGPoint(x: $0.messageFrame.midX, y: $0.messageFrame.midY), processIdentifier: app.processIdentifier
-                )
+            // Move the labels by however far the chat scrolled since the capture.
+            var placed = labels
+            var anchors = captureAnchors
+            while let anchor = anchors.first {
+                guard let now = TranslationAnchorReader.currentFrame(of: anchor) else {
+                    anchors.removeFirst()
+                    continue
+                }
+                if let delta = TranslationScrollFollow.delta(anchorWas: anchor.frame, anchorIs: now) {
+                    placed = placed.map { $0.shifted(by: delta) }
+                    anchors = anchors.map { $0.moved(by: delta) }
+                }
+                break
             }
-            shown = labels.isEmpty ? nil : (labels, window.windowFrame, clip, anchors)
-            overlay.showIncoming(labels, windowFrame: window.windowFrame, clip: clip)
+            CotabbyLogger.app.debug(
+                "Translation labels placed",
+                metadata: [
+                    "stage": .string("translation-follow"),
+                    "labels": .stringConvertible(placed.count),
+                    "anchors": .stringConvertible(anchors.count)
+                ]
+            )
+            shown = placed.isEmpty ? nil : (placed, window.windowFrame, captureClip, anchors)
+            overlay.showIncoming(placed, windowFrame: window.windowFrame, clip: captureClip)
         } catch {
             hideIncomingLabels()
         }
@@ -364,16 +386,19 @@ final class TranslationCoordinator {
             }
             // Every message moved with this one.
             current.labels = current.labels.map { $0.shifted(by: delta) }
-            current.anchors = current.anchors.map {
-                TranslationAnchorReader.Anchor(
-                    element: $0.element, frame: $0.frame.offsetBy(dx: delta.dx, dy: delta.dy), identity: $0.identity
-                )
-            }
+            current.anchors = current.anchors.map { $0.moved(by: delta) }
+            CotabbyLogger.app.trace(
+                "Translation labels followed scroll",
+                metadata: ["stage": .string("translation-follow"), "dy": .stringConvertible(Double(delta.dy))]
+            )
             shown = current
             overlay.showIncoming(current.labels, windowFrame: current.windowFrame, clip: current.clip)
             return
         }
         // No message left to follow: nothing on screen can be placed.
+        CotabbyLogger.app.debug(
+            "Translation labels hidden: no anchor left", metadata: ["stage": .string("translation-follow")]
+        )
         hideIncomingLabels()
     }
 
