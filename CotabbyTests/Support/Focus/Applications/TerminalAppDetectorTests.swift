@@ -11,7 +11,7 @@ final class TerminalAppDetectorTests: XCTestCase {
         let terminals = [
             "com.apple.Terminal", "com.googlecode.iterm2", "net.kovidgoyal.kitty", "io.alacritty",
             "co.zeit.hyper", "com.mitchellh.ghostty", "dev.warp.Warp-Stable", "com.github.wez.wezterm",
-            "io.rio.terminal"
+            "io.rio.terminal", "so.pen.herdr-gpui", "dev.bybee.herdrm"
         ]
         for bundleIdentifier in terminals {
             XCTAssertTrue(TerminalAppDetector.isTerminal(bundleIdentifier: bundleIdentifier), bundleIdentifier)
