@@ -7,6 +7,8 @@ struct TranslationLabel: Equatable, Identifiable {
     let text: String
     /// The message it translates, in global points with a top-left origin.
     let messageFrame: CGRect
+    /// How to draw it over the message so it replaces the text visually; nil shows a card under it.
+    var cover: TranslationCover?
 }
 
 /// Draws translations on screen: labels under incoming messages, and the reply-translation card
@@ -118,20 +120,52 @@ private struct IncomingTranslationLabels: View {
         ZStack(alignment: .topLeading) {
             Color.clear
             ForEach(labels) { label in
-                Text(label.text)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(Color.accentColor.opacity(0.5)))
-                    .frame(maxWidth: max(label.messageFrame.width, 220), alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .offset(x: label.messageFrame.minX - windowFrame.minX,
-                            y: label.messageFrame.maxY - windowFrame.minY + 2)
+                if let cover = label.cover {
+                    CoveredTranslation(text: label.text, cover: cover, windowFrame: windowFrame)
+                } else {
+                    card(label)
+                }
             }
         }
         .frame(width: windowFrame.width, height: windowFrame.height, alignment: .topLeading)
+    }
+
+    private func card(_ label: TranslationLabel) -> some View {
+        Text(label.text)
+            .font(.system(size: 12))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(Color.accentColor.opacity(0.5)))
+            .frame(maxWidth: max(label.messageFrame.width, 220), alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .offset(x: label.messageFrame.minX - windowFrame.minX,
+                    y: label.messageFrame.maxY - windowFrame.minY + 2)
+    }
+}
+
+/// A translation painted over its message's text: the bubble's own colour hides the original, the
+/// message's text colour and size make it read as the message, and a longer translation shrinks to
+/// the same area so the bubble's time and receipt stay uncovered.
+private struct CoveredTranslation: View {
+    let text: String
+    let cover: TranslationCover
+    let windowFrame: CGRect
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: cover.fontSize))
+            .foregroundStyle(Self.color(cover.foreground))
+            .minimumScaleFactor(0.5)
+            .padding(.horizontal, TranslationCoverStyle.bleed)
+            .frame(width: cover.rect.width, height: cover.rect.height, alignment: .topLeading)
+            .background(Self.color(cover.background))
+            .offset(x: cover.rect.minX - windowFrame.minX, y: cover.rect.minY - windowFrame.minY)
+    }
+
+    private static func color(_ color: ChatColor) -> Color {
+        Color(.sRGB, red: Double(color.red) / 255, green: Double(color.green) / 255, blue: Double(color.blue) / 255)
     }
 }
 

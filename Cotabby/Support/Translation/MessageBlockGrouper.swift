@@ -5,7 +5,10 @@ import Foundation
 /// top-left origin (ScreenCaptureKit / Accessibility space).
 nonisolated struct MessageBlock: Equatable, Sendable {
     let text: String
+    /// The message text's area, without a trailing time and read receipt on its last line.
     let frame: CGRect
+    /// Each line's text area, top to bottom, for sizing a translation drawn over them.
+    var lineFrames: [CGRect] = []
 }
 
 /// Turns recognized text lines from a chat window into message blocks.
@@ -35,20 +38,25 @@ nonisolated enum MessageBlockGrouper {
             guard line.confidence >= minimumConfidence, !isChrome(text) else { return nil }
             let frame = globalFrame(of: line.boundingBox, in: windowFrame)
             guard region.contains(CGPoint(x: frame.midX, y: frame.midY)) else { return nil }
-            return (text, frame)
+            // A message's last line often carries its time and receipt ("… karisacak 20:11 //"):
+            // neither is translated, and a translation drawn over the line leaves them visible.
+            let split = splittingTrailingTimestamp(text)
+            let width = frame.width * CGFloat(split.body.count) / CGFloat(max(text.count, 1))
+            return (split.body, CGRect(x: frame.minX, y: frame.minY, width: width, height: frame.height))
         }
         .sorted { $0.frame.minY == $1.frame.minY ? $0.frame.minX < $1.frame.minX : $0.frame.minY < $1.frame.minY }
 
-        var blocks: [(texts: [String], frame: CGRect, lineHeight: CGFloat)] = []
+        var blocks: [(texts: [String], frame: CGRect, lineHeight: CGFloat, lines: [CGRect])] = []
         for line in placed {
             if let last = blocks.last, continues(last.frame, lineHeight: last.lineHeight, with: line.frame) {
                 blocks[blocks.count - 1].texts.append(line.text)
                 blocks[blocks.count - 1].frame = last.frame.union(line.frame)
+                blocks[blocks.count - 1].lines.append(line.frame)
             } else {
-                blocks.append(([line.text], line.frame, line.frame.height))
+                blocks.append(([line.text], line.frame, line.frame.height, [line.frame]))
             }
         }
-        return blocks.map { MessageBlock(text: $0.texts.joined(separator: " "), frame: $0.frame) }
+        return blocks.map { MessageBlock(text: $0.texts.joined(separator: " "), frame: $0.frame, lineFrames: $0.lines) }
     }
 
     /// Maps a Vision box into global points (top-left origin) for a capture of `windowFrame`.
@@ -85,6 +93,17 @@ nonisolated enum MessageBlockGrouper {
         let alignedLeft = abs(line.minX - block.minX) <= lineHeight * 1.5
         let overlaps = line.minX < block.maxX && line.maxX > block.minX
         return alignedLeft || overlaps
+    }
+
+    /// A line's text and the time (with any read receipt OCR reads after it, "//", "✓✓") that ends
+    /// it, when it ends in one: "Kardeşim orasi fena karisacak 20:11 //" is the message
+    /// "Kardeşim orasi fena karisacak" and the stamp "20:11 //".
+    static func splittingTrailingTimestamp(_ text: String) -> (body: String, stamp: String?) {
+        let pattern = #"\s+\d{1,2}[:.]\d{2}(\s?[AaPp][Mm])?(\s+\S{1,3})?$"#
+        guard let range = text.range(of: pattern, options: .regularExpression), range.lowerBound > text.startIndex
+        else { return (text, nil) }
+        let body = String(text[..<range.lowerBound])
+        return (body, String(text[range]).trimmingCharacters(in: .whitespaces))
     }
 
     /// Timestamps, read receipts, and other non-message text chat apps draw.

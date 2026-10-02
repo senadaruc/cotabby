@@ -179,7 +179,15 @@ final class TranslationCoordinator {
             let blocks = MessageBlockGrouper.blocks(
                 from: lines, windowFrame: window.windowFrame, composeFrame: composeFrame(forPID: app.processIdentifier)
             )
-            let labels = await translate(blocks, readingLanguage: prefs.readingLanguage, conversationKey: conversationKey)
+            // Bubble and text colours come from the same capture, sampled off the main actor.
+            let image = window.image, windowFrame = window.windowFrame
+            let covers = await Task.detached(priority: .userInitiated) { () -> [TranslationCover?] in
+                guard let pixels = ChatPixelImage(image: image) else { return blocks.map { _ in nil } }
+                return blocks.map { TranslationCoverStyle.cover(for: $0, in: pixels, windowFrame: windowFrame) }
+            }.value
+            let labels = await translate(
+                blocks, covers: covers, readingLanguage: prefs.readingLanguage, conversationKey: conversationKey
+            )
 
             // The user may have switched apps or chats while this ran; never draw over the wrong window.
             guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else { return }
@@ -192,11 +200,17 @@ final class TranslationCoordinator {
 
     /// Translates the most recent messages first (lowest on screen) and records the language of the
     /// newest one as the conversation's language.
-    private func translate(_ blocks: [MessageBlock], readingLanguage: String, conversationKey: String) async -> [TranslationLabel] {
+    private func translate(
+        _ blocks: [MessageBlock],
+        covers: [TranslationCover?],
+        readingLanguage: String,
+        conversationKey: String
+    ) async -> [TranslationLabel] {
         var labels: [TranslationLabel] = []
         var localModelBudget = Self.maximumLocalModelBlocks
         var recordedConversation = false
-        for (index, block) in blocks.reversed().prefix(Self.maximumBlocks).enumerated() {
+        let covered = Array(zip(blocks, covers))
+        for (index, (block, cover)) in covered.reversed().prefix(Self.maximumBlocks).enumerated() {
             if Task.isCancelled { break }
             guard let detection = TranslationLanguagePolicy.needsTranslation(block.text, readingLanguage: readingLanguage)
             else { continue }
@@ -214,7 +228,7 @@ final class TranslationCoordinator {
             guard let result = try? await service.translate(block.text, from: detection.language, to: readingLanguage),
                   result.translatedText.caseInsensitiveCompare(block.text) != .orderedSame
             else { continue }
-            labels.append(TranslationLabel(id: index, text: result.translatedText, messageFrame: block.frame))
+            labels.append(TranslationLabel(id: index, text: result.translatedText, messageFrame: block.frame, cover: cover))
         }
         return labels
     }
