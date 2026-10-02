@@ -171,6 +171,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appUpdateManager.start()
         suggestionCoordinator.start()
         inlineCommandCoordinator.start()
+        environment.translationCoordinator.start()
         welcomeCoordinator.presentIfNeeded()
         welcomeCoordinator.presentPermissionReminderIfNeeded()
         didStartServices = true
@@ -255,6 +256,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Write the field being typed in now; the debounced background save may not have run yet.
         environment.typingHistoryStore.flush()
         inlineCommandCoordinator.stop()
+        environment.translationCoordinator.stop()
         inputMonitor.stop()
         focusModel.stop()
 

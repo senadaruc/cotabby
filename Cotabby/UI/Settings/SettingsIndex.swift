@@ -60,6 +60,9 @@ enum SettingsItem: String, CaseIterable, Identifiable {
     // Context
     case extendedContext
     case typingHistory
+    case translationEnabled
+    case translationApps
+    case translationLanguages
     case contextLivePreview
     // Engine & Model
     case engine
@@ -153,6 +156,9 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .automaticallyFixTypos: return "Automatically Fix Typos"
         case .extendedContext: return "Extended Context"
         case .typingHistory: return "Typing History"
+        case .translationEnabled: return "Translate Messages"
+        case .translationApps: return "Translation Apps"
+        case .translationLanguages: return "Translation Languages"
         case .contextLivePreview: return "Live Preview"
         case .engine: return "Engine"
         case .appleIntelligenceAvailability: return "Apple Intelligence Availability"
@@ -240,6 +246,9 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .automaticallyFixTypos: return "checkmark.circle"
         case .extendedContext: return "doc.text"
         case .typingHistory: return "clock.arrow.circlepath"
+        case .translationEnabled: return "character.bubble"
+        case .translationApps: return "app.badge"
+        case .translationLanguages: return "globe"
         case .contextLivePreview: return "text.cursor"
         case .engine: return "cpu"
         case .appleIntelligenceAvailability: return "apple.logo"
@@ -302,6 +311,8 @@ enum SettingsItem: String, CaseIterable, Identifiable {
             return .writing
         case .extendedContext, .contextLivePreview, .typingHistory:
             return .context
+        case .translationEnabled, .translationApps, .translationLanguages:
+            return .translation
         case .engine, .appleIntelligenceAvailability, .appleLanguageFallback, .appleLanguageFallbackModel, .modelStatus, .selectedModel,
              .lowPowerModeAutoDisable, .powerBasedModelSwitching, .batteryModel, .pluggedInModel,
              .downloadModels, .huggingFaceBrowser, .modelsFolder, .lmStudio,
@@ -370,6 +381,9 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .automaticallyFixTypos: return "Replace a misspelled word right after you press Space."
         case .extendedContext: return "A glossary or notes sent with every suggestion."
         case .typingHistory: return "Learn from what you type, and import Cotypist history."
+        case .translationEnabled: return "Translate incoming messages and offer replies in the chat's language."
+        case .translationApps: return "Apps whose chats are translated."
+        case .translationLanguages: return "Which languages translate on this Mac, and how."
         case .contextLivePreview: return "A real field that exercises the full pipeline."
         case .engine: return "Apple Intelligence, bundled Open Source, or a local endpoint."
         case .appleIntelligenceAvailability: return "Whether this Mac can run Apple Intelligence."
@@ -538,6 +552,13 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .automaticallyFixTypos:
             return ["typo", "automatic", "automatically", "autocorrect", "fix", "spelling",
                     "replace", "space", "instant", "without accepting"]
+        case .translationEnabled:
+            return ["translate", "translation", "translator", "augmented", "incoming", "reply", "foreign language",
+                    "turkish", "macedonian", "messages", "chat"]
+        case .translationApps:
+            return ["translate", "translation apps", "whatsapp", "teams", "telegram", "slack", "outlook", "mail"]
+        case .translationLanguages:
+            return ["translation languages", "apple translation", "download languages", "offline translation"]
         case .extendedContext:
             return ["context", "glossary", "reference", "notes", "jargon", "instructions",
                     "memory", "background", "system prompt", "vocabulary"]
