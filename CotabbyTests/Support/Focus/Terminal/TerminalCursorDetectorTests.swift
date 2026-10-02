@@ -90,6 +90,24 @@ final class TerminalCursorDetectorTests: XCTestCase {
         XCTAssertNil(TerminalCursorDetector.measure(buffer, cursorColor: cursorColor))
     }
 
+    func testFindsAFocusedBarBlendedBetweenPixels() throws {
+        // Measured live: a one-pixel bar at 79% coverage, (188, 192, 199) for #e6edf3.
+        let base = screen(cursors: [])
+        var rgba = base.rgba
+        let left = padding + 5 * columnPitch, top = padding + 7 * rowPitch
+        for y in top..<(top + 18) {
+            let offset = (y * base.width + left) * 4
+            for (channel, cursor) in [(0, 0xE6), (1, 0xED), (2, 0xF3)] {
+                let ground = Double([background.0, background.1, background.2][channel])
+                rgba[offset + channel] = UInt8(ground + 0.79 * (Double(cursor) - ground))
+            }
+        }
+        let buffer = TerminalPixelBuffer(width: base.width, height: base.height, rgba: rgba)!
+        let measurement = try XCTUnwrap(TerminalCursorDetector.measure(buffer, cursorColor: cursorColor))
+        XCTAssertEqual(measurement.cursorX, left)
+        XCTAssertEqual(measurement.rowsFromCursorToLastInk, 1)
+    }
+
     func testHexColours() {
         XCTAssertEqual(TerminalRGBColor(hex: "#e6edf3"), TerminalRGBColor(red: 0xE6, green: 0xED, blue: 0xF3))
         XCTAssertEqual(TerminalRGBColor(hex: "ffffff"), TerminalRGBColor(red: 255, green: 255, blue: 255))
