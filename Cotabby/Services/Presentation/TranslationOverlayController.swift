@@ -9,6 +9,16 @@ struct TranslationLabel: Equatable, Identifiable {
     let messageFrame: CGRect
     /// How to draw it over the message so it replaces the text visually; nil shows a card under it.
     var cover: TranslationCover?
+
+    /// The same label moved with its message by a scroll.
+    func shifted(by delta: CGVector) -> TranslationLabel {
+        let move = { (rect: CGRect) in rect.offsetBy(dx: delta.dx, dy: delta.dy) }
+        return TranslationLabel(
+            id: id, text: text, messageFrame: move(messageFrame),
+            cover: cover.map { TranslationCover(rect: move($0.rect), background: $0.background,
+                                                foreground: $0.foreground, fontSize: $0.fontSize) }
+        )
+    }
 }
 
 /// Draws translations on screen: labels under incoming messages, and the reply-translation card
@@ -26,7 +36,10 @@ final class TranslationOverlayController {
 
     // MARK: - Incoming messages
 
-    func showIncoming(_ labels: [TranslationLabel], windowFrame: CGRect) {
+    /// Draws `labels` over the window at `windowFrame`, cut off outside `clip` (global points) so a
+    /// scrolled label never covers the chat header or the reply field. Called again for every step of
+    /// a scroll, so the hosting view is reused rather than rebuilt.
+    func showIncoming(_ labels: [TranslationLabel], windowFrame: CGRect, clip: CGRect? = nil) {
         guard !labels.isEmpty else {
             hideIncoming()
             return
@@ -34,9 +47,14 @@ final class TranslationOverlayController {
         let panel = incomingPanel ?? Self.makePanel()
         incomingPanel = panel
         let cocoaFrame = ScreenSpace.cocoaRect(fromGlobal: windowFrame)
-        panel.setFrame(cocoaFrame, display: false)
-        panel.contentView = NSHostingView(rootView: IncomingTranslationLabels(labels: labels, windowFrame: windowFrame))
-        panel.orderFrontRegardless()
+        if panel.frame != cocoaFrame { panel.setFrame(cocoaFrame, display: false) }
+        let view = IncomingTranslationLabels(labels: labels, windowFrame: windowFrame, clip: clip ?? windowFrame)
+        if let hosting = panel.contentView as? NSHostingView<IncomingTranslationLabels> {
+            hosting.rootView = view
+        } else {
+            panel.contentView = NSHostingView(rootView: view)
+        }
+        if !panel.isVisible { panel.orderFrontRegardless() }
     }
 
     func hideIncoming() {
@@ -115,6 +133,7 @@ enum ScreenSpace {
 private struct IncomingTranslationLabels: View {
     let labels: [TranslationLabel]
     let windowFrame: CGRect
+    let clip: CGRect
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -128,6 +147,11 @@ private struct IncomingTranslationLabels: View {
             }
         }
         .frame(width: windowFrame.width, height: windowFrame.height, alignment: .topLeading)
+        .mask(alignment: .topLeading) {
+            Rectangle()
+                .frame(width: clip.width, height: clip.height)
+                .offset(x: clip.minX - windowFrame.minX, y: clip.minY - windowFrame.minY)
+        }
     }
 
     private func card(_ label: TranslationLabel) -> some View {
