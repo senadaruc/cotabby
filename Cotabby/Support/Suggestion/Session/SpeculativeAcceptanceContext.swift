@@ -88,6 +88,9 @@ nonisolated enum SpeculativeAcceptanceContext {
             resolvedFieldStyle: snapshot.resolvedFieldStyle,
             windowTitle: snapshot.windowTitle,
             fieldPlaceholder: snapshot.fieldPlaceholder,
+            // The per-window scope key reads these; keep it the same across the speculative copy.
+            appFocusedWindowTitle: snapshot.appFocusedWindowTitle,
+            conversationTitle: snapshot.conversationTitle,
             hostTextMetrics: snapshot.hostTextMetrics,
             elementFrameRect: snapshot.elementFrameRect,
             hostMarkedTextRange: snapshot.hostMarkedTextRange

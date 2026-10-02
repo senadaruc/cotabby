@@ -414,12 +414,16 @@ nonisolated struct FocusedInputSnapshot: Equatable {
     /// `windowTitle` on purpose: that one feeds prompts and session identity, and this fallback
     /// is only for per-window feature choices (`featureScopeWindowTitle`).
     let appFocusedWindowTitle: String?
+    /// The open conversation's name in chat apps whose window title stays the same between chats
+    /// (`ConversationHeaderPolicy`); nil everywhere else.
+    let conversationTitle: String?
 
     /// The title that identifies this window for the field icon's per-window choices.
     var featureScopeWindowTitle: String? {
         // Some hosts answer the title read with "" rather than failing; treat that as missing so
-        // the app-window fallback still applies.
-        [windowTitle, appFocusedWindowTitle].lazy
+        // the app-window fallback still applies. A chat app whose window title never changes
+        // ("WhatsApp") is keyed by its open conversation instead, so a choice follows the chat.
+        [conversationTitle, windowTitle, appFocusedWindowTitle].lazy
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty }
     }
@@ -461,6 +465,7 @@ nonisolated struct FocusedInputSnapshot: Equatable {
         windowTitle: String? = nil,
         fieldPlaceholder: String? = nil,
         appFocusedWindowTitle: String? = nil,
+        conversationTitle: String? = nil,
         hostTextMetrics: HostTextMetrics? = nil,
         elementFrameRect: CGRect? = nil,
         hostMarkedTextRange: NSRange? = nil
@@ -489,6 +494,7 @@ nonisolated struct FocusedInputSnapshot: Equatable {
         self.windowTitle = windowTitle
         self.fieldPlaceholder = fieldPlaceholder
         self.appFocusedWindowTitle = appFocusedWindowTitle
+        self.conversationTitle = conversationTitle
         self.hostTextMetrics = hostTextMetrics
         self.elementFrameRect = elementFrameRect
         self.hostMarkedTextRange = hostMarkedTextRange
