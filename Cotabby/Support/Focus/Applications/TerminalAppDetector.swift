@@ -16,7 +16,11 @@ nonisolated enum TerminalAppDetector {
         "com.mitchellh.ghostty",
         "dev.warp.Warp-Stable",
         "com.github.wez.wezterm",
-        "io.rio.terminal"
+        "io.rio.terminal",
+        // Herdr and its HerdrM fork: agent workspaces whose panes are terminals, so a ghost there
+        // completes a shell prompt the way it would in Ghostty.
+        "so.pen.herdr-gpui",
+        "dev.bybee.herdrm"
     ]
 
     static func isTerminal(bundleIdentifier: String?) -> Bool {
