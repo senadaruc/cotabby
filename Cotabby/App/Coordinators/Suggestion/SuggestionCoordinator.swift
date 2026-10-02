@@ -185,6 +185,10 @@ final class SuggestionCoordinator: ObservableObject {
         historyProvider?.historyExamples(for: context, engine: settingsSnapshot.selectedEngine) ?? []
     }
 
+    /// Pure state for recognizing a quick second press of the Accept Word key. Only real key presses
+    /// feed it; the queued post-exhaustion accept stays a plain one-word accept.
+    var doubleTapAcceptanceState = DoubleTapAcceptanceState()
+
     init(
         permissionManager: any SuggestionPermissionProviding,
         lowPowerModeProvider: any SuggestionLowPowerModeProviding,
