@@ -38,6 +38,15 @@ final class TranslationCoordinator {
     private var lastCaptureSignature: (windowID: CGWindowID, frame: CGRect, hash: Int)?
     /// The chat the shown labels were read from; a different chat hides them at once.
     private var lastConversationKey: String?
+    /// The labels on screen, where they are drawn, and the chat's elements under them, which a
+    /// scroll moves: the labels follow the first anchor still showing its message.
+    private var shown: (labels: [TranslationLabel], windowFrame: CGRect, clip: CGRect,
+                        anchors: [TranslationAnchorReader.Anchor])?
+    private var lastScrollAt: Date?
+    private var followTimer: Timer?
+    /// A scroll is over once no scroll event (momentum included) arrived for this long; the chat
+    /// is then read again for the messages that came into view.
+    private static let scrollSettle: TimeInterval = 0.5
     private var replyTask: Task<Void, Never>?
     private var offeredReply: (draft: String, translation: String)?
     /// The draft currently being translated. Focus updates arrive every ~50 ms; without this, each
@@ -75,12 +84,13 @@ final class TranslationCoordinator {
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.scheduleIncomingPass() }
         }
-        // Scrolling moves every message; hide stale labels at once and re-read once it settles.
+        // Scrolling moves every message; the labels follow them (`followScroll`) and the chat is
+        // read again once the scroll settles.
         scrollMonitor = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                self.overlay.hideIncoming()
-                self.lastCaptureSignature = nil
+                self.lastScrollAt = Date()
+                self.startFollowingScroll()
             }
         }
         focusModel.$snapshot
@@ -91,6 +101,7 @@ final class TranslationCoordinator {
             .removeDuplicates()
             .sink { [weak self] enabled in
                 guard let self, !enabled else { return }
+                self.shown = nil
                 self.overlay.hideAll()
                 self.hotkey.remove()
                 self.service.clearCache()
@@ -104,10 +115,12 @@ final class TranslationCoordinator {
         timer = nil
         if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
         scrollMonitor = nil
+        stopFollowingScroll()
         cancellables.removeAll()
         incomingTask?.cancel()
         replyTask?.cancel()
         hotkey.remove()
+        shown = nil
         overlay.hideAll()
     }
 
@@ -122,6 +135,8 @@ final class TranslationCoordinator {
     }
 
     private func runIncomingPass() async {
+        // Mid-scroll the labels are following their messages; reading now would catch moving text.
+        if let lastScrollAt, Date().timeIntervalSince(lastScrollAt) < Self.scrollSettle { return }
         let prefs = preferences.preferences
         guard prefs.isEnabled, prefs.translatesIncoming,
               let app = NSWorkspace.shared.frontmostApplication,
@@ -130,7 +145,7 @@ final class TranslationCoordinator {
               isAllowed(bundleIdentifier),
               CGPreflightScreenCaptureAccess()
         else {
-            overlay.hideIncoming()
+            hideIncomingLabels()
             lastCaptureSignature = nil
             return
         }
@@ -142,14 +157,14 @@ final class TranslationCoordinator {
             // title never changes (WhatsApp) are scoped by the open chat, as the field icon is.
             let scopeTitle = scopeTitle(forPID: app.processIdentifier, windowTitle: window.windowTitle)
             guard isTranslationActive(bundleIdentifier: bundleIdentifier, windowTitle: scopeTitle) else {
-                overlay.hideIncoming()
+                hideIncomingLabels()
                 lastCaptureSignature = nil
                 return
             }
             let conversationKey = ConversationLanguageTracker.key(bundleIdentifier: bundleIdentifier, windowTitle: scopeTitle)
             // Another chat: the shown labels belong to messages no longer on screen.
             if conversationKey != lastConversationKey {
-                overlay.hideIncoming()
+                hideIncomingLabels()
                 lastConversationKey = conversationKey
             }
             // The composer is left out: its blinking caret and the user's own typing change pixels on
@@ -192,9 +207,18 @@ final class TranslationCoordinator {
             // The user may have switched apps or chats while this ran; never draw over the wrong window.
             guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else { return }
             lastCaptureSignature = (window.windowID, window.windowFrame, hash)
-            overlay.showIncoming(labels, windowFrame: window.windowFrame)
+            let clip = TranslationScrollFollow.clipRegion(
+                windowFrame: window.windowFrame, composeFrame: composeFrame(forPID: app.processIdentifier)
+            )
+            let anchors = labels.compactMap {
+                TranslationAnchorReader.anchor(
+                    at: CGPoint(x: $0.messageFrame.midX, y: $0.messageFrame.midY), processIdentifier: app.processIdentifier
+                )
+            }
+            shown = labels.isEmpty ? nil : (labels, window.windowFrame, clip, anchors)
+            overlay.showIncoming(labels, windowFrame: window.windowFrame, clip: clip)
         } catch {
-            overlay.hideIncoming()
+            hideIncomingLabels()
         }
     }
 
@@ -292,6 +316,67 @@ final class TranslationCoordinator {
         return input.featureScopeWindowTitle ?? windowTitle
     }
 
+    // MARK: - Scroll
+
+    private func hideIncomingLabels() {
+        shown = nil
+        overlay.hideIncoming()
+    }
+
+    private func startFollowingScroll() {
+        guard followTimer == nil, shown != nil else { return }
+        // About 30 steps a second, in `.common` mode so it keeps running during the scroll's own
+        // event tracking; each step is one Accessibility frame read.
+        let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.followScroll() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        followTimer = timer
+    }
+
+    private func stopFollowingScroll() {
+        followTimer?.invalidate()
+        followTimer = nil
+    }
+
+    /// Moves the shown labels by however far their anchor message moved, until the scroll settles;
+    /// then reads the chat again for messages that scrolled into view.
+    private func followScroll() {
+        guard var current = shown else {
+            stopFollowingScroll()
+            return
+        }
+        if let lastScrollAt, Date().timeIntervalSince(lastScrollAt) > Self.scrollSettle {
+            stopFollowingScroll()
+            lastCaptureSignature = nil
+            scheduleIncomingPass()
+            return
+        }
+        while let anchor = current.anchors.first {
+            guard let frame = TranslationAnchorReader.currentFrame(of: anchor) else {
+                // Scrolled away, or its row now shows another message: try the next anchor.
+                current.anchors.removeFirst()
+                continue
+            }
+            guard let delta = TranslationScrollFollow.delta(anchorWas: anchor.frame, anchorIs: frame) else {
+                shown = current
+                return
+            }
+            // Every message moved with this one.
+            current.labels = current.labels.map { $0.shifted(by: delta) }
+            current.anchors = current.anchors.map {
+                TranslationAnchorReader.Anchor(
+                    element: $0.element, frame: $0.frame.offsetBy(dx: delta.dx, dy: delta.dy), identity: $0.identity
+                )
+            }
+            shown = current
+            overlay.showIncoming(current.labels, windowFrame: current.windowFrame, clip: current.clip)
+            return
+        }
+        // No message left to follow: nothing on screen can be placed.
+        hideIncomingLabels()
+    }
+
     // MARK: - Scope
 
     /// Whether translation applies in this window: the window's own choice from the field icon
@@ -317,7 +402,7 @@ final class TranslationCoordinator {
     /// next 2-second tick, so the popup's switch takes effect immediately.
     func handleScopeChange() {
         lastCaptureSignature = nil
-        overlay.hideIncoming()
+        hideIncomingLabels()
         scheduleIncomingPass()
         observeReply(focusModel.snapshot)
     }
