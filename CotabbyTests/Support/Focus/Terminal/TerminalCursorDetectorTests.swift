@@ -81,6 +81,15 @@ final class TerminalCursorDetectorTests: XCTestCase {
         XCTAssertEqual(measurement.cursorX, padding + 3 * columnPitch)
     }
 
+    func testBlinkedOffCursorDoesNotPassAGlyphStrokeAsTheCursor() {
+        // No cursor; a same-coloured glyph stroke at 70% of a cell is the tallest stroke on screen.
+        let base = screen(cursors: [])
+        var rgba = base.rgba
+        for y in 128..<142 { let offset = (y * base.width + 200) * 4; rgba[offset] = 0xE6; rgba[offset + 1] = 0xED; rgba[offset + 2] = 0xF3 }
+        let buffer = TerminalPixelBuffer(width: base.width, height: base.height, rgba: rgba)!
+        XCTAssertNil(TerminalCursorDetector.measure(buffer, cursorColor: cursorColor))
+    }
+
     func testHexColours() {
         XCTAssertEqual(TerminalRGBColor(hex: "#e6edf3"), TerminalRGBColor(red: 0xE6, green: 0xED, blue: 0xF3))
         XCTAssertEqual(TerminalRGBColor(hex: "ffffff"), TerminalRGBColor(red: 255, green: 255, blue: 255))

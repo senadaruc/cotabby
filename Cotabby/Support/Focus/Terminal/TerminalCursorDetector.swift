@@ -107,6 +107,9 @@ nonisolated enum TerminalCursorDetector {
         let height = Double(cursor.height)
         // A cursor is drawn inside its cell, so the cell is at least as tall and not much taller.
         guard let rowPitch = pitch(of: rows, within: (height * 0.95)...(height * 1.4)),
+              // A cursor fills most of its cell. With the cursor blinked off, the tallest
+              // cursor-coloured strokes are glyphs (measured 29 px in a 39 px row): not a cursor.
+              height >= rowPitch * 0.85,
               let lastInkY = rows.lastIndex(where: { $0 > 0 })
         else { return nil }
         // A hollow box or block spans the cell's width; a bar does not, so its cell width is searched
