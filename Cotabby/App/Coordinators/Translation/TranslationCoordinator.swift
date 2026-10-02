@@ -36,6 +36,8 @@ final class TranslationCoordinator {
     private var cancellables = Set<AnyCancellable>()
     private var incomingTask: Task<Void, Never>?
     private var lastCaptureSignature: (windowID: CGWindowID, frame: CGRect, hash: Int)?
+    /// The chat the shown labels were read from; a different chat hides them at once.
+    private var lastConversationKey: String?
     private var replyTask: Task<Void, Never>?
     private var offeredReply: (draft: String, translation: String)?
     /// The draft currently being translated. Focus updates arrive every ~50 ms; without this, each
@@ -136,18 +138,34 @@ final class TranslationCoordinator {
         do {
             let window = try await capture.captureActiveWindow(processIdentifier: app.processIdentifier)
             // The window title is only known now; a chat turned off from the field icon stays off
-            // even though its app is on the translation list (and vice versa).
-            guard isTranslationActive(bundleIdentifier: bundleIdentifier, windowTitle: window.windowTitle) else {
+            // even though its app is on the translation list (and vice versa). Chat apps whose window
+            // title never changes (WhatsApp) are scoped by the open chat, as the field icon is.
+            let scopeTitle = scopeTitle(forPID: app.processIdentifier, windowTitle: window.windowTitle)
+            guard isTranslationActive(bundleIdentifier: bundleIdentifier, windowTitle: scopeTitle) else {
                 overlay.hideIncoming()
                 lastCaptureSignature = nil
                 return
             }
-            let hash = Self.sampleHash(window.image)
+            let conversationKey = ConversationLanguageTracker.key(bundleIdentifier: bundleIdentifier, windowTitle: scopeTitle)
+            // Another chat: the shown labels belong to messages no longer on screen.
+            if conversationKey != lastConversationKey {
+                overlay.hideIncoming()
+                lastConversationKey = conversationKey
+            }
+            // The composer is left out: its blinking caret and the user's own typing change pixels on
+            // every pass and would re-read the whole chat each time.
+            let hash = Self.sampleHash(
+                window.image,
+                excludingRows: Self.imageRows(
+                    of: composeFrame(forPID: app.processIdentifier), in: window.windowFrame, image: window.image
+                )
+            )
             if let last = lastCaptureSignature, last.windowID == window.windowID, last.frame == window.windowFrame,
                last.hash == hash {
                 return
             }
-            overlay.hideIncoming()
+            // The previous labels stay up while this pass reads and translates (hundreds of ms) and
+            // are replaced in one step below; hiding them first made every change blink.
 
             let extractor = ScreenTextExtractor(
                 maxImageDimension: 2400, maxRecognizedCharacters: 20_000,
@@ -161,9 +179,7 @@ final class TranslationCoordinator {
             let blocks = MessageBlockGrouper.blocks(
                 from: lines, windowFrame: window.windowFrame, composeFrame: composeFrame(forPID: app.processIdentifier)
             )
-            let labels = await translate(blocks, readingLanguage: prefs.readingLanguage,
-                                         conversationKey: ConversationLanguageTracker.key(
-                                             bundleIdentifier: bundleIdentifier, windowTitle: window.windowTitle))
+            let labels = await translate(blocks, readingLanguage: prefs.readingLanguage, conversationKey: conversationKey)
 
             // The user may have switched apps or chats while this ran; never draw over the wrong window.
             guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else { return }
@@ -222,18 +238,44 @@ final class TranslationCoordinator {
     }
 
     /// A cheap fingerprint of the captured pixels, so an unchanged chat is not re-read every 2 s.
-    private static func sampleHash(_ image: CGImage) -> Int {
+    private static func sampleHash(_ image: CGImage, excludingRows excluded: Range<Int>?) -> Int {
         guard let data = image.dataProvider?.data, let bytes = CFDataGetBytePtr(data) else { return 0 }
         let length = CFDataGetLength(data)
+        let bytesPerRow = max(1, image.bytesPerRow)
         var hasher = Hasher()
         hasher.combine(image.width)
         hasher.combine(image.height)
         var offset = 0
         while offset < length {
-            hasher.combine(bytes[offset])
+            if excluded?.contains(offset / bytesPerRow) != true {
+                hasher.combine(bytes[offset])
+            }
             offset += 997
         }
         return hasher.finalize()
+    }
+
+    /// The image rows covering `frame` (global top-left points) in a capture of `windowFrame`, padded
+    /// by a few points for the composer's border and toolbar; nil when there is no frame.
+    static func imageRows(of frame: CGRect?, in windowFrame: CGRect, image: CGImage) -> Range<Int>? {
+        imageRows(of: frame, in: windowFrame, imageHeight: image.height)
+    }
+
+    static func imageRows(of frame: CGRect?, in windowFrame: CGRect, imageHeight: Int) -> Range<Int>? {
+        guard let frame, windowFrame.height > 0, imageHeight > 0 else { return nil }
+        let scale = CGFloat(imageHeight) / windowFrame.height
+        let padding: CGFloat = 12
+        let top = Int(((frame.minY - windowFrame.minY - padding) * scale).rounded(.down))
+        let bottom = Int(((frame.maxY - windowFrame.minY + padding) * scale).rounded(.up))
+        let clampedTop = min(max(top, 0), imageHeight), clampedBottom = min(max(bottom, 0), imageHeight)
+        return clampedTop < clampedBottom ? clampedTop..<clampedBottom : nil
+    }
+
+    /// The per-window scope title for the app's window: the focused field's (the open chat in apps
+    /// whose window title never changes) when the focus is in that app, else the window's own title.
+    private func scopeTitle(forPID pid: pid_t, windowTitle: String?) -> String? {
+        guard let input = focusModel.snapshot.context, input.processIdentifier == pid else { return windowTitle }
+        return input.featureScopeWindowTitle ?? windowTitle
     }
 
     // MARK: - Scope
