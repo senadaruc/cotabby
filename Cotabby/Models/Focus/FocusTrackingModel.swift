@@ -22,14 +22,16 @@ final class FocusTrackingModel: ObservableObject {
         ignoredBundleIdentifier: String?,
         selfCaptureAllowedElementIdentifier: String? = nil,
         isCaptureSuppressedForBundle: @escaping @MainActor (String?) -> Bool = { _ in false },
-        publishesPollingEvents: Bool = false
+        publishesPollingEvents: Bool = false,
+        terminalCursorProvider: (any TerminalCursorProviding)? = nil
     ) {
         self.ignoredBundleIdentifier = ignoredBundleIdentifier
         tracker = FocusTracker(
             permissionProvider: permissionProvider,
             ignoredBundleIdentifier: ignoredBundleIdentifier,
             selfCaptureAllowedElementIdentifier: selfCaptureAllowedElementIdentifier,
-            isCaptureSuppressedForBundle: isCaptureSuppressedForBundle
+            isCaptureSuppressedForBundle: isCaptureSuppressedForBundle,
+            terminalCursorProvider: terminalCursorProvider
         )
         snapshot = tracker.snapshot
         latestExternalApplication = tracker.snapshot.externalApplicationIdentity(

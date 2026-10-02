@@ -72,8 +72,15 @@ struct FocusSnapshotResolver {
     /// answers no width query (Chromium contenteditables, Electron composers); see
     /// `CaretAdvanceSampler`. One sampler follows the focused field; a new field starts a new one.
     private let caretAdvanceSamples = CaretAdvanceSampleStore()
-    init(geometryResolver: AXTextGeometryResolver? = nil) {
+    /// Measures the cursor of terminals whose text area reports none (Ghostty); nil disables that.
+    private let terminalCursorProvider: (any TerminalCursorProviding)?
+
+    init(
+        geometryResolver: AXTextGeometryResolver? = nil,
+        terminalCursorProvider: (any TerminalCursorProviding)? = nil
+    ) {
         self.geometryResolver = geometryResolver ?? AXTextGeometryResolver()
+        self.terminalCursorProvider = terminalCursorProvider
     }
 
     /// Drops the cached static-text-run walk so the next capture pays a fresh one. Called through
@@ -961,10 +968,17 @@ struct FocusSnapshotResolver {
         )
         let isKnownReadOnlyRole = AXHelper.isKnownReadOnlyRole(role)
         let canBeEditableTarget = hasStrongEditabilitySignal && !isKnownReadOnlyRole
-        let nativeSelection =
+        let reportedSelection =
             canBeEditableTarget && supportedAttributes.contains(kAXSelectedTextRangeAttribute as String)
             ? AXHelper.rangeValue(for: kAXSelectedTextRangeAttribute as CFString, on: element)
             : nil
+        // A terminal whose text area reports no cursor (Ghostty: the insertion point is always 0 of
+        // the whole scrollback) gets its cursor from its own pixels instead; everything below then
+        // reads the text around that offset as for any field.
+        let terminalCursor = canBeEditableTarget
+            ? pixelMeasuredTerminalCursor(on: element, bundleIdentifier: bundleIdentifier)
+            : nil
+        let nativeSelection = terminalCursor?.selection ?? reportedSelection
 
         // Chromium/WebKit contenteditables (Gmail body, Slack/Notion/Discord web, ClickUp chat)
         // expose selection only through the opaque AXTextMarker API, never kAXSelectedTextRange,
@@ -1058,7 +1072,12 @@ struct FocusSnapshotResolver {
                 height: currentFrame.height
             )
         }
-        let caretResult = selectionForGeometry.flatMap {
+        let caretResult = terminalCursor.map {
+            // The cursor's own cell, painted by the terminal: as exact as a host-reported caret.
+            CaretGeometryResult(
+                rect: $0.caretRect, quality: .exact, sourceDetail: "terminal-pixel-cursor", allowsDeepSearch: false
+            )
+        } ?? selectionForGeometry.flatMap {
             geometryResolver.resolveCaretRect(
                 for: element,
                 selection: $0,
@@ -1381,6 +1400,43 @@ struct FocusSnapshotResolver {
                 || caretRect.midY > measurement.lineRect.maxY + tolerance
         }
     }
+
+    /// The selection and caret of a terminal that reports no cursor, from the cursor measured in its
+    /// pixels (`TerminalCursorTracker`): the cursor's line is found in the tail of the text, which is
+    /// the whole scrollback, and the caret rect is the cursor's cell. Nil for every other host, and
+    /// until a first measurement has arrived.
+    private func pixelMeasuredTerminalCursor(
+        on element: AXUIElement,
+        bundleIdentifier: String
+    ) -> (selection: NSRange, caretRect: CGRect)? {
+        guard let provider = terminalCursorProvider,
+              TerminalAppDetector.reportsNoCursor(bundleIdentifier: bundleIdentifier),
+              let frame = AXHelper.rectValue(for: "AXFrame" as CFString, on: element),
+              let length = AXHelper.intValue(for: kAXNumberOfCharactersAttribute as CFString, on: element),
+              length > 0
+        else { return nil }
+        var processIdentifier: pid_t = 0
+        guard AXUIElementGetPid(element, &processIdentifier) == .success,
+              let fix = provider.cursorFix(processIdentifier: processIdentifier, elementFrame: frame, textLength: length)
+        else { return nil }
+        // A screen is at most a few hundred rows of a few hundred columns; this tail always holds it.
+        let tailLength = min(length, Self.terminalTailUTF16)
+        guard let tail = AXHelper.parameterizedStringValue(
+                  for: kAXStringForRangeParameterizedAttribute as CFString,
+                  range: NSRange(location: length - tailLength, length: tailLength),
+                  on: element
+              ),
+              let offset = TerminalScreenTextMapper.caretOffset(
+                  in: tail, rowsAboveLastInk: fix.rowsAboveLastInk, column: fix.column
+              )
+        else { return nil }
+        return (
+            NSRange(location: length - tailLength + offset, length: 0),
+            AXHelper.cocoaRect(fromAccessibilityRect: fix.caretRect)
+        )
+    }
+
+    private static let terminalTailUTF16 = 40_000
 
     /// Reads the smallest native text window the host can provide around the current selection.
     ///

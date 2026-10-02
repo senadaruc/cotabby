@@ -84,7 +84,8 @@ final class FocusTracker {
         ignoredBundleIdentifier: String?,
         selfCaptureAllowedElementIdentifier: String? = nil,
         isCaptureSuppressedForBundle: @escaping @MainActor (String?) -> Bool = { _ in false },
-        snapshotResolver: FocusSnapshotResolver? = nil
+        snapshotResolver: FocusSnapshotResolver? = nil,
+        terminalCursorProvider: (any TerminalCursorProviding)? = nil
     ) {
         self.pollInterval = pollInterval
         self.permissionProvider = permissionProvider
@@ -93,7 +94,8 @@ final class FocusTracker {
         self.isCaptureSuppressedForBundle = isCaptureSuppressedForBundle
         // Default resolver construction must happen inside the actor-isolated initializer body.
         // Swift evaluates default parameter expressions before entering the `@MainActor` context.
-        self.snapshotResolver = snapshotResolver ?? FocusSnapshotResolver()
+        self.snapshotResolver = snapshotResolver
+            ?? FocusSnapshotResolver(terminalCursorProvider: terminalCursorProvider)
     }
 
     /// Starts periodic AX polling and immediately captures an initial snapshot.
