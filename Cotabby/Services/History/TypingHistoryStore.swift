@@ -373,7 +373,7 @@ final class TypingHistoryStore: ObservableObject, SuggestionHistoryProviding {
     /// dropped too, so it is not written back a few seconds later.
     func deleteRecords(forBundleIdentifier bundleIdentifier: String) {
         if activeRecording?.bundleIdentifier == bundleIdentifier { activeRecording = nil }
-        if lastFinishedRecording?.bundleIdentifier == bundleIdentifier { lastFinishedRecording = nil }
+        recentRecordings = recentRecordings.filter { $0.value.bundleIdentifier != bundleIdentifier }
         let remaining = records.filter { $0.bundleIdentifier != bundleIdentifier }
         guard remaining.count != records.count else { return }
         records = remaining
