@@ -178,6 +178,7 @@ struct SuggestionSettingsStore {
     private static let fadeInSuggestionsDefaultsKey = "cotabbyFadeInSuggestions"
     private static let fadeInDurationSecondsDefaultsKey = "cotabbyFadeInDurationSeconds"
     private static let fadeInDurationDefaultRevisionDefaultsKey = "cotabbyFadeInDurationDefaultRevision"
+    private static let matchesHostTextSizeDefaultsKey = "cotabbyMatchesHostTextSize"
     private static let acceptanceKeyCodeDefaultsKey = "cotabbyAcceptanceKeyCode"
     private static let acceptanceKeyModifiersDefaultsKey = "cotabbyAcceptanceKeyModifiers"
     private static let acceptanceKeyLabelDefaultsKey = "cotabbyAcceptanceKeyLabel"
@@ -259,6 +260,7 @@ struct SuggestionSettingsStore {
         fadeInSuggestionsDefaultsKey,
         fadeInDurationSecondsDefaultsKey,
         fadeInDurationDefaultRevisionDefaultsKey,
+        matchesHostTextSizeDefaultsKey,
         acceptanceKeyCodeDefaultsKey,
         acceptanceKeyModifiersDefaultsKey,
         acceptanceKeyLabelDefaultsKey,
@@ -626,6 +628,7 @@ struct SuggestionSettingsStore {
                 mirrorPreference: resolvedMirrorPreference,
                 fadeInSuggestions: resolvedFadeInSuggestions,
                 fadeInDurationSeconds: resolvedFadeInDurationSeconds,
+                matchesHostTextSize: userDefaults.bool(forKey: Self.matchesHostTextSizeDefaultsKey),
                 showDevelopmentDebugOverlays: userDefaults.bool(forKey: Self.showDevelopmentDebugOverlaysDefaultsKey)
             ),
             inlineFeatures: SuggestionInlineFeatureSettings(
@@ -706,6 +709,7 @@ struct SuggestionSettingsStore {
         savePredictAheadWhileTyping(data.predictAheadWhileTyping)
         saveFadeInSuggestions(data.fadeInSuggestions)
         saveFadeInDurationSeconds(data.fadeInDurationSeconds)
+        saveMatchesHostTextSize(data.matchesHostTextSize)
         saveAcceptanceKey(
             keyCode: data.acceptanceKeyCode,
             modifiers: data.acceptanceKeyModifiers,
@@ -1018,6 +1022,10 @@ struct SuggestionSettingsStore {
 
     func saveFadeInSuggestions(_ enabled: Bool) {
         userDefaults.set(enabled, forKey: Self.fadeInSuggestionsDefaultsKey)
+    }
+
+    func saveMatchesHostTextSize(_ enabled: Bool) {
+        userDefaults.set(enabled, forKey: Self.matchesHostTextSizeDefaultsKey)
     }
 
     func saveFadeInDurationSeconds(_ seconds: Double) {

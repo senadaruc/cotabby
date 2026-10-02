@@ -38,6 +38,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
     case showKeyHint
     case ghostTextColor
     case ghostTextOpacity
+    case matchHostTextSize
     case ghostTextSize
     case ghostTextSizeFloor
     case ghostTextSizeCeiling
@@ -133,6 +134,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .showKeyHint: return "Show Accept-Key Hint"
         case .ghostTextColor: return "Ghost Text Color"
         case .ghostTextOpacity: return "Ghost Text Opacity"
+        case .matchHostTextSize: return "Match Original Text Size"
         case .ghostTextSize: return "Ghost Text Size"
         case .ghostTextSizeFloor: return "Smallest Ghost Text"
         case .ghostTextSizeCeiling: return "Largest Ghost Text"
@@ -217,6 +219,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .showKeyHint: return "keyboard"
         case .ghostTextColor: return "paintpalette"
         case .ghostTextOpacity: return "circle.lefthalf.filled"
+        case .matchHostTextSize: return "equal.square"
         case .ghostTextSize: return "textformat.size"
         case .ghostTextSizeFloor: return "arrow.down.to.line"
         case .ghostTextSizeCeiling: return "arrow.up.to.line"
@@ -284,7 +287,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
             return .general
         case .suggestionDisplay, .streamWhileGenerating, .fadeInSuggestions, .showFieldIndicator,
              .showWordCount, .showMenuBarIcon, .showKeyHint, .ghostTextColor,
-             .ghostTextOpacity, .ghostTextSize, .ghostTextSizeFloor, .ghostTextSizeCeiling:
+             .ghostTextOpacity, .matchHostTextSize, .ghostTextSize, .ghostTextSizeFloor, .ghostTextSizeCeiling:
             return .appearance
         case .emojiPicker, .emojiSkinTone, .emojiPeopleStyle, .emojiHistory:
             return .emoji
@@ -342,6 +345,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .showKeyHint: return "Show the accept-key badge beside the ghost text."
         case .ghostTextColor: return "Pick the color of the inline suggestion."
         case .ghostTextOpacity: return "How faint the suggestion looks before you accept it."
+        case .matchHostTextSize: return "Draw suggestions at exactly the size of the text you are typing."
         case .ghostTextSize: return "Scale suggestions if the ghost text looks too big or small."
         case .ghostTextSizeFloor:
             return "The smallest point size ghost text may render at."
@@ -481,6 +485,9 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .ghostTextOpacity:
             return ["opacity", "transparency", "fade", "alpha", "translucent", "dim",
                     "brightness", "visibility"]
+        case .matchHostTextSize:
+            return ["match", "same size", "original", "host", "font size", "text size", "exact",
+                    "native", "actual size", "size"]
         case .ghostTextSize:
             return ["size", "font size", "scale", "bigger", "smaller", "larger", "text size",
                     "zoom", "multiplier", "too big", "too small"]
