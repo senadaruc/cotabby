@@ -190,6 +190,9 @@ struct SuggestionSettingsSnapshot: Equatable, Sendable {
     /// accepts the rest of the suggestion. Travels in the snapshot so the acceptance path reads the
     /// live value without subscribing to the settings model.
     let doubleTapAcceptsEntireSuggestion: Bool
+    /// App-specific behavior by bundle identifier (mid-line, autocorrect, instructions). Read through
+    /// `PerAppSettingsResolver`, never directly, so the "default follows global" rule lives in one place.
+    let perAppBehaviors: [String: PerAppBehavior]
 
     /// Single chokepoint that picks between the preset's range and the user's custom range.
     /// Every downstream consumer (token-budget math, prompt-instruction text, UI labels in the
