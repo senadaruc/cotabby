@@ -165,6 +165,7 @@ final class TranslationCoordinator {
             // title never changes (WhatsApp) are scoped by the open chat, as the field icon is.
             let scopeTitle = scopeTitle(forPID: app.processIdentifier, windowTitle: window.windowTitle)
             guard isTranslationActive(bundleIdentifier: bundleIdentifier, windowTitle: scopeTitle) else {
+                logPass("translation off for this chat or app")
                 hideIncomingLabels()
                 lastCaptureSignature = nil
                 return
@@ -211,9 +212,13 @@ final class TranslationCoordinator {
             let labels = await translate(
                 blocks, covers: covers, readingLanguage: prefs.readingLanguage, conversationKey: conversationKey
             )
+            logPass("translated", blocks: blocks.count, labels: labels.count, covered: labels.filter { $0.cover != nil }.count)
 
             // The user may have switched apps or chats while this ran; never draw over the wrong window.
-            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else { return }
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else {
+                logPass("app no longer in front")
+                return
+            }
             lastCaptureSignature = (window.windowID, window.windowFrame, hash)
             // Move the labels by however far the chat scrolled since the capture.
             var placed = labels
@@ -240,6 +245,7 @@ final class TranslationCoordinator {
             shown = placed.isEmpty ? nil : (placed, window.windowFrame, captureClip, anchors)
             overlay.showIncoming(placed, windowFrame: window.windowFrame, clip: captureClip)
         } catch {
+            logPass("capture or text recognition failed")
             hideIncomingLabels()
         }
     }
@@ -336,6 +342,15 @@ final class TranslationCoordinator {
     private func scopeTitle(forPID pid: pid_t, windowTitle: String?) -> String? {
         guard let input = focusModel.snapshot.context, input.processIdentifier == pid else { return windowTitle }
         return input.featureScopeWindowTitle ?? windowTitle
+    }
+
+    /// Why an incoming pass ended, with counts but never message text.
+    private func logPass(_ outcome: String, blocks: Int? = nil, labels: Int? = nil, covered: Int? = nil) {
+        var metadata: Logger.Metadata = ["stage": .string("translation-pass"), "outcome": .string(outcome)]
+        if let blocks { metadata["blocks"] = .stringConvertible(blocks) }
+        if let labels { metadata["labels"] = .stringConvertible(labels) }
+        if let covered { metadata["covered"] = .stringConvertible(covered) }
+        CotabbyLogger.app.debug("Incoming translation pass", metadata: metadata)
     }
 
     // MARK: - Scroll
