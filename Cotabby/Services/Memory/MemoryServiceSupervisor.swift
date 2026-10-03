@@ -17,9 +17,11 @@ import Logging
 /// - **Watch**: an unexpected exit restarts with backoff (2, 4, 8 ... 60 s); five quick failures in
 ///   a row stop retrying and surface the error instead of looping.
 ///
-/// The child process runs under Cotabby's TCC identity (macOS attributes a child's file access to
-/// its responsible app), so Full Disk Access granted to Cotabby covers the service's reads of
-/// WhatsApp's and Mail's stores. Built once by `CotabbyAppEnvironment`; the Memory pane observes it.
+/// The service is started with responsibility disclaimed (`IsolatedProcessSpawner`), so it holds
+/// none of Cotabby's privacy permissions: its code lives in a user-writable venv, and inheriting
+/// Accessibility, Input Monitoring or Full Disk Access would let anything that can write there
+/// borrow them. Sources that need a permission are read by Cotabby itself and pushed to the
+/// service. Built once by `CotabbyAppEnvironment`; the Memory pane observes it.
 @MainActor
 final class MemoryServiceSupervisor: ObservableObject {
     enum State: Equatable {
@@ -42,7 +44,8 @@ final class MemoryServiceSupervisor: ObservableObject {
     let client: MemoryServiceClient
     private let bundled: MemoryServicePaths.BundledService?
     private let userDefaults: UserDefaults
-    private var process: Process?
+    private var child: IsolatedProcessSpawner.Child?
+    private var exitSource: DispatchSourceProcess?
     private var stopping = false
     private var consecutiveFailures = 0
     private var restartTask: Task<Void, Never>?
@@ -142,7 +145,7 @@ final class MemoryServiceSupervisor: ObservableObject {
     func start() {
         guard isEnabled else { return }
         restartTask?.cancel()
-        guard process?.isRunning != true else { return }
+        guard child == nil else { return }
         guard bundled != nil else {
             state = .failed("This build of Cotabby does not include the memory service.")
             return
@@ -163,10 +166,10 @@ final class MemoryServiceSupervisor: ObservableObject {
     func stop() {
         restartTask?.cancel()
         stopping = true
-        if let process, process.isRunning {
-            process.terminate()
+        if let child {
+            kill(child.pid, SIGTERM)
         }
-        process = nil
+        child = nil
         if state == .running || state == .starting {
             state = isEnabled ? .failed("Stopped.") : .disabled
         }
@@ -186,14 +189,6 @@ final class MemoryServiceSupervisor: ObservableObject {
         state = .starting
         try? FileManager.default.createDirectory(at: paths.dataDirectory, withIntermediateDirectories: true)
 
-        let process = Process()
-        process.executableURL = paths.python
-        process.arguments = [
-            "-m", "cotabby_memory",
-            "--data-dir", paths.dataDirectory.path,
-            "--socket", paths.socket.path,
-            "--parent-pid", String(getpid())
-        ]
         var environment = ProcessInfo.processInfo.environment
         environment["PYTHONPATH"] = bundled.pythonPath.path
         // Bytecode must not be written into the signed app bundle (it would break the signature).
@@ -201,45 +196,64 @@ final class MemoryServiceSupervisor: ObservableObject {
         environment["PYTHONUNBUFFERED"] = "1"
         // Hugging Face tokenizers warn when forked after use; the service never forks workers.
         environment["TOKENIZERS_PARALLELISM"] = "false"
-        process.environment = environment
-        let stdout = Pipe()
-        process.standardOutput = stdout
-        process.standardError = FileHandle.nullDevice
-
-        process.terminationHandler = { [weak self] finished in
-            let status = finished.terminationStatus
-            Task { @MainActor in self?.processExited(finished, status: status) }
-        }
+        let spawned: IsolatedProcessSpawner.Child
         do {
-            try process.run()
+            spawned = try IsolatedProcessSpawner.spawn(
+                executable: paths.python.path,
+                arguments: [
+                    "-m", "cotabby_memory",
+                    "--data-dir", paths.dataDirectory.path,
+                    "--socket", paths.socket.path,
+                    "--parent-pid", String(getpid())
+                ],
+                environment: environment
+            )
         } catch {
-            state = .failed("Could not start the memory service: \(error.localizedDescription)")
+            state = .failed(error.localizedDescription)
             return
         }
-        self.process = process
-        CotabbyLogger.app.info("Memory service starting", metadata: ["pid": .stringConvertible(process.processIdentifier)])
+        child = spawned
+        CotabbyLogger.app.info("Memory service starting", metadata: [
+            "pid": .stringConvertible(spawned.pid),
+            "responsible_pid": .string(IsolatedProcessSpawner.responsiblePid(for: spawned.pid).map(String.init) ?? "unknown")
+        ])
+
+        // Watch for the child's exit on the main queue; the handler also reaps it (waitpid), so it
+        // never lingers as a zombie.
+        let source = DispatchSource.makeProcessSource(identifier: spawned.pid, eventMask: .exit, queue: .main)
+        source.setEventHandler { [weak self] in
+            var status: Int32 = 0
+            waitpid(spawned.pid, &status, 0)
+            source.cancel()
+            MainActor.assumeIsolated {
+                self?.processExited(pid: spawned.pid, status: status)
+            }
+        }
+        exitSource?.cancel()
+        exitSource = source
+        source.resume()
 
         // The service prints one JSON line when its socket is listening. Read it off the main actor.
-        let handle = stdout.fileHandleForReading
+        let handle = spawned.stdout
         Task.detached { [weak self] in
             let ready = Self.waitForReadyLine(handle, timeout: Self.readyTimeout)
             await MainActor.run {
-                guard let self, self.process === process else { return }
+                guard let self, self.child?.pid == spawned.pid else { return }
                 if ready {
                     self.consecutiveFailures = 0
                     self.state = .running
                     CotabbyLogger.app.info("Memory service ready")
-                } else if process.isRunning {
-                    process.terminate()
+                } else {
+                    kill(spawned.pid, SIGTERM)
                     self.state = .failed("The memory service did not start in time.")
                 }
             }
         }
     }
 
-    private func processExited(_ finished: Process, status: Int32) {
-        guard process === finished || process == nil else { return }
-        process = nil
+    private func processExited(pid: pid_t, status: Int32) {
+        guard child == nil || child?.pid == pid else { return }
+        child = nil
         if stopping || !isEnabled { return }
         consecutiveFailures += 1
         CotabbyLogger.app.warning("Memory service exited", metadata: [
@@ -285,32 +299,25 @@ final class MemoryServiceSupervisor: ObservableObject {
         return false
     }
 
-    /// Runs a command to completion, appending its output to `log`; throws on a non-zero exit.
+    /// Runs a command to completion with responsibility disclaimed (installs execute package build
+    /// scripts, which must not run with Cotabby's permissions either), appending its output to
+    /// `log`; throws on a non-zero exit.
     nonisolated private static func run(_ executable: String, _ arguments: [String], log: URL) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: executable)
-            process.arguments = arguments
-            if let handle = try? FileHandle(forWritingTo: log) {
-                handle.seekToEndOfFile()
-                handle.write(Data("$ \(executable) \(arguments.joined(separator: " "))\n".utf8))
-                process.standardOutput = handle
-                process.standardError = handle
-            }
-            process.terminationHandler = { finished in
-                if finished.terminationStatus == 0 {
-                    continuation.resume()
-                } else {
-                    continuation.resume(throwing: InstallError.commandFailed(
-                        "\(URL(fileURLWithPath: executable).lastPathComponent) \(arguments.first ?? "") exited with \(finished.terminationStatus)."
-                    ))
-                }
-            }
-            do {
-                try process.run()
-            } catch {
-                continuation.resume(throwing: error)
-            }
+        if let handle = try? FileHandle(forWritingTo: log) {
+            handle.seekToEndOfFile()
+            handle.write(Data("$ \(executable) \(arguments.joined(separator: " "))\n".utf8))
+            try? handle.close()
+        }
+        let environment = ProcessInfo.processInfo.environment
+        let status = try await Task.detached(priority: .utility) {
+            try IsolatedProcessSpawner.runToCompletion(
+                executable: executable, arguments: arguments, environment: environment, outputPath: log.path
+            )
+        }.value
+        guard status == 0 else {
+            throw InstallError.commandFailed(
+                "\(URL(fileURLWithPath: executable).lastPathComponent) \(arguments.first ?? "") exited with \(status)."
+            )
         }
     }
 

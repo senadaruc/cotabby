@@ -65,6 +65,21 @@ def test_config_round_trips_over_the_wire(server):
     assert call(sock_path, "config.get")["result"]["index"]["top_k"] == 6
 
 
+def test_other_processes_are_refused(server):
+    """Only the launching process may connect: a different process gets `forbidden`."""
+    _, sock_path = server
+    probe = subprocess.run(
+        [sys.executable, "-c", (
+            "import json, socket, sys\n"
+            "c = socket.socket(socket.AF_UNIX); c.connect(sys.argv[1])\n"
+            "c.sendall(b'{\"id\": 1, \"method\": \"status\"}\\n')\n"
+            "print(c.recv(65536).decode())"
+        ), str(sock_path)],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert json.loads(probe.stdout)["error"]["code"] == "forbidden"
+
+
 def test_the_service_exits_with_its_parent(tmp_path):
     data_dir = Path(tempfile.mkdtemp(prefix="cm-"))
     parent = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
@@ -77,3 +92,22 @@ def test_the_service_exits_with_its_parent(tmp_path):
     parent.kill()
     parent.wait()
     assert process.wait(timeout=15) == 0
+
+
+def test_a_stopping_service_leaves_a_newer_services_socket_alone():
+    """A relaunched Cotabby starts a new service on the same socket path while the old one is
+    still noticing its parent is gone; the old one's shutdown must not delete the new socket."""
+    data_dir = Path(tempfile.mkdtemp(prefix="cm-"))
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
+    old = subprocess.Popen([sys.executable, "-m", "cotabby_memory", "--data-dir", str(data_dir),
+                            "--parent-pid", str(os.getpid())], stdout=subprocess.PIPE, text=True, env=env)
+    sock_path = Path(json.loads(old.stdout.readline())["socket"])
+    new = subprocess.Popen([sys.executable, "-m", "cotabby_memory", "--data-dir", str(data_dir),
+                            "--parent-pid", str(os.getpid())], stdout=subprocess.PIPE, text=True, env=env)
+    assert json.loads(new.stdout.readline())["event"] == "ready"
+    old.terminate()
+    old.wait(timeout=10)
+    assert sock_path.exists()
+    assert call(sock_path, "status")["result"]["protocol_version"] == 1
+    new.terminate()
+    new.wait(timeout=10)

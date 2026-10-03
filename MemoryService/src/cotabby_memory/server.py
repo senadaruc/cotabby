@@ -31,6 +31,9 @@ from typing import Any
 from .service import MemoryService, RequestError
 
 MAX_REQUEST_BYTES = 1_000_000
+# getsockopt(SOL_LOCAL, LOCAL_PEERPID) from <sys/un.h>; Python's socket module does not name them.
+SOL_LOCAL = 0
+LOCAL_PEERPID = 0x002
 log = logging.getLogger("cotabby_memory.server")
 
 
@@ -84,6 +87,10 @@ class Server:
                                                      limit=MAX_REQUEST_BYTES)
         finally:
             os.umask(previous)
+        # Remember which socket file is ours: a newer service started by a relaunched Cotabby can
+        # bind the same path before this one notices its parent is gone, and shutting down must not
+        # delete that newer service's socket.
+        self._socket_inode = os.stat(self.socket_path).st_ino
         loop = asyncio.get_running_loop()
         for signum in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(signum, self._stopping.set)
@@ -94,10 +101,17 @@ class Server:
         async with server:
             await self._stopping.wait()
         watcher.cancel()
-        self.socket_path.unlink(missing_ok=True)
+        self._remove_own_socket()
         self.pool.shutdown(wait=False, cancel_futures=True)
         self.service.close()
         log.info("stopped")
+
+    def _remove_own_socket(self) -> None:
+        try:
+            if os.stat(self.socket_path).st_ino == self._socket_inode:
+                self.socket_path.unlink()
+        except FileNotFoundError:
+            pass
 
     async def _watch_parent(self) -> None:
         while not self._stopping.is_set():
@@ -106,7 +120,33 @@ class Server:
                 log.info("parent %s exited; stopping", self.parent_pid)
                 self._stopping.set()
 
+    def _peer_allowed(self, writer: asyncio.StreamWriter) -> bool:
+        """Only Cotabby may talk to the service.
+
+        The socket's 0600 mode keeps other users out, but every app running as this user could
+        still connect, and the memory aggregates history that macOS protects at its source (a
+        WhatsApp or Mail store needs Full Disk Access). Without this check any same-user process
+        could read that history through the service: a confused deputy. The kernel reports the
+        connecting process's pid; it must be the parent that launched the service.
+        """
+        if self.parent_pid is None:
+            return True  # Started by hand for development; there is no app to verify against.
+        sock = writer.get_extra_info("socket")
+        try:
+            raw = sock.getsockopt(SOL_LOCAL, LOCAL_PEERPID, 4)
+        except OSError:
+            return False
+        peer = int.from_bytes(raw, "little")
+        if peer != self.parent_pid:
+            log.warning("refused a connection from pid %s (only %s may connect)", peer, self.parent_pid)
+            return False
+        return True
+
     async def _client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        if not self._peer_allowed(writer):
+            await self._send(writer, {"id": None, "error": {"code": "forbidden", "message": "Only Cotabby may use the memory service."}})
+            writer.close()
+            return
         try:
             while not reader.at_eof():
                 try:
