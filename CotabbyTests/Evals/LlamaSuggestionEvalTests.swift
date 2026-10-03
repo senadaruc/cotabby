@@ -173,7 +173,10 @@ final class LlamaSuggestionEvalTests: XCTestCase {
         )
         let settings = CotabbyTestFixtures.settingsSnapshot(
             selectedEngine: .llamaOpenSource,
-            selectedWordCountPreset: .twelveToTwenty,
+            // `COTABBY_EVAL_WORD_COUNT` (a preset such as "4-7") scores the suites at another length,
+            // so a length policy such as performance tuning can be compared over identical cases.
+            selectedWordCountPreset: ProcessInfo.processInfo.environment["COTABBY_EVAL_WORD_COUNT"]
+                .flatMap(SuggestionWordCountPreset.init(rawValue:)) ?? .twelveToTwenty,
             // Only a case that supplies clipboard text turns the section on, so the ordinary
             // continuation cases keep the exact prompt shape they have always been scored against.
             isClipboardContextEnabled: evalCase.clipboardContext != nil,
