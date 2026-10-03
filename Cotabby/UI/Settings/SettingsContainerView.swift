@@ -25,6 +25,8 @@ struct SettingsContainerView: View {
     @ObservedObject var performanceMetricsStore: PerformanceMetricsStore
     @ObservedObject var qualityMetricsStore: SuggestionQualityMetricsStore
     @ObservedObject var systemMetricsStore: SystemMetricsStore
+    @ObservedObject var performanceTuner: PerformanceTuner
+    @ObservedObject var modelProfileStore: ModelPerformanceProfileStore
 
     let onShowWelcome: () -> Void
     let clearEmojiHistory: () -> Void
@@ -162,7 +164,9 @@ struct SettingsContainerView: View {
                 suggestionSettings: suggestionSettings,
                 performanceMetricsStore: performanceMetricsStore,
                 qualityMetricsStore: qualityMetricsStore,
-                systemMetricsStore: systemMetricsStore
+                systemMetricsStore: systemMetricsStore,
+                performanceTuner: performanceTuner,
+                modelProfileStore: modelProfileStore
             )
         case .about:
             AboutPaneView(appUpdateManager: appUpdateManager)

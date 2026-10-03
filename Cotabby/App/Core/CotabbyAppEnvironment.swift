@@ -39,6 +39,11 @@ final class CotabbyAppEnvironment {
     let welcomeCoordinator: WelcomeCoordinator
     let huggingFaceSearchService: HuggingFaceSearchService
     let performanceMetricsStore: PerformanceMetricsStore
+    /// Performance tuning: learned per-model profiles, machine conditions, and the tuner that turns
+    /// them into per-request decisions. Held here so they live as long as the app.
+    let modelProfileStore: ModelPerformanceProfileStore
+    let performanceConditionsMonitor: PerformanceConditionsMonitor
+    let performanceTuner: PerformanceTuner
     let qualityMetricsStore: SuggestionQualityMetricsStore
     let translationPreferences: TranslationPreferencesStore
     let translationCoordinator: TranslationCoordinator
@@ -162,6 +167,14 @@ final class CotabbyAppEnvironment {
         // Live CPU/RAM graph backing for the Performance pane. Holds no state until the pane asks it
         // to start sampling, so constructing it eagerly here costs nothing.
         let systemMetricsStore = SystemMetricsStore()
+        // What the performance tuner has learned per model (speed, accepted lengths), and the
+        // machine conditions it reacts to. Both are cheap until a request asks: the GPU is read at
+        // most every few seconds, and only while tuning is on.
+        let modelProfileStore = ModelPerformanceProfileStore()
+        let performanceConditionsMonitor = PerformanceConditionsMonitor(
+            powerSourceMonitor: powerSourceMonitor,
+            lowPowerModeMonitor: lowPowerModeMonitor
+        )
         let suggestionInserter = SuggestionInserter(suppressionController: suppressionController)
 
         // Augmented translation: Apple Translation first, the selected Open Source model for pairs
@@ -232,7 +245,7 @@ final class CotabbyAppEnvironment {
         CotabbyLogger.app.info("Foundation model engine unavailable (SDK)")
         #endif
 
-        let routedEngine: any SuggestionGenerating = SuggestionEngineRouter(
+        let router = SuggestionEngineRouter(
             suggestionSettings: suggestionSettings,
             foundationModelEngine: foundationModelEngine,
             llamaEngine: LlamaSuggestionEngine(runtimeManager: runtimeManager),
@@ -255,6 +268,27 @@ final class CotabbyAppEnvironment {
             ),
             endpointModelNameProvider: { [weak suggestionSettings] in
                 suggestionSettings?.openAICompatibleModelName.nonEmpty
+            },
+            profileStore: modelProfileStore
+        )
+        router.conditionsProvider = { [weak performanceConditionsMonitor] in
+            performanceConditionsMonitor?.conditions
+        }
+        let routedEngine: any SuggestionGenerating = router
+        // The tuner keys its learning the way the router records it, so the model a request is
+        // tuned for is the model whose finished generations taught it.
+        let performanceTuner = PerformanceTuner(
+            suggestionSettings: suggestionSettings,
+            conditionsMonitor: performanceConditionsMonitor,
+            profileStore: modelProfileStore,
+            modelKeyProvider: { [weak runtimeManager, weak suggestionSettings] engine in
+                let modelName: String?
+                switch engine {
+                case .appleIntelligence: modelName = "Apple Intelligence"
+                case .llamaOpenSource: modelName = runtimeManager?.currentModelFilename ?? "Llama"
+                case .openAICompatible: modelName = suggestionSettings?.openAICompatibleModelName.nonEmpty ?? "Local Endpoint"
+                }
+                return modelName.map { GenerationStats.modelKey(engine: engine, modelName: $0) }
             }
         )
         // Under `-cotabby-debug` with `cotabbyDebugForcedSuggestion` set, every request answers with
@@ -280,6 +314,8 @@ final class CotabbyAppEnvironment {
             performanceMetricsStore: performanceMetricsStore,
             qualityMetricsStore: qualityMetricsStore,
             systemMetricsStore: systemMetricsStore,
+            performanceTuner: performanceTuner,
+            modelProfileStore: modelProfileStore,
             onShowWelcome: { [weak welcomeCoordinator] in
                 welcomeCoordinator?.showWelcome()
             },
@@ -375,6 +411,15 @@ final class CotabbyAppEnvironment {
         suggestionCoordinator.windowMultiLineOverride = { [weak windowFeatureOverrides] windowKey in
             windowFeatureOverrides?.override(for: .multiLine, windowKey: windowKey)
         }
+        suggestionCoordinator.performanceTuning = { [weak performanceTuner] settings in
+            performanceTuner?.tuning(for: settings) ?? .unchanged
+        }
+        suggestionCoordinator.recordShownForTuning = { [weak modelProfileStore] modelKey, words in
+            modelProfileStore?.recordShown(modelKey: modelKey, words: words)
+        }
+        suggestionCoordinator.recordAcceptedForTuning = { [weak modelProfileStore] modelKey, shownWords in
+            modelProfileStore?.recordAccepted(modelKey: modelKey, shownWords: shownWords)
+        }
         suggestionCoordinator.emojiInputObserver = { [weak inlineCommandCoordinator] event in
             inlineCommandCoordinator?.observe(event) ?? false
         }
@@ -403,6 +448,9 @@ final class CotabbyAppEnvironment {
         self.huggingFaceSearchService = huggingFaceSearchService
         self.performanceMetricsStore = performanceMetricsStore
         self.qualityMetricsStore = qualityMetricsStore
+        self.modelProfileStore = modelProfileStore
+        self.performanceConditionsMonitor = performanceConditionsMonitor
+        self.performanceTuner = performanceTuner
         self.translationPreferences = translationPreferences
         self.translationCoordinator = translationCoordinator
         self.settingsCoordinator = settingsCoordinator

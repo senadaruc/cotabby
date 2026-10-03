@@ -46,6 +46,18 @@ final class SuggestionCoordinator: ObservableObject {
     /// the window key a request's context carries. Wired by `CotabbyAppEnvironment` like the
     /// autocomplete hook above.
     var windowMultiLineOverride: @MainActor (_ windowKey: String?) -> Bool? = { _ in nil }
+    /// How the performance tuner wants a request built from these settings held back (shorter
+    /// range, debounce floor, no screen text, no predict-ahead). `CotabbyAppEnvironment` points it
+    /// at `PerformanceTuner`; the default never holds back, which keeps tests and previews exact.
+    var performanceTuning: @MainActor (SuggestionSettingsSnapshot) -> PerformanceTuning = { _ in .unchanged }
+    /// Teaches the tuner which lengths get shown and accepted, per model. Wired to
+    /// `ModelPerformanceProfileStore` by `CotabbyAppEnvironment`.
+    var recordShownForTuning: @MainActor (_ modelKey: String, _ words: Int) -> Void = { _, _ in }
+    var recordAcceptedForTuning: @MainActor (_ modelKey: String, _ shownWords: Int) -> Void = { _, _ in }
+    /// The suggestion last shown, with the model that wrote it and its length, so its first accept
+    /// can be credited to that model's length band. Matched by full text, because word-by-word
+    /// accepts and re-presentations keep the same session text.
+    var tunedShownSuggestion: (fullText: String, modelKey: String, words: Int)?
     let clipboardRelevanceFilter: any ClipboardRelevanceFiltering
     let visualContextCoordinator: any VisualContextCoordinating
     let interactionState: SuggestionInteractionState

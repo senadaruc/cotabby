@@ -9,6 +9,9 @@ extension SuggestionCoordinator {
         // Internal partial collection must not add speculative traffic to configured endpoints.
         // Post-acceptance speculation has its own publication contract and is kept separate.
         guard settingsSnapshot.predictAheadWhileTyping,
+              // The tuner pauses predict-ahead under pressure: it keeps a decode running through
+              // a typing burst, which is exactly the GPU work battery mode is cutting.
+              performanceTuning(settingsSnapshot).allowsPredictAhead,
               settingsSnapshot.selectedEngine != .openAICompatible,
               pendingSpeculativeContext == nil, !request.context.isSecure,
               request.context.selection.length == 0,

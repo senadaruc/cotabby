@@ -23,6 +23,8 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
     private let performanceMetricsStore: PerformanceMetricsStore
     private let qualityMetricsStore: SuggestionQualityMetricsStore
     private let systemMetricsStore: SystemMetricsStore
+    private let performanceTuner: PerformanceTuner
+    private let modelProfileStore: ModelPerformanceProfileStore
     private let onShowWelcome: () -> Void
     private let clearEmojiHistory: () -> Void
     private let translationPreferences: TranslationPreferencesStore
@@ -50,6 +52,8 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
         performanceMetricsStore: PerformanceMetricsStore,
         qualityMetricsStore: SuggestionQualityMetricsStore,
         systemMetricsStore: SystemMetricsStore,
+        performanceTuner: PerformanceTuner,
+        modelProfileStore: ModelPerformanceProfileStore,
         onShowWelcome: @escaping () -> Void,
         clearEmojiHistory: @escaping () -> Void,
         translationPreferences: TranslationPreferencesStore,
@@ -67,6 +71,8 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
         self.performanceMetricsStore = performanceMetricsStore
         self.qualityMetricsStore = qualityMetricsStore
         self.systemMetricsStore = systemMetricsStore
+        self.performanceTuner = performanceTuner
+        self.modelProfileStore = modelProfileStore
         self.onShowWelcome = onShowWelcome
         self.clearEmojiHistory = clearEmojiHistory
         self.translationPreferences = translationPreferences
@@ -98,6 +104,8 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
                     performanceMetricsStore: performanceMetricsStore,
                     qualityMetricsStore: qualityMetricsStore,
                     systemMetricsStore: systemMetricsStore,
+                    performanceTuner: performanceTuner,
+                    modelProfileStore: modelProfileStore,
                     onShowWelcome: onShowWelcome,
                     clearEmojiHistory: clearEmojiHistory,
                     translationPreferences: translationPreferences,

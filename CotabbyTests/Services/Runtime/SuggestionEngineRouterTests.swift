@@ -21,6 +21,7 @@ final class SuggestionEngineRouterRoutingTests: XCTestCase {
         let endpoint: ScriptedEngine
         let metrics: PerformanceMetricsStore
         let quality: SuggestionQualityMetricsStore
+        let profiles: ModelPerformanceProfileStore
     }
 
     @MainActor
@@ -76,6 +77,7 @@ final class SuggestionEngineRouterRoutingTests: XCTestCase {
         settings.selectEngine(engine)
         settings.setPerformanceTrackingEnabled(performanceTracking)
         let metrics = PerformanceMetricsStore(userDefaults: defaults)
+        let profiles = ModelPerformanceProfileStore(userDefaults: defaults)
         let foundation = ScriptedEngine()
         let llama = ScriptedEngine()
         let endpoint = ScriptedEngine()
@@ -88,9 +90,10 @@ final class SuggestionEngineRouterRoutingTests: XCTestCase {
             qualityMetricsStore: quality,
             llamaModelNameProvider: { llamaModelName },
             openAICompatibleEngine: endpoint,
-            endpointModelNameProvider: { "endpoint-model" }
+            endpointModelNameProvider: { "endpoint-model" },
+            profileStore: profiles
         )
-        Self.retained.append(contentsOf: [router, settings, metrics, quality] as [AnyObject])
+        Self.retained.append(contentsOf: [router, settings, metrics, quality, profiles] as [AnyObject])
         return Rig(
             router: router,
             settings: settings,
@@ -98,8 +101,60 @@ final class SuggestionEngineRouterRoutingTests: XCTestCase {
             llama: llama,
             endpoint: endpoint,
             metrics: metrics,
-            quality: quality
+            quality: quality,
+            profiles: profiles
         )
+    }
+
+    // MARK: - Performance learning
+
+    /// A llama result carries the runtime's own token count and decode timing; the router stamps
+    /// the engine|model key, teaches the profile, and records the richer Recent Requests entry.
+    func test_llamaStatsTeachTheModelProfileAndTheRecentRequestsEntry() async throws {
+        let rig = makeRig(engine: .llamaOpenSource)
+        rig.llama.script = { request in
+            var result = SuggestionResult(generation: request.generation, rawText: " ok", text: " ok", latency: 0.3)
+            result.stats = GenerationStats(tokensGenerated: 20, isTokenCountEstimated: false, prefillMilliseconds: 100, stopReason: "eos")
+            return result
+        }
+
+        let result = try await rig.router.generateSuggestion(for: CotabbyTestFixtures.suggestionRequest())
+
+        let key = GenerationStats.modelKey(engine: .llamaOpenSource, modelName: "test-model.gguf")
+        XCTAssertEqual(result.stats?.modelKey, key)
+        let profile = try XCTUnwrap(rig.profiles.profile(for: key))
+        XCTAssertEqual(profile.sampleCount, 1)
+        XCTAssertEqual(profile.msPerToken ?? 0, 10, accuracy: 0.001)
+        XCTAssertFalse(profile.isTimingCoarse)
+        let entry = try XCTUnwrap(rig.metrics.entries.first)
+        XCTAssertEqual(entry.engine, "llama")
+        XCTAssertEqual(entry.tokens, 20)
+        XCTAssertEqual(entry.stopReason, "eos")
+        XCTAssertEqual(entry.tokensEstimated, false)
+    }
+
+    /// Engines that report no tokens get an estimate from the text, and their timing is coarse.
+    func test_enginesWithoutStatsGetAnEstimateMarkedCoarse() async throws {
+        let rig = makeRig(engine: .appleIntelligence)
+
+        let result = try await rig.router.generateSuggestion(for: CotabbyTestFixtures.suggestionRequest())
+
+        XCTAssertEqual(result.stats?.isTokenCountEstimated, true)
+        let key = GenerationStats.modelKey(engine: .appleIntelligence, modelName: "Apple Intelligence")
+        XCTAssertEqual(rig.profiles.profile(for: key)?.isTimingCoarse, true)
+        XCTAssertEqual(rig.metrics.entries.first?.tokensEstimated, true)
+    }
+
+    /// An empty decode says nothing about speed, so it is not learned from.
+    func test_emptyResultsDoNotTeachTheProfile() async throws {
+        let rig = makeRig(engine: .llamaOpenSource)
+        rig.llama.script = { request in
+            SuggestionResult(generation: request.generation, rawText: "", text: "", latency: 0.2)
+        }
+
+        _ = try await rig.router.generateSuggestion(for: CotabbyTestFixtures.suggestionRequest())
+
+        XCTAssertTrue(rig.profiles.profiles.isEmpty)
     }
 
     func test_appleIntelligenceSelection_routesToFoundationEngineAndRecordsMetric() async throws {

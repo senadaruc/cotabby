@@ -29,11 +29,16 @@ extension SuggestionCoordinator {
         // The debounce window adapts to the last generation latency: snappier when the model is
         // fast, calmer when it is slow (fewer doomed generations to cancel). The configured value
         // is the fallback until a first latency exists.
-        let debounceMilliseconds = DebouncePolicy.milliseconds(
-            lastGenerationLatencyMilliseconds:
-                lastLatencyByEngine[settingsSnapshot.selectedEngine],
-            fallback: settingsSnapshot.debounceMilliseconds,
-            engine: settingsSnapshot.selectedEngine
+        // Under pressure the tuner raises the floor so a typing burst ends in one decode instead
+        // of several cancelled ones.
+        let debounceMilliseconds = max(
+            DebouncePolicy.milliseconds(
+                lastGenerationLatencyMilliseconds:
+                    lastLatencyByEngine[settingsSnapshot.selectedEngine],
+                fallback: settingsSnapshot.debounceMilliseconds,
+                engine: settingsSnapshot.selectedEngine
+            ),
+            performanceTuning(settingsSnapshot).debounceFloorMilliseconds ?? 0
         )
         // The debounce clock starts at the keystroke, not here. The host-publish poll has already
         // consumed real wall time waiting for the host to publish the keystroke to AX, and that
@@ -1011,6 +1016,7 @@ extension SuggestionCoordinator {
         qualityMetricsStore.recordShown(recoveringSuppression: result.suppressionReason)
         let session = startCompletionSession(prediction: prediction, visibleText: visibleText,
             context: liveContext, latency: result.latency, isFinal: true, wordEndingOnly: wordEndingOnly)
+        noteShownSuggestionForTuning(session: session, result: result)
         suggestionAnchorCache.record(
             identityKey: liveContext.suggestionSessionIdentityKey,
             precedingText: liveContext.precedingText,
