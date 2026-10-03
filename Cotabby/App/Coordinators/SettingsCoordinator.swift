@@ -28,6 +28,8 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
     private let onShowWelcome: () -> Void
     private let clearEmojiHistory: () -> Void
     private let typingHistoryStore: TypingHistoryStore
+    private let memorySupervisor: MemoryServiceSupervisor
+    private let memoryControl: MemoryControlModel
     private let translationPreferences: TranslationPreferencesStore
     private let translationService: TranslationService
 
@@ -58,6 +60,8 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
         onShowWelcome: @escaping () -> Void,
         clearEmojiHistory: @escaping () -> Void,
         typingHistoryStore: TypingHistoryStore,
+        memorySupervisor: MemoryServiceSupervisor,
+        memoryControl: MemoryControlModel,
         translationPreferences: TranslationPreferencesStore,
         translationService: TranslationService
     ) {
@@ -78,6 +82,8 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
         self.onShowWelcome = onShowWelcome
         self.clearEmojiHistory = clearEmojiHistory
         self.typingHistoryStore = typingHistoryStore
+        self.memorySupervisor = memorySupervisor
+        self.memoryControl = memoryControl
         self.translationPreferences = translationPreferences
         self.translationService = translationService
     }
@@ -109,6 +115,8 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
                     systemMetricsStore: systemMetricsStore,
                     performanceTuner: performanceTuner,
                     modelProfileStore: modelProfileStore,
+                    memorySupervisor: memorySupervisor,
+                    memoryControl: memoryControl,
                     onShowWelcome: onShowWelcome,
                     clearEmojiHistory: clearEmojiHistory,
                     typingHistoryStore: typingHistoryStore,

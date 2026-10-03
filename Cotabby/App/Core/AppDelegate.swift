@@ -179,6 +179,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         suggestionCoordinator.start()
         inlineCommandCoordinator.start()
         environment.translationCoordinator.start()
+        // Brings the memory service up only if the user switched Memory on; a no-op otherwise.
+        environment.memorySupervisor.startIfEnabled()
         welcomeCoordinator.presentIfNeeded()
         welcomeCoordinator.presentPermissionReminderIfNeeded()
         didStartServices = true
@@ -257,6 +259,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         CotabbyLogger.app.info("Cotabby terminating, releasing services")
+        // The service would also notice Cotabby's exit within two seconds (--parent-pid); stopping
+        // it here lets it close its socket and index cleanly instead.
+        environment.memorySupervisor.stop()
         activationIndicatorController.hide(reason: "Activation indicator hidden because Cotabby is terminating.")
         focusDebugOverlayController?.hide()
         suggestionCoordinator.stop()

@@ -18,6 +18,7 @@ enum SettingsCategory: String, CaseIterable, Hashable, Identifiable {
     case writing
     case context
     case translation
+    case memory
     case engineAndModel
     case shortcuts
     case apps
@@ -36,6 +37,7 @@ enum SettingsCategory: String, CaseIterable, Hashable, Identifiable {
         case .writing: return "Writing"
         case .context: return "Context"
         case .translation: return "Translation"
+        case .memory: return "Memory"
         case .engineAndModel: return "Engine & Model"
         case .shortcuts: return "Shortcuts"
         case .apps: return "Apps"
@@ -55,6 +57,7 @@ enum SettingsCategory: String, CaseIterable, Hashable, Identifiable {
         case .writing: return "square.and.pencil"
         case .context: return "doc.text"
         case .translation: return "character.bubble.fill"
+        case .memory: return "brain"
         case .engineAndModel: return "cpu.fill"
         case .shortcuts: return "keyboard.fill"
         case .apps: return "app.badge.fill"
@@ -76,6 +79,7 @@ enum SettingsCategory: String, CaseIterable, Hashable, Identifiable {
         case .writing: return .indigo
         case .context: return .teal
         case .translation: return .blue
+        case .memory: return .mint
         case .engineAndModel: return .orange
         case .shortcuts: return .pink
         case .apps: return .red
@@ -95,6 +99,7 @@ enum SettingsCategory: String, CaseIterable, Hashable, Identifiable {
         case .writing: return "Length, profile, and corrections"
         case .context: return "What the model can reference"
         case .translation: return "Translate messages and replies"
+        case .memory: return "Chat and mail history for suggestions"
         case .engineAndModel: return "Choose the engine and models"
         case .shortcuts: return "Keys that accept suggestions"
         case .apps: return "Where Cotabby stays quiet"
@@ -111,7 +116,7 @@ enum SettingsCategory: String, CaseIterable, Hashable, Identifiable {
     static let sidebarGroups: [[SettingsCategory]] = [
         [.home],
         [.general, .appearance, .emoji],
-        [.writing, .context, .translation, .engineAndModel],
+        [.writing, .context, .translation, .memory, .engineAndModel],
         [.shortcuts, .apps, .permissions],
         [.performance, .about]
     ]

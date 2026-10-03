@@ -46,6 +46,10 @@ final class CotabbyAppEnvironment {
     let performanceTuner: PerformanceTuner
     let qualityMetricsStore: SuggestionQualityMetricsStore
     let typingHistoryStore: TypingHistoryStore
+    /// Conversation memory: the supervisor owns the Python service process (install, start,
+    /// restart); the control model is what the Memory pane reads and acts through.
+    let memorySupervisor: MemoryServiceSupervisor
+    let memoryControl: MemoryControlModel
     let translationPreferences: TranslationPreferencesStore
     let translationCoordinator: TranslationCoordinator
     let settingsCoordinator: SettingsCoordinator
@@ -320,6 +324,11 @@ final class CotabbyAppEnvironment {
         // "Clear History" control can reach it, and before the picker which reads and writes it.
         let emojiUsageStore = EmojiUsageStore()
 
+        // Conversation memory. Constructing the supervisor touches no process: it only reads paths
+        // and the enabled flag. `AppDelegate` starts it after launch.
+        let memorySupervisor = MemoryServiceSupervisor()
+        let memoryControl = MemoryControlModel(client: memorySupervisor.client, supervisor: memorySupervisor)
+
         let settingsCoordinator = SettingsCoordinator(
             appUpdateManager: appUpdateManager,
             permissionManager: permissionManager,
@@ -340,6 +349,8 @@ final class CotabbyAppEnvironment {
             },
             clearEmojiHistory: { emojiUsageStore.clear() },
             typingHistoryStore: typingHistoryStore,
+            memorySupervisor: memorySupervisor,
+            memoryControl: memoryControl,
             translationPreferences: translationPreferences,
             translationService: translationService
         )
@@ -470,6 +481,8 @@ final class CotabbyAppEnvironment {
         self.performanceMetricsStore = performanceMetricsStore
         self.qualityMetricsStore = qualityMetricsStore
         self.typingHistoryStore = typingHistoryStore
+        self.memorySupervisor = memorySupervisor
+        self.memoryControl = memoryControl
         self.modelProfileStore = modelProfileStore
         self.performanceConditionsMonitor = performanceConditionsMonitor
         self.performanceTuner = performanceTuner

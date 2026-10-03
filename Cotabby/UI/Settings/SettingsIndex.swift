@@ -66,6 +66,12 @@ enum SettingsItem: String, CaseIterable, Identifiable {
     case translationApps
     case translationLanguages
     case contextLivePreview
+    // Memory
+    case memoryService
+    case memorySources
+    case memoryIndex
+    case memoryPrivacy
+    case memoryPlayground
     // Engine & Model
     case engine
     case appleIntelligenceAvailability
@@ -164,6 +170,11 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .translationEnabled: return "Translate Messages"
         case .translationApps: return "Translation Apps"
         case .translationLanguages: return "Translation Languages"
+        case .memoryService: return "Conversation Memory"
+        case .memorySources: return "Memory Sources"
+        case .memoryIndex: return "Memory Index"
+        case .memoryPrivacy: return "Memory Privacy"
+        case .memoryPlayground: return "Memory Playground"
         case .contextLivePreview: return "Live Preview"
         case .engine: return "Engine"
         case .appleIntelligenceAvailability: return "Apple Intelligence Availability"
@@ -257,6 +268,11 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .translationEnabled: return "character.bubble"
         case .translationApps: return "app.badge"
         case .translationLanguages: return "globe"
+        case .memoryService: return "brain"
+        case .memorySources: return "tray.full"
+        case .memoryIndex: return "square.stack.3d.up"
+        case .memoryPrivacy: return "hand.raised"
+        case .memoryPlayground: return "magnifyingglass"
         case .contextLivePreview: return "text.cursor"
         case .engine: return "cpu"
         case .appleIntelligenceAvailability: return "apple.logo"
@@ -320,6 +336,8 @@ enum SettingsItem: String, CaseIterable, Identifiable {
             return .writing
         case .extendedContext, .contextLivePreview, .typingHistory:
             return .context
+        case .memoryService, .memorySources, .memoryIndex, .memoryPrivacy, .memoryPlayground:
+            return .memory
         case .translationEnabled, .translationApps, .translationLanguages:
             return .translation
         case .engine, .appleIntelligenceAvailability, .appleLanguageFallback, .appleLanguageFallbackModel, .modelStatus, .selectedModel,
@@ -395,6 +413,11 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .translationEnabled: return "Translate incoming messages and offer replies in the chat's language."
         case .translationApps: return "Apps whose chats are translated."
         case .translationLanguages: return "Which languages translate on this Mac, and how."
+        case .memoryService: return "Remember chat and mail history on this Mac for suggestions."
+        case .memorySources: return "WhatsApp, Mail, Teams, Slack and other history sources."
+        case .memoryIndex: return "LEANN index settings: embeddings, chunking, search."
+        case .memoryPrivacy: return "Retention, exclusions, and deleting memory."
+        case .memoryPlayground: return "Try what memory would retrieve for a conversation."
         case .contextLivePreview: return "A real field that exercises the full pipeline."
         case .engine: return "Apple Intelligence, bundled Open Source, or a local endpoint."
         case .appleIntelligenceAvailability: return "Whether this Mac can run Apple Intelligence."
@@ -577,6 +600,16 @@ enum SettingsItem: String, CaseIterable, Identifiable {
             return ["translate", "translation apps", "whatsapp", "teams", "telegram", "slack", "outlook", "mail"]
         case .translationLanguages:
             return ["translation languages", "apple translation", "download languages", "offline translation"]
+        case .memoryService:
+            return ["memory", "rag", "leann", "history", "conversation", "chat history", "remember"]
+        case .memorySources:
+            return ["whatsapp", "mail", "outlook", "teams", "slack", "sources", "sync", "full disk access"]
+        case .memoryIndex:
+            return ["index", "embedding", "leann", "hnsw", "diskann", "chunk", "vector", "rebuild"]
+        case .memoryPrivacy:
+            return ["privacy", "retention", "exclude", "delete memory", "forget"]
+        case .memoryPlayground:
+            return ["playground", "search memory", "test retrieval", "rag"]
         case .extendedContext:
             return ["context", "glossary", "reference", "notes", "jargon", "instructions",
                     "memory", "background", "system prompt", "vocabulary"]

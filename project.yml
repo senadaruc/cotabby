@@ -108,6 +108,13 @@ targetTemplates:
         buildPhase: resources
       - path: THIRD_PARTY_LICENSES.md
         buildPhase: resources
+      # The conversation memory service (Python). Cotabby runs it from the bundle via PYTHONPATH
+      # inside a venv it creates from this pinned requirements list; see MemoryServiceSupervisor.
+      - path: MemoryService/src/cotabby_memory
+        type: folder
+        buildPhase: resources
+      - path: MemoryService/memory-requirements.txt
+        buildPhase: resources
     dependencies:
       - package: Sparkle
         product: Sparkle
