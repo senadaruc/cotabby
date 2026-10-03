@@ -151,6 +151,7 @@ struct SuggestionSettingsStore {
     private static let spellingDictionaryCodesDefaultsKey = "cotabbyEnabledSpellingDictionaryCodes"
     private static let automaticallyFixTyposDefaultsKey = "cotabbyAutomaticallyFixTypos"
     private static let performanceTrackingEnabledDefaultsKey = "cotabbyPerformanceTrackingEnabled"
+    private static let performanceTuningModeDefaultsKey = "cotabbyPerformanceTuningMode"
     private static let lowPowerModeAutoDisableDefaultsKey = "cotabbyLowPowerModeAutoDisableEnabled"
     /// Shared with `CotabbyApp` because SwiftUI's scene-level `@AppStorage` is what invalidates the
     /// `MenuBarExtra` insertion binding when the settings model writes this preference.
@@ -243,6 +244,7 @@ struct SuggestionSettingsStore {
         spellingDictionaryCodesDefaultsKey,
         automaticallyFixTyposDefaultsKey,
         performanceTrackingEnabledDefaultsKey,
+        performanceTuningModeDefaultsKey,
         lowPowerModeAutoDisableDefaultsKey,
         menuBarWordCountVisibleDefaultsKey,
         mirrorPreferenceDefaultsKey,
@@ -405,6 +407,10 @@ struct SuggestionSettingsStore {
         // in from the Performance pane.
         let resolvedPerformanceTrackingEnabled =
             userDefaults.object(forKey: Self.performanceTrackingEnabledDefaultsKey) as? Bool ?? false
+        // Missing or unknown values fall back to Balanced: tuning only ever holds back inside the
+        // user's own settings, so turning it on for existing installs cannot lengthen anything.
+        let resolvedPerformanceTuningMode = userDefaults.string(forKey: Self.performanceTuningModeDefaultsKey)
+            .flatMap(PerformanceTuningMode.init(rawValue:)) ?? .default
         // Existing installs lack this key; defaulting to true keeps the feature opt-out.
         let resolvedLowPowerModeAutoDisableEnabled =
             userDefaults.object(forKey: Self.lowPowerModeAutoDisableDefaultsKey) as? Bool ?? true
@@ -591,6 +597,7 @@ struct SuggestionSettingsStore {
                 disabledAppRules: resolvedDisabledAppRules,
                 suggestInIntegratedTerminals: resolvedSuggestInIntegratedTerminals,
                 isPerformanceTrackingEnabled: resolvedPerformanceTrackingEnabled,
+                performanceTuningMode: resolvedPerformanceTuningMode,
                 isLowPowerModeAutoDisableEnabled: resolvedLowPowerModeAutoDisableEnabled
             ),
             engine: SuggestionEngineSettings(
@@ -715,6 +722,7 @@ struct SuggestionSettingsStore {
         saveEnabledSpellingDictionaryCodes(data.enabledSpellingDictionaryCodes)
         saveAutomaticallyFixTypos(data.automaticallyFixTypos)
         savePerformanceTrackingEnabled(data.isPerformanceTrackingEnabled)
+        savePerformanceTuningMode(data.performanceTuningMode)
         saveLowPowerModeAutoDisableEnabled(data.isLowPowerModeAutoDisableEnabled)
         saveMenuBarIconVisible(data.isMenuBarIconVisible)
         saveMenuBarWordCountVisible(data.isMenuBarWordCountVisible)
@@ -977,6 +985,10 @@ struct SuggestionSettingsStore {
 
     func savePerformanceTrackingEnabled(_ enabled: Bool) {
         userDefaults.set(enabled, forKey: Self.performanceTrackingEnabledDefaultsKey)
+    }
+
+    func savePerformanceTuningMode(_ mode: PerformanceTuningMode) {
+        userDefaults.set(mode.rawValue, forKey: Self.performanceTuningModeDefaultsKey)
     }
 
     func saveLowPowerModeAutoDisableEnabled(_ enabled: Bool) {

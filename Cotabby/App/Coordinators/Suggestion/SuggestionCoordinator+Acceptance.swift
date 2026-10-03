@@ -720,6 +720,22 @@ extension SuggestionCoordinator {
     private func recordSuggestionAcceptedIfFirstChunk(of session: ActiveSuggestionSession) {
         guard session.consumedCharacterCount == 0 else { return }
         qualityMetricsStore.recordAcceptedSuggestion()
+        if let shown = tunedShownSuggestion, shown.fullText == session.fullText {
+            recordAcceptedForTuning(shown.modelKey, shown.words)
+            tunedShownSuggestion = nil
+        }
+    }
+
+    /// Teaches the tuner the length of a suggestion that became visible, under the model that
+    /// wrote it, and remembers it so its first accept is credited to the same band.
+    func noteShownSuggestionForTuning(session: ActiveSuggestionSession, result: SuggestionResult) {
+        guard let modelKey = result.stats?.modelKey else {
+            tunedShownSuggestion = nil
+            return
+        }
+        let words = session.fullText.split(whereSeparator: \.isWhitespace).count
+        tunedShownSuggestion = (session.fullText, modelKey, words)
+        recordShownForTuning(modelKey, words)
     }
 
     /// Updates the global productivity counter from text accepted via Tab.

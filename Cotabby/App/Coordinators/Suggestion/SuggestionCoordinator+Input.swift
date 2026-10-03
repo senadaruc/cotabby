@@ -90,7 +90,7 @@ extension SuggestionCoordinator {
                inputMonitoringGranted: permissionManager.inputMonitoringGranted,
                screenRecordingGranted: permissionManager.screenRecordingGranted,
                focusSnapshot: snapshot,
-               isFastModeEnabled: settingsSnapshot.isFastModeEnabled
+               isFastModeEnabled: isVisualContextHeldBack
            ) {
             visualContextCoordinator.startSessionIfNeeded(
                 for: context, configuration: .forEngine(settingsSnapshot.selectedEngine)
@@ -138,7 +138,7 @@ extension SuggestionCoordinator {
             inputMonitoringGranted: permissionManager.inputMonitoringGranted,
             screenRecordingGranted: permissionManager.screenRecordingGranted,
             focusSnapshot: snapshot,
-            isFastModeEnabled: settingsSnapshot.isFastModeEnabled
+            isFastModeEnabled: isVisualContextHeldBack
         ) {
             visualContextCoordinator.startSessionIfNeeded(
                 for: focusedContext, configuration: .forEngine(settingsSnapshot.selectedEngine)

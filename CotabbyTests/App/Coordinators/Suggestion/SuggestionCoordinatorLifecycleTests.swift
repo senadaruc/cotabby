@@ -83,6 +83,60 @@ final class SuggestionCoordinatorLifecycleTests: SuggestionCoordinatorRigTestCas
         XCTAssertFalse(rig.coordinator.settingsSnapshot.isMultiLineEnabled, "the stored snapshot keeps the global value")
     }
 
+    // MARK: - Performance tuning
+
+    /// The tuner's shorter range reaches the request through the copy `requestSettings` builds,
+    /// while the stored snapshot keeps the user's own range.
+    func test_requestSettings_applyTheTunedRangeToTheRequestOnly() {
+        let rig = retained(makeCoordinatorRig())
+        let tuned = SuggestionWordRange.clamped(low: 4, high: 7)
+        rig.coordinator.performanceTuning = { _ in PerformanceTuning(wordRange: tuned) }
+
+        let settings = rig.coordinator.requestSettings(for: CotabbyTestFixtures.focusedInputContext())
+
+        XCTAssertEqual(settings.effectiveWordRange, tuned)
+        XCTAssertNil(rig.coordinator.settingsSnapshot.wordRangeOverride)
+        XCTAssertEqual(settings.userWordRange, rig.coordinator.settingsSnapshot.effectiveWordRange)
+    }
+
+    /// Screen text counts as held back when the user's Fast Mode is on or the tuner switched it off.
+    func test_visualContextIsHeldBackByFastModeOrTheTuner() {
+        let rig = retained(makeCoordinatorRig())
+        XCTAssertFalse(rig.coordinator.isVisualContextHeldBack)
+
+        rig.coordinator.performanceTuning = { _ in PerformanceTuning(allowsVisualContext: false) }
+        XCTAssertTrue(rig.coordinator.isVisualContextHeldBack)
+    }
+
+    /// Predict-ahead is skipped while the tuner pauses it, and runs when it does not.
+    func test_typingPredictionIsPausedByTheTuner() {
+        let rig = retained(makeCoordinatorRig())
+        rig.coordinator.performanceTuning = { _ in PerformanceTuning(allowsPredictAhead: false) }
+        rig.coordinator.beginTypingPrediction(for: CotabbyTestFixtures.suggestionRequest())
+        XCTAssertNil(rig.coordinator.typingPrediction)
+
+        rig.coordinator.performanceTuning = { _ in .unchanged }
+        rig.coordinator.beginTypingPrediction(for: CotabbyTestFixtures.suggestionRequest())
+        XCTAssertNotNil(rig.coordinator.typingPrediction)
+        rig.coordinator.clearTypingPrediction()
+    }
+
+    /// A shown suggestion teaches the tuner its length under the model that wrote it, and is kept
+    /// so its first accept is credited to the same model and length band.
+    func test_shownSuggestionIsRecordedForTuningUnderItsModel() {
+        let rig = retained(makeCoordinatorRig())
+        var shown: [(String, Int)] = []
+        rig.coordinator.recordShownForTuning = { shown.append(($0, $1)) }
+        var result = SuggestionResult(generation: 1, rawText: " world again", text: " world again", latency: 0.1)
+        result.stats = GenerationStats(tokensGenerated: 3, isTokenCountEstimated: false, modelKey: "llamaOpenSource|m.gguf")
+
+        rig.coordinator.noteShownSuggestionForTuning(session: CotabbyTestFixtures.activeSession(), result: result)
+
+        XCTAssertEqual(shown.map(\.0), ["llamaOpenSource|m.gguf"])
+        XCTAssertEqual(shown.map(\.1), [2])
+        XCTAssertEqual(rig.coordinator.tunedShownSuggestion?.words, 2)
+    }
+
     func test_prepareForRuntimeModelSwitch_clearsTheActiveSessionAndOverlay() async {
         let rig = retained(makeCoordinatorRig())
         startVisibleSession(in: rig)

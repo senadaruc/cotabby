@@ -9,20 +9,49 @@ import Logging
 /// only when the user has enabled performance tracking in Settings, so the default user pays no
 /// storage or write cost.
 
-/// One recorded LLM request — kept intentionally narrow: just the three fields the
-/// Performance pane shows. Codable so the whole array round-trips through UserDefaults
-/// as a JSON blob.
+/// One recorded LLM request. Codable so the whole array round-trips through UserDefaults as a JSON
+/// blob; every field after `latencyMs` is optional, so entries saved before they existed still decode.
 struct PerformanceMetricEntry: Identifiable, Codable, Equatable, Hashable {
     let id: UUID
     let timestamp: Date
     let modelName: String
     let latencyMs: Int
+    /// `llama`, `apple_intelligence` or `openai_compatible`.
+    var engine: String?
+    var tokens: Int?
+    /// True when `tokens` was estimated from the text (engines that report no token count).
+    var tokensEstimated: Bool?
+    var stopReason: String?
+    var onBattery: Bool?
+    /// `ThermalLevel` raw value at the time of the request.
+    var thermal: String?
+    /// The word range the request was built with, after any performance tuning.
+    var wordRange: String?
 
-    init(id: UUID = UUID(), timestamp: Date = Date(), modelName: String, latencyMs: Int) {
+    init(
+        id: UUID = UUID(),
+        timestamp: Date = Date(),
+        modelName: String,
+        latencyMs: Int,
+        engine: String? = nil,
+        tokens: Int? = nil,
+        tokensEstimated: Bool? = nil,
+        stopReason: String? = nil,
+        onBattery: Bool? = nil,
+        thermal: String? = nil,
+        wordRange: String? = nil
+    ) {
         self.id = id
         self.timestamp = timestamp
         self.modelName = modelName
         self.latencyMs = latencyMs
+        self.engine = engine
+        self.tokens = tokens
+        self.tokensEstimated = tokensEstimated
+        self.stopReason = stopReason
+        self.onBattery = onBattery
+        self.thermal = thermal
+        self.wordRange = wordRange
     }
 }
 
@@ -46,11 +75,10 @@ final class PerformanceMetricsStore: ObservableObject {
     /// because the cap keeps the JSON blob small (well under 10 KB) and the write happens at most
     /// once per LLM request — far below any debouncing threshold.
     func record(modelName: String, latencyMs: Int, timestamp: Date = Date()) {
-        let entry = PerformanceMetricEntry(
-            timestamp: timestamp,
-            modelName: modelName,
-            latencyMs: latencyMs
-        )
+        record(PerformanceMetricEntry(timestamp: timestamp, modelName: modelName, latencyMs: latencyMs))
+    }
+
+    func record(_ entry: PerformanceMetricEntry) {
         var updated = entries
         updated.append(entry)
         if updated.count > Self.maximumEntries {

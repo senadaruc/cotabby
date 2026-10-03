@@ -222,6 +222,12 @@ struct LlamaGenerationOutput: Equatable, Sendable {
     let averageLogprob: Double?
     /// True when the completion was withheld because `averageLogprob` fell below the floor.
     let suppressedByLowConfidence: Bool
+    /// Output tokens the decode loop produced (healing replay excluded).
+    var tokensGenerated = 0
+    /// Wall time of the sampling loop alone; the rest of a request's latency is prompt work.
+    var decodeMilliseconds: Double?
+    /// Why the loop stopped (`eos`, `budget_exhausted`, `sentence_boundary`, ...).
+    var stopReason: String?
 
 }
 

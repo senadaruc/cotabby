@@ -145,6 +145,10 @@ struct SuggestionSettingsSnapshot: Equatable, Sendable {
     var isMultiLineEnabled: Bool
     /// Per-app overrides of `isMultiLineEnabled`, keyed by bundle identifier.
     var multiLineAppOverrides: [String: Bool] = [:]
+    /// A shorter range the performance tuner chose for one request; nil in the stored snapshot.
+    /// Set only on the copy `SuggestionCoordinator.requestSettings(for:)` builds, so the budget,
+    /// prompt instruction, output trim and decode stop all follow it through `effectiveWordRange`.
+    var wordRangeOverride: SuggestionWordRange?
     /// Whether new suggestions may start inside an unfinished word. The coordinator reads this
     /// request-timing policy from its current snapshot; matching an already visible tail remains
     /// independent so turning it off does not make ghost text disappear while the user follows it.
@@ -204,6 +208,12 @@ struct SuggestionSettingsSnapshot: Equatable, Sendable {
     /// playground) should read this rather than poking the preset directly so the custom-range
     /// toggle stays load-bearing.
     var effectiveWordRange: SuggestionWordRange {
+        wordRangeOverride ?? (isUsingCustomWordCountRange ? customWordCountRange : selectedWordCountPreset.range)
+    }
+
+    /// The user's own range from Settings, ignoring any request-scoped override. The performance
+    /// tuner fits inside this, so it must not read back a range it shortened itself.
+    var userWordRange: SuggestionWordRange {
         isUsingCustomWordCountRange ? customWordCountRange : selectedWordCountPreset.range
     }
 }

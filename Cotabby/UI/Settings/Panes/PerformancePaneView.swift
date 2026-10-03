@@ -13,9 +13,17 @@ struct PerformancePaneView: View {
     @ObservedObject var performanceMetricsStore: PerformanceMetricsStore
     @ObservedObject var qualityMetricsStore: SuggestionQualityMetricsStore
     @ObservedObject var systemMetricsStore: SystemMetricsStore
+    @ObservedObject var performanceTuner: PerformanceTuner
+    @ObservedObject var modelProfileStore: ModelPerformanceProfileStore
 
     var body: some View {
         SettingsPaneScaffold {
+            PerformanceTuningSection(
+                suggestionSettings: suggestionSettings,
+                performanceTuner: performanceTuner,
+                modelProfileStore: modelProfileStore
+            )
+
             liveResourceSection
 
             suggestionQualitySection
@@ -297,6 +305,8 @@ struct PerformancePaneView: View {
                 .frame(width: 130, alignment: .leading)
             Text("Model")
                 .frame(maxWidth: .infinity, alignment: .leading)
+            Text("Tokens · Power")
+                .frame(width: 150, alignment: .trailing)
             Text("Duration")
                 .frame(width: 90, alignment: .trailing)
         }
@@ -314,12 +324,32 @@ struct PerformancePaneView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .lineLimit(1)
                 .truncationMode(.middle)
+            Text(Self.detailLabel(for: entry))
+                .frame(width: 150, alignment: .trailing)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
             Text("\(entry.latencyMs) ms")
                 .frame(width: 90, alignment: .trailing)
                 .monospacedDigit()
         }
         .font(.callout)
         .padding(.vertical, 4)
+    }
+
+    /// Tokens, power and the word range for a request, e.g. "24 tok · battery · 4-7 w". Entries
+    /// recorded before these fields existed show a dash.
+    static func detailLabel(for entry: PerformanceMetricEntry) -> String {
+        var parts: [String] = []
+        if let tokens = entry.tokens {
+            parts.append(entry.tokensEstimated == true ? "~\(tokens) tok" : "\(tokens) tok")
+        }
+        if let onBattery = entry.onBattery {
+            parts.append(onBattery ? "battery" : "AC")
+        }
+        if let range = entry.wordRange {
+            parts.append(range)
+        }
+        return parts.isEmpty ? "—" : parts.joined(separator: " · ")
     }
 
     // MARK: - Bindings

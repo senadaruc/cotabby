@@ -88,7 +88,7 @@ extension SuggestionCoordinator {
                inputMonitoringGranted: permissionManager.inputMonitoringGranted,
                screenRecordingGranted: permissionManager.screenRecordingGranted,
                focusSnapshot: focusModel.snapshot,
-               isFastModeEnabled: settingsSnapshot.isFastModeEnabled
+               isFastModeEnabled: isVisualContextHeldBack
            ) {
             visualContextCoordinator.startSessionIfNeeded(
                 for: focusedSnapshot, configuration: .forEngine(settingsSnapshot.selectedEngine)
@@ -129,7 +129,7 @@ extension SuggestionCoordinator {
                 inputMonitoringGranted: permissionManager.inputMonitoringGranted,
                 screenRecordingGranted: permissionManager.screenRecordingGranted,
                 focusSnapshot: snapshot,
-                isFastModeEnabled: settingsSnapshot.isFastModeEnabled
+                isFastModeEnabled: isVisualContextHeldBack
               ) else { return nil }
         return context
     }
@@ -150,7 +150,28 @@ extension SuggestionCoordinator {
             appOverride: settingsSnapshot.multiLineAppOverrides[context.bundleIdentifier],
             windowOverride: windowMultiLineOverride(windowKey)
         )
+        // The tuner fits inside the user's own range (`userWordRange`), so applying its shorter
+        // range here, on the request's copy only, reaches the token budget, the prompt instruction,
+        // the output trim and the decode stop through `effectiveWordRange`.
+        let tuning = performanceTuning(settingsSnapshot)
+        settings.wordRangeOverride = tuning.wordRange
+        if tuning.isHoldingBack {
+            CotabbyLogger.suggestion.debug("Performance tuning applied", metadata: [
+                "stage": "performance-tuning",
+                "tuning_range": .string(tuning.wordRange?.compactLabel ?? "user"),
+                "tuning_reasons": .string(tuning.reasons.joined(separator: "; ")),
+                "target_latency_ms": .string(tuning.targetLatencyMs.map(String.init) ?? "none"),
+                "allows_visual_context": .stringConvertible(tuning.allowsVisualContext),
+                "allows_predict_ahead": .stringConvertible(tuning.allowsPredictAhead)
+            ])
+        }
         return settings
+    }
+
+    /// Fast mode as the visual-context gates should see it: the user's own toggle, or the tuner
+    /// switching screen text off to save energy.
+    var isVisualContextHeldBack: Bool {
+        settingsSnapshot.isFastModeEnabled || !performanceTuning(settingsSnapshot).allowsVisualContext
     }
 
     /// The disabled-apps set adjusted for the focused window's own choice, so every availability
