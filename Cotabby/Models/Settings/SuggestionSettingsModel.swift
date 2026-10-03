@@ -94,6 +94,9 @@ final class SuggestionSettingsModel: ObservableObject {
     /// default user never pays any extra storage or write cost — recording only kicks in once the
     /// user opts in from Settings.
     @Published private(set) var isPerformanceTrackingEnabled: Bool
+    /// How hard the performance tuner may hold back. Read live by the tuning hook in
+    /// `CotabbyAppEnvironment` when each request is built, so it is not part of the snapshot.
+    @Published private(set) var performanceTuningMode: PerformanceTuningMode
     /// UI-facing preference for pausing suggestions in Low Power Mode.
     @Published private(set) var isLowPowerModeAutoDisableEnabled: Bool
     /// Whether Cotabby's status item is inserted into the menu bar. The process and suggestion
@@ -254,6 +257,7 @@ final class SuggestionSettingsModel: ObservableObject {
         enabledSpellingDictionaryCodes = data.enabledSpellingDictionaryCodes
         automaticallyFixTypos = data.automaticallyFixTypos
         isPerformanceTrackingEnabled = data.isPerformanceTrackingEnabled
+        performanceTuningMode = data.performanceTuningMode
         isLowPowerModeAutoDisableEnabled = data.isLowPowerModeAutoDisableEnabled
         isMenuBarIconVisible = data.isMenuBarIconVisible
         isMenuBarWordCountVisible = data.isMenuBarWordCountVisible
@@ -338,6 +342,7 @@ final class SuggestionSettingsModel: ObservableObject {
         enabledSpellingDictionaryCodes = data.enabledSpellingDictionaryCodes
         automaticallyFixTypos = data.automaticallyFixTypos
         isPerformanceTrackingEnabled = data.isPerformanceTrackingEnabled
+        performanceTuningMode = data.performanceTuningMode
         isLowPowerModeAutoDisableEnabled = data.isLowPowerModeAutoDisableEnabled
         isMenuBarIconVisible = data.isMenuBarIconVisible
         isMenuBarWordCountVisible = data.isMenuBarWordCountVisible
@@ -402,6 +407,7 @@ final class SuggestionSettingsModel: ObservableObject {
                 disabledAppRules: disabledAppRules,
                 suggestInIntegratedTerminals: suggestInIntegratedTerminals,
                 isPerformanceTrackingEnabled: isPerformanceTrackingEnabled,
+                performanceTuningMode: performanceTuningMode,
                 isLowPowerModeAutoDisableEnabled: isLowPowerModeAutoDisableEnabled
             ),
             engine: SuggestionEngineSettings(
@@ -816,6 +822,14 @@ final class SuggestionSettingsModel: ObservableObject {
 
         isPerformanceTrackingEnabled = enabled
         store.savePerformanceTrackingEnabled(enabled)
+    }
+
+    func setPerformanceTuningMode(_ mode: PerformanceTuningMode) {
+        guard performanceTuningMode != mode else {
+            return
+        }
+        performanceTuningMode = mode
+        store.savePerformanceTuningMode(mode)
     }
 
     func setLowPowerModeAutoDisableEnabled(_ enabled: Bool) {

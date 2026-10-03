@@ -11,6 +11,8 @@ struct SuggestionGeneralSettings: Equatable {
     var disabledAppRules: [DisabledApplicationRule]
     var suggestInIntegratedTerminals: Bool
     var isPerformanceTrackingEnabled: Bool
+    /// How hard the performance tuner may hold back (Settings → Performance).
+    var performanceTuningMode: PerformanceTuningMode = .default
     /// Whether suggestions pause while Low Power Mode is active.
     var isLowPowerModeAutoDisableEnabled: Bool
 }
@@ -156,6 +158,11 @@ extension SuggestionSettingsData {
     var isPerformanceTrackingEnabled: Bool {
         get { general.isPerformanceTrackingEnabled }
         set { general.isPerformanceTrackingEnabled = newValue }
+    }
+
+    var performanceTuningMode: PerformanceTuningMode {
+        get { general.performanceTuningMode }
+        set { general.performanceTuningMode = newValue }
     }
 
     var isLowPowerModeAutoDisableEnabled: Bool {

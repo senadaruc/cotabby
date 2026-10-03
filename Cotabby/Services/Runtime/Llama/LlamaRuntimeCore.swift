@@ -355,6 +355,9 @@ nonisolated final class LlamaRuntimeCore: @unchecked Sendable {
         var stopReason = "budget_exhausted"
         var buffer = TokenHealingBuffer(replayedPrefix: healingPrefix)
         var replayTokens = 0
+        // Timed separately from the request so the per-token speed the performance tuner learns
+        // excludes prompt processing, which varies with prompt length and cache reuse.
+        let decodeStart = DispatchTime.now().uptimeNanoseconds
 
         for _ in 0 ..< options.maxPredictionTokens + healingPrefix.count {
             // Cooperative cancellation: when the wrapping Task is cancelled (caller hit a new
@@ -433,7 +436,11 @@ nonisolated final class LlamaRuntimeCore: @unchecked Sendable {
             ]
         )
 
-        return Self.generationOutput(text: generatedText, sumLogprob: sumLogprob, tokensGenerated: tokensGenerated, options: options)
+        var output = Self.generationOutput(text: generatedText, sumLogprob: sumLogprob, tokensGenerated: tokensGenerated, options: options)
+        output.tokensGenerated = tokensGenerated
+        output.decodeMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - decodeStart) / 1_000_000
+        output.stopReason = stopReason
+        return output
     }
 
     /// Confidence affects the returned value after decode; it must not change retained KV state.

@@ -198,7 +198,7 @@ final class LlamaSuggestionEngine {
                     "max_tokens": .stringConvertible(request.maxPredictionTokens)
                 ]) { _, new in new }
             )
-            return SuggestionResult(
+            var result = SuggestionResult(
                 generation: request.generation,
                 rawText: rawSuggestion,
                 text: normalizedSuggestion,
@@ -208,6 +208,13 @@ final class LlamaSuggestionEngine {
                 // the lack of one) is the model's own word boundary.
                 spacingIsExact: true
             )
+            result.stats = GenerationStats(
+                tokensGenerated: output.tokensGenerated,
+                isTokenCountEstimated: false,
+                prefillMilliseconds: output.decodeMilliseconds.map { max(latency * 1000 - $0, 0) },
+                stopReason: output.stopReason
+            )
+            return result
         } catch is CancellationError {
             CotabbyLogger.suggestion.debug("Llama generation cancelled", metadata: baseMetadata)
             throw SuggestionClientError.cancelled

@@ -19,6 +19,10 @@ struct SuggestionResult: Equatable, Sendable {
     /// engines drop leading spaces, so their results leave this false and `GhostSpaceBoundary`
     /// decides from the characters on either side instead.
     let spacingIsExact: Bool
+    /// How the generation went (tokens, decode time, stop reason, which model), for the performance
+    /// tuner and the Recent Requests list. Filled by the llama engine and the router after
+    /// construction, so the many places that build results for other reasons stay unchanged.
+    var stats: GenerationStats?
 
     // This immutable Sendable value is also constructed by pure candidate-reconciliation rules.
     // Construction needs no UI actor; engine delivery and presentation remain main-actor owned.
