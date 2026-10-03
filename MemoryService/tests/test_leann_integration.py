@@ -47,7 +47,7 @@ def test_vector_search_is_scoped_and_new_messages_are_appended(tmp_path: Path):
     assert first["index"]["mode"] == "rebuild"
 
     # Semantic match ("payment" never appears) inside Ayşe's chat only.
-    result = service.search({"query": "was the payment made?", "scope": {"title": "Ayşe"}, "top_k": 2})
+    result = service.search({"query": "was the payment made?", "scope": {"title": "Ayşe", "sources": ["chat"]}, "top_k": 2})
     assert result["scope"] == "conversation"
     assert result["hits"] and all(h["conversation_id"] == "ayse" for h in result["hits"])
     assert result["hits"][0]["text"].startswith("The September invoice")
@@ -55,7 +55,7 @@ def test_vector_search_is_scoped_and_new_messages_are_appended(tmp_path: Path):
     connector.records = messages + [record("ayse", "The October invoice is due next week.", title="Ayşe", sender="Ayşe")]
     second = wait(service, service.sources_sync({"id": "chat"}))
     assert second["index"] == {"mode": "append", "added": 1}
-    october = service.search({"query": "October invoice due", "scope": {"title": "Ayşe"}, "top_k": 1})
+    october = service.search({"query": "October invoice due", "scope": {"title": "Ayşe", "sources": ["chat"]}, "top_k": 1})
     assert "October" in october["hits"][0]["text"]
 
     wait(service, service.sources_forget({"id": "chat"}))

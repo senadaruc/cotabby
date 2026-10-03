@@ -5,9 +5,11 @@ every protocol method as a plain Python method taking and returning JSON-shaped 
 server only parses lines and dispatches here, so every behaviour is testable without a socket.
 
 Scope rule for suggestions (`search` without `global`): results come from the conversation the
-user is typing in, and, only when that conversation has too few matches, from other conversations
-with the same people. Nothing else is ever returned, so text from one person's chat cannot surface
-while writing to someone else.
+user is typing in, and, only when that has too few matches, from other conversations that every
+current reader took part in (`MessageStore.conversations_seen_by`). A suggestion therefore never
+repeats something to a person who was not there: not another person's chat, and not a member's
+private chat inside a group. The conversation is found by title only within the focused app's
+sources, so a same-named chat in another app is never picked.
 """
 
 from __future__ import annotations
@@ -248,10 +250,15 @@ class MemoryService:
 
     def _resolve(self, scope: dict[str, Any]) -> Conversation | None:
         """The conversation a request is about: by explicit id, else by its title (the chat name
-        or mail subject Cotabby read from the focused window), restricted to the app's sources."""
-        sources = [s for s in (scope.get("sources") or []) if s in self.connectors] or None
+        or mail subject Cotabby read from the focused window) within the focused app's sources.
+
+        A title alone is ambiguous across apps (two different people called "Ali" in WhatsApp and
+        Slack), so title matching requires the app's sources; without them nothing is resolved."""
         if scope.get("conversation_id") and scope.get("source"):
             return self.store.conversation(str(scope["source"]), str(scope["conversation_id"]))
+        sources = [s for s in (scope.get("sources") or []) if s in self.connectors]
+        if not sources:
+            return None
         for key in ("title", "subject"):
             title = str(scope.get(key) or "").strip()
             if title:
@@ -281,8 +288,8 @@ class MemoryService:
         hits = self.index.search(query, self.config.index, conversations=own, top_k=top_k)
         scope_name = "conversation"
         if len(hits) < top_k and conversation.participants:
-            # Only the same people's other conversations, never anyone else's.
-            related = [pair for pair in self.store.conversations_with(conversation.participants, exclude=own[0])
+            # Only conversations every current reader took part in (see `conversations_seen_by`).
+            related = [pair for pair in self.store.conversations_seen_by(conversation.participants, exclude=own[0])
                        if pair[0] in enabled]
             if related:
                 more = self.index.search(query, self.config.index, conversations=related, top_k=top_k - len(hits))

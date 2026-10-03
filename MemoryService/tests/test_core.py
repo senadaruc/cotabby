@@ -170,19 +170,42 @@ def test_search_stays_in_the_conversation_then_the_same_person(tmp_path: Path):
     ])
     run_sync(service)
 
-    own = service.search({"query": "invoice September", "scope": {"title": "Ayşe"}, "top_k": 1})
+    own = service.search({"query": "invoice September", "scope": {"title": "Ayşe", "sources": ["chat"]}, "top_k": 1})
     assert own["scope"] == "conversation"
     assert [h["conversation_id"] for h in own["hits"]] == ["whatsapp-ayse"]
 
-    wider = service.search({"query": "invoice September", "scope": {"title": "Ayşe"}, "top_k": 3})
+    wider = service.search({"query": "invoice September", "scope": {"title": "Ayşe", "sources": ["chat"]}, "top_k": 3})
     assert wider["scope"] == "person"
     assert {h["conversation_id"] for h in wider["hits"]} == {"whatsapp-ayse", "mail-ayse"}
+
+
+def test_a_group_chat_never_draws_on_a_members_private_chat(tmp_path: Path):
+    """Writing to Ali and Can together must not surface what Ali said to the user alone: Can was
+    not there. Writing to Ali alone may draw on the group, because Ali was in it."""
+    service = make_service(tmp_path, [
+        record("group", "the budget for the trip is fixed", title="Trip", sender="Ali", participants=("Ali", "Can")),
+        record("ali", "the budget for my private project is secret", title="Ali", sender="Ali"),
+    ])
+    run_sync(service)
+
+    in_group = service.search({"query": "budget", "scope": {"title": "Trip", "sources": ["chat"]}, "top_k": 5})
+    assert {h["conversation_id"] for h in in_group["hits"]} == {"group"}
+
+    with_ali = service.search({"query": "budget", "scope": {"title": "Ali", "sources": ["chat"]}, "top_k": 5})
+    assert with_ali["scope"] == "person"
+    assert {h["conversation_id"] for h in with_ali["hits"]} == {"ali", "group"}
+
+
+def test_a_title_without_the_apps_sources_resolves_nothing(tmp_path: Path):
+    service = make_service(tmp_path, [record("c1", "the invoice is paid", title="Ayşe")])
+    run_sync(service)
+    assert service.search({"query": "invoice", "scope": {"title": "Ayşe"}})["scope"] == "none"
 
 
 def test_an_unknown_conversation_returns_nothing_rather_than_global_results(tmp_path: Path):
     service = make_service(tmp_path, [record("c1", "the invoice is paid", title="Ayşe")])
     run_sync(service)
-    result = service.search({"query": "invoice", "scope": {"title": "Someone Else"}})
+    result = service.search({"query": "invoice", "scope": {"title": "Someone Else", "sources": ["chat"]}})
     assert result == {**result, "scope": "none", "hits": []}
 
 
@@ -190,7 +213,7 @@ def test_disabled_sources_are_never_searched(tmp_path: Path):
     service = make_service(tmp_path, [record("c1", "the invoice is paid", title="Ayşe")])
     run_sync(service)
     service.sources_configure({"id": "chat", "enabled": False})
-    assert service.search({"query": "invoice", "scope": {"title": "Ayşe"}})["hits"] == []
+    assert service.search({"query": "invoice", "scope": {"title": "Ayşe", "sources": ["chat"]}})["hits"] == []
 
 
 def test_sync_drops_secrets_and_excluded_conversations(tmp_path: Path):

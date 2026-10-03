@@ -299,20 +299,29 @@ class MessageStore:
         found = [self.conversation(r["source"], r["conversation_id"]) for r in rows]
         return [c for c in found if c and (not wanted or c.source in wanted)]
 
-    def conversations_with(self, participants: Iterable[str], exclude: tuple[str, str] | None = None,
-                           limit: int = 50) -> list[tuple[str, str]]:
-        """(source, conversation_id) pairs that include any of `participants`, across sources, most
-        recent first: the "same person" scope."""
-        names = [normalize_participant(p) for p in participants if normalize_participant(p)]
+    def conversations_seen_by(self, audience: Iterable[str], exclude: tuple[str, str] | None = None,
+                              limit: int = 50) -> list[tuple[str, str]]:
+        """(source, conversation_id) pairs in which EVERY member of `audience` took part, across
+        sources, most recent first: the "same person" scope.
+
+        The rule is about who will read the suggestion. Text from another conversation may only
+        surface if everyone being written to now was in that conversation, so a suggestion never
+        repeats something to a person who was not there: writing to Ayşe can draw on a group Ayşe
+        was in, but writing to a group of Ali and Can cannot draw on a private chat with Ali.
+        """
+        names = sorted({normalize_participant(p) for p in audience if normalize_participant(p)})
         if not names:
             return []
         placeholders = ",".join("?" for _ in names)
         with self._lock:
             rows = self._db.execute(
-                f"""SELECT DISTINCT p.source, p.conversation_id FROM participants p
+                f"""SELECT p.source, p.conversation_id FROM participants p
                     JOIN conversations c ON c.source = p.source AND c.conversation_id = p.conversation_id
-                    WHERE p.participant IN ({placeholders}) ORDER BY c.last_timestamp DESC LIMIT ?""",
-                (*names, limit),
+                    WHERE p.participant IN ({placeholders})
+                    GROUP BY p.source, p.conversation_id
+                    HAVING COUNT(DISTINCT p.participant) = ?
+                    ORDER BY MAX(c.last_timestamp) DESC LIMIT ?""",
+                (*names, len(names), limit),
             ).fetchall()
         pairs = [(r["source"], r["conversation_id"]) for r in rows]
         return [p for p in pairs if p != exclude]
