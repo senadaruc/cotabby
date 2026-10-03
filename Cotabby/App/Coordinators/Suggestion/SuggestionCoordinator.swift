@@ -42,6 +42,10 @@ final class SuggestionCoordinator: ObservableObject {
     /// A closure rather than the concrete store so the coordinator stays testable without
     /// `UserDefaults`; `CotabbyAppEnvironment` points it at `WindowFeatureOverrideStore`.
     var windowAutocompleteOverride: @MainActor (FocusSnapshot) -> Bool? = { _ in nil }
+    /// The window's own multi-line choice from the field icon (nil: follow the app), looked up by
+    /// the window key a request's context carries. Wired by `CotabbyAppEnvironment` like the
+    /// autocomplete hook above.
+    var windowMultiLineOverride: @MainActor (_ windowKey: String?) -> Bool? = { _ in nil }
     let clipboardRelevanceFilter: any ClipboardRelevanceFiltering
     let visualContextCoordinator: any VisualContextCoordinating
     let interactionState: SuggestionInteractionState

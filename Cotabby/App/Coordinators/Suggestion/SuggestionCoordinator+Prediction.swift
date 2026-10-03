@@ -123,7 +123,7 @@ extension SuggestionCoordinator {
         let clipboardContext = pinnedClipboardContext(rawContext: rawContext)
         let requestBuildResult = SuggestionRequestFactory.buildRequest(
             context: context,
-            settings: settingsSnapshot,
+            settings: requestSettings(for: context),
             configuration: configuration,
             clipboardContext: clipboardContext,
             visualContextSummary: visualContextSummary,
@@ -294,7 +294,7 @@ extension SuggestionCoordinator {
         let clipboardContext = pinnedClipboardContext(rawContext: optimistic)
         let requestBuildResult = SuggestionRequestFactory.buildRequest(
             context: context,
-            settings: settingsSnapshot,
+            settings: requestSettings(for: context),
             configuration: configuration,
             clipboardContext: clipboardContext,
             visualContextSummary: visualContextSummary,
@@ -367,7 +367,7 @@ extension SuggestionCoordinator {
         let precedingText = context.precedingText
         let requestBuildResult = SuggestionRequestFactory.buildRequest(
             context: context,
-            settings: settingsSnapshot,
+            settings: requestSettings(for: context),
             configuration: configuration,
             clipboardContext: pinnedClipboardContext(rawContext: optimistic),
             visualContextSummary: permissionManager.screenRecordingGranted

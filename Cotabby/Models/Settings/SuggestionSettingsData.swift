@@ -44,6 +44,9 @@ struct SuggestionCompletionSettings: Equatable {
     var debounceMilliseconds: Int
     var focusPollIntervalMilliseconds: Int
     var isMultiLineEnabled: Bool
+    /// Per-app multi-line choices made from the field icon, keyed by bundle identifier. An app with
+    /// no entry follows `isMultiLineEnabled`.
+    var multiLineAppOverrides: [String: Bool] = [:]
     /// Controls when new generation may start; a visible suggestion still follows matching typing.
     var suggestWithinWords: Bool
     /// Limits the visible preview, while the session retains following words for subsequent typing.
@@ -274,6 +277,11 @@ extension SuggestionSettingsData {
     var isMultiLineEnabled: Bool {
         get { completion.isMultiLineEnabled }
         set { completion.isMultiLineEnabled = newValue }
+    }
+
+    var multiLineAppOverrides: [String: Bool] {
+        get { completion.multiLineAppOverrides }
+        set { completion.multiLineAppOverrides = newValue }
     }
 
     var suggestWithinWords: Bool {

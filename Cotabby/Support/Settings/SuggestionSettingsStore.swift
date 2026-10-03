@@ -166,6 +166,7 @@ struct SuggestionSettingsStore {
     private static let debounceMillisecondsDefaultsKey = "cotabbyDebounceMilliseconds"
     private static let focusPollIntervalMillisecondsDefaultsKey = "cotabbyFocusPollIntervalMilliseconds"
     private static let multiLineEnabledDefaultsKey = "cotabbyMultiLineEnabled"
+    private static let multiLineAppOverridesDefaultsKey = "cotabbyMultiLineAppOverrides"
     private static let suggestWithinWordsDefaultsKey = "cotabbySuggestWithinWords"
     private static let showFollowingWordsDefaultsKey = "cotabbyShowFollowingWords"
     private static let emojiPickerEnabledDefaultsKey = "cotabbyEmojiPickerEnabled"
@@ -253,6 +254,7 @@ struct SuggestionSettingsStore {
         debounceMillisecondsDefaultsKey,
         focusPollIntervalMillisecondsDefaultsKey,
         multiLineEnabledDefaultsKey,
+        multiLineAppOverridesDefaultsKey,
         suggestWithinWordsDefaultsKey,
         showFollowingWordsDefaultsKey,
         emojiPickerEnabledDefaultsKey,
@@ -475,6 +477,7 @@ struct SuggestionSettingsStore {
         }()
 
         let resolvedMultiLineEnabled = userDefaults.object(forKey: Self.multiLineEnabledDefaultsKey) as? Bool ?? false
+        let resolvedMultiLineAppOverrides = loadMultiLineAppOverrides()
         // Preserve word-completion behavior for existing installs while allowing users to wait
         // until a word boundary before a new suggestion is generated.
         let resolvedSuggestWithinWords = userDefaults.object(forKey: Self.suggestWithinWordsDefaultsKey) as? Bool ?? true
@@ -613,6 +616,7 @@ struct SuggestionSettingsStore {
                 debounceMilliseconds: resolvedDebounceMilliseconds,
                 focusPollIntervalMilliseconds: resolvedFocusPollIntervalMilliseconds,
                 isMultiLineEnabled: resolvedMultiLineEnabled,
+                multiLineAppOverrides: resolvedMultiLineAppOverrides,
                 suggestWithinWords: resolvedSuggestWithinWords,
                 showFollowingWords: resolvedShowFollowingWords,
                 autoAcceptTrailingPunctuation: resolvedAutoAcceptTrailingPunctuation,
@@ -722,6 +726,7 @@ struct SuggestionSettingsStore {
         saveDebounceMilliseconds(data.debounceMilliseconds)
         saveFocusPollIntervalMilliseconds(data.focusPollIntervalMilliseconds)
         saveMultiLineEnabled(data.isMultiLineEnabled)
+        saveMultiLineAppOverrides(data.multiLineAppOverrides)
         saveSuggestWithinWords(data.suggestWithinWords)
         saveShowFollowingWords(data.showFollowingWords)
         saveEmojiPickerEnabled(data.isEmojiPickerEnabled)
@@ -1020,6 +1025,30 @@ struct SuggestionSettingsStore {
 
     func saveMultiLineEnabled(_ enabled: Bool) {
         userDefaults.set(enabled, forKey: Self.multiLineEnabledDefaultsKey)
+    }
+
+    func saveMultiLineAppOverrides(_ overrides: [String: Bool]) {
+        guard !overrides.isEmpty else {
+            userDefaults.removeObject(forKey: Self.multiLineAppOverridesDefaultsKey)
+            return
+        }
+        userDefaults.set(overrides, forKey: Self.multiLineAppOverridesDefaultsKey)
+    }
+
+    /// Reads the per-app multi-line choices, dropping entries whose key is not a usable bundle
+    /// identifier or whose value is not a Bool (a hand-edited or corrupted defaults entry).
+    private func loadMultiLineAppOverrides() -> [String: Bool] {
+        guard let stored = userDefaults.dictionary(forKey: Self.multiLineAppOverridesDefaultsKey) else {
+            return [:]
+        }
+        var overrides: [String: Bool] = [:]
+        for (key, value) in stored {
+            guard let bundleIdentifier = Self.normalizedBundleIdentifier(key), let enabled = value as? Bool else {
+                continue
+            }
+            overrides[bundleIdentifier] = enabled
+        }
+        return overrides
     }
 
     func saveSuggestWithinWords(_ enabled: Bool) {

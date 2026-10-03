@@ -52,6 +52,26 @@ final class SuggestionSettingsStoreTests: XCTestCase {
         XCTAssertFalse(reset.isGhostTextItalic)
     }
 
+    /// Per-app multi-line choices persist as a bundle-to-Bool map; entries that are not a usable
+    /// bundle identifier or not a Bool are dropped on load, and an empty map clears the key.
+    func test_multiLineAppOverrides_persistAndDropMalformedEntries() async {
+        let defaults = makeIsolatedDefaults()
+        let store = SuggestionSettingsStore(userDefaults: defaults)
+        XCTAssertEqual(store.load(configuration: .standard).multiLineAppOverrides, [:])
+
+        store.saveMultiLineAppOverrides(["com.apple.mail": true, "com.apple.Notes": false])
+        XCTAssertEqual(
+            store.load(configuration: .standard).multiLineAppOverrides,
+            ["com.apple.mail": true, "com.apple.Notes": false]
+        )
+
+        defaults.set(["com.apple.mail": true, "   ": true, "com.example.bad": "yes"], forKey: "cotabbyMultiLineAppOverrides")
+        XCTAssertEqual(store.load(configuration: .standard).multiLineAppOverrides, ["com.apple.mail": true])
+
+        store.saveMultiLineAppOverrides([:])
+        XCTAssertNil(defaults.object(forKey: "cotabbyMultiLineAppOverrides"))
+    }
+
     // MARK: - Suggestion timing
 
     func test_suggestWithinWords_preservesDefaultUserChoiceAndReset() async {

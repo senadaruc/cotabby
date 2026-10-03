@@ -114,6 +114,9 @@ final class SuggestionSettingsModel: ObservableObject {
     @Published private(set) var debounceMilliseconds: Int
     @Published private(set) var focusPollIntervalMilliseconds: Int
     @Published private(set) var isMultiLineEnabled: Bool
+    /// Per-app multi-line choices from the field icon's popup, keyed by bundle identifier. Travels in
+    /// the snapshot; the coordinator layers the focused window's own choice on top per request.
+    @Published private(set) var multiLineAppOverrides: [String: Bool]
     /// The UI controls request timing here; the immutable snapshot carries this choice to the
     /// coordinator so generation never needs to observe a SwiftUI-facing model directly.
     @Published private(set) var suggestWithinWords: Bool
@@ -279,6 +282,7 @@ final class SuggestionSettingsModel: ObservableObject {
         debounceMilliseconds = data.debounceMilliseconds
         focusPollIntervalMilliseconds = data.focusPollIntervalMilliseconds
         isMultiLineEnabled = data.isMultiLineEnabled
+        multiLineAppOverrides = data.multiLineAppOverrides
         suggestWithinWords = data.suggestWithinWords
         showFollowingWords = data.showFollowingWords
         isEmojiPickerEnabled = data.isEmojiPickerEnabled
@@ -368,6 +372,7 @@ final class SuggestionSettingsModel: ObservableObject {
         debounceMilliseconds = data.debounceMilliseconds
         focusPollIntervalMilliseconds = data.focusPollIntervalMilliseconds
         isMultiLineEnabled = data.isMultiLineEnabled
+        multiLineAppOverrides = data.multiLineAppOverrides
         suggestWithinWords = data.suggestWithinWords
         showFollowingWords = data.showFollowingWords
         isEmojiPickerEnabled = data.isEmojiPickerEnabled
@@ -451,6 +456,7 @@ final class SuggestionSettingsModel: ObservableObject {
                 debounceMilliseconds: debounceMilliseconds,
                 focusPollIntervalMilliseconds: focusPollIntervalMilliseconds,
                 isMultiLineEnabled: isMultiLineEnabled,
+                multiLineAppOverrides: multiLineAppOverrides,
                 suggestWithinWords: suggestWithinWords,
                 showFollowingWords: showFollowingWords,
                 autoAcceptTrailingPunctuation: autoAcceptTrailingPunctuation,
@@ -544,6 +550,7 @@ final class SuggestionSettingsModel: ObservableObject {
             debounceMilliseconds: settings.completion.debounceMilliseconds,
             focusPollIntervalMilliseconds: settings.completion.focusPollIntervalMilliseconds,
             isMultiLineEnabled: settings.completion.isMultiLineEnabled,
+            multiLineAppOverrides: settings.completion.multiLineAppOverrides,
             suggestWithinWords: settings.completion.suggestWithinWords,
             showFollowingWords: settings.completion.showFollowingWords,
             autoAcceptTrailingPunctuation: settings.completion.autoAcceptTrailingPunctuation,
@@ -910,6 +917,29 @@ final class SuggestionSettingsModel: ObservableObject {
         }
         isMultiLineEnabled = enabled
         store.saveMultiLineEnabled(enabled)
+    }
+
+    /// Whether multi-line suggestions are on for an app: its own popup choice, else the global
+    /// toggle. This is the app switch the field icon's popup shows.
+    func isMultiLineEnabled(forApplication bundleIdentifier: String?) -> Bool {
+        WindowFeatureScope.resolveMultiLine(
+            globalEnabled: isMultiLineEnabled,
+            appOverride: SuggestionSettingsStore.normalizedBundleIdentifier(bundleIdentifier)
+                .flatMap { multiLineAppOverrides[$0] },
+            windowOverride: nil
+        )
+    }
+
+    /// Records an app's own multi-line choice. It is kept even when it matches the global toggle, so
+    /// a later change to the global default does not silently flip an app the user set explicitly.
+    func setMultiLineEnabled(_ enabled: Bool, forApplication bundleIdentifier: String?) {
+        guard let normalized = SuggestionSettingsStore.normalizedBundleIdentifier(bundleIdentifier),
+              multiLineAppOverrides[normalized] != enabled
+        else {
+            return
+        }
+        multiLineAppOverrides[normalized] = enabled
+        store.saveMultiLineAppOverrides(multiLineAppOverrides)
     }
 
     func setSuggestWithinWords(_ enabled: Bool) {
@@ -1803,7 +1833,9 @@ extension SuggestionSettingsModel: SuggestionSettingsProviding {
                 $focusPollIntervalMilliseconds,
                 // Typing choices travel together so the subscriber receives the incoming
                 // @Published value, rather than re-reading the model before its setter completes.
-                Publishers.CombineLatest3($isMultiLineEnabled, $suggestWithinWords, $showFollowingWords),
+                Publishers.CombineLatest4(
+                    $isMultiLineEnabled, $multiLineAppOverrides, $suggestWithinWords, $showFollowingWords
+                ),
                 Publishers.CombineLatest4(
                     $autoAcceptTrailingPunctuation,
                     $addSpaceAfterAccept,
@@ -1846,7 +1878,7 @@ extension SuggestionSettingsModel: SuggestionSettingsProviding {
                 let (suppressOnTypo, offerCorrections, automaticallyFixTypos) = typoToggles
                 let (userName, customRules, responseLanguages, enabledSpellingDictionaryCodes) = profile
                 let (debounce, focusPoll, generationToggles, acceptToggles) = timing
-                let (multiLine, suggestWithinWords, showFollowingWords) = generationToggles
+                let (multiLine, multiLineAppOverrides, suggestWithinWords, showFollowingWords) = generationToggles
                 let (autoAcceptPunctuation, addSpaceAfterAccept, streamWhileGenerating, predictAhead) = acceptToggles
                 let (isCustomActive, customLow, customHigh, doubleTapAcceptsEntireSuggestion) = customRangeTuple
                 let (extendedContext, suggestInIntegratedTerminals, surfaceContextEnabled, lowPowerModeAutoDisableEnabled) =
@@ -1870,6 +1902,7 @@ extension SuggestionSettingsModel: SuggestionSettingsProviding {
                     debounceMilliseconds: debounce,
                     focusPollIntervalMilliseconds: focusPoll,
                     isMultiLineEnabled: multiLine,
+                    multiLineAppOverrides: multiLineAppOverrides,
                     suggestWithinWords: suggestWithinWords,
                     showFollowingWords: showFollowingWords,
                     autoAcceptTrailingPunctuation: autoAcceptPunctuation,

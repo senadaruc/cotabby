@@ -54,6 +54,28 @@ final class SuggestionSettingsModelTests: XCTestCase {
         XCTAssertTrue(makeModel().predictAheadWhileTyping)
     }
 
+    /// An app with no choice of its own follows the global toggle; once set from the field icon it
+    /// keeps its own value through a global change, persists, and reaches the published snapshot.
+    func test_multiLinePerAppChoiceOverridesTheGlobalToggle() {
+        let model = makeModel()
+        var published: [[String: Bool]] = []
+        let subscription = model.snapshotPublisher.sink { published.append($0.multiLineAppOverrides) }
+        defer { subscription.cancel() }
+        XCTAssertFalse(model.isMultiLineEnabled(forApplication: "com.apple.mail"))
+
+        model.setMultiLineEnabled(true, forApplication: "com.apple.mail")
+        XCTAssertTrue(model.isMultiLineEnabled(forApplication: "com.apple.mail"))
+        XCTAssertFalse(model.isMultiLineEnabled(forApplication: "com.apple.TextEdit"))
+        XCTAssertEqual(published.last, ["com.apple.mail": true])
+        XCTAssertEqual(model.snapshot.multiLineAppOverrides, ["com.apple.mail": true])
+
+        model.setMultiLineEnabled(true)
+        model.setMultiLineEnabled(false)
+        XCTAssertTrue(model.isMultiLineEnabled(forApplication: "com.apple.mail"), "a global change keeps the app's choice")
+        XCTAssertTrue(makeModel().isMultiLineEnabled(forApplication: "com.apple.mail"))
+        XCTAssertFalse(model.isMultiLineEnabled(forApplication: nil))
+    }
+
     // MARK: - Setter persistence round-trip
 
     func test_debugOverlaysDefaultOffPublishPersistAndResetWithoutChangingInference() {

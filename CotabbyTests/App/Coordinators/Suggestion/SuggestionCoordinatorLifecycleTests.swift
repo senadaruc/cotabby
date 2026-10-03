@@ -54,6 +54,35 @@ final class SuggestionCoordinatorLifecycleTests: SuggestionCoordinatorRigTestCas
         XCTAssertEqual(rig.engine.resetCount, 1)
     }
 
+    /// A request is built with multi-line resolved for its own app and window: Mail's app choice
+    /// turns it on while the global toggle stays off, one Mail window's own choice turns it back
+    /// off, and every other app keeps the global value.
+    func test_requestSettings_resolveMultiLineForTheRequestsAppAndWindow() {
+        let rig = retained(makeCoordinatorRig(
+            settingsSnapshot: CotabbyTestFixtures.settingsSnapshot(
+                isMultiLineEnabled: false,
+                multiLineAppOverrides: ["com.apple.mail": true]
+            )
+        ))
+        let quietWindow = WindowFeatureScope.windowKey(bundleIdentifier: "com.apple.mail", windowTitle: "Quiet thread")
+        var lookedUp: [String?] = []
+        rig.coordinator.windowMultiLineOverride = { key in
+            lookedUp.append(key)
+            return key == quietWindow ? false : nil
+        }
+        func multiLine(_ bundleIdentifier: String, _ title: String) -> Bool {
+            rig.coordinator.requestSettings(
+                for: CotabbyTestFixtures.focusedInputContext(bundleIdentifier: bundleIdentifier, windowTitle: title)
+            ).isMultiLineEnabled
+        }
+
+        XCTAssertTrue(multiLine("com.apple.mail", "Re: imperum"))
+        XCTAssertFalse(multiLine("com.apple.mail", "Quiet thread"))
+        XCTAssertFalse(multiLine("com.apple.TextEdit", "Untitled"))
+        XCTAssertEqual(lookedUp.last, WindowFeatureScope.windowKey(bundleIdentifier: "com.apple.TextEdit", windowTitle: "Untitled"))
+        XCTAssertFalse(rig.coordinator.settingsSnapshot.isMultiLineEnabled, "the stored snapshot keeps the global value")
+    }
+
     func test_prepareForRuntimeModelSwitch_clearsTheActiveSessionAndOverlay() async {
         let rig = retained(makeCoordinatorRig())
         startVisibleSession(in: rig)

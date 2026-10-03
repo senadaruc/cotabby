@@ -47,6 +47,10 @@ struct FocusedInputContext: Equatable, Sendable {
     /// Surface metadata captured with the current focus snapshot, carried through so the request factory
     /// can condition the prompt on what the user is writing in (see `SurfaceContextComposer`).
     let windowTitle: String?
+    /// The title that keys this window's per-window feature choices
+    /// (`FocusedInputSnapshot.featureScopeWindowTitle`), captured with the text so a request is
+    /// resolved against the window it was typed in.
+    let featureScopeWindowTitle: String?
     let fieldPlaceholder: String?
     let focusedURLString: String?
     let isIntegratedTerminal: Bool
@@ -81,6 +85,7 @@ struct FocusedInputContext: Equatable, Sendable {
         elementFrameRect = snapshot.elementFrameRect
         hostMarkedTextRange = snapshot.hostMarkedTextRange
         windowTitle = snapshot.windowTitle
+        featureScopeWindowTitle = snapshot.featureScopeWindowTitle
         fieldPlaceholder = snapshot.fieldPlaceholder
         focusedURLString = snapshot.focusedURLString
         isIntegratedTerminal = snapshot.isIntegratedTerminal

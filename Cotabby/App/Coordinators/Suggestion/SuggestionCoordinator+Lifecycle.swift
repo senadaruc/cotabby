@@ -136,6 +136,23 @@ extension SuggestionCoordinator {
 }
 
 extension SuggestionCoordinator {
+    /// The settings one request is built with: the stored snapshot, with multi-line resolved for the
+    /// request's own app and window (window choice, else app choice, else the global toggle).
+    /// Resolved here, once per request, so every reader downstream (token budget, single-line
+    /// cut-off, normalizer) sees one consistent answer through `request.isMultiLineEnabled`.
+    func requestSettings(for context: FocusedInputContext) -> SuggestionSettingsSnapshot {
+        var settings = settingsSnapshot
+        let windowKey = WindowFeatureScope.windowKey(
+            bundleIdentifier: context.bundleIdentifier, windowTitle: context.featureScopeWindowTitle
+        )
+        settings.isMultiLineEnabled = WindowFeatureScope.resolveMultiLine(
+            globalEnabled: settingsSnapshot.isMultiLineEnabled,
+            appOverride: settingsSnapshot.multiLineAppOverrides[context.bundleIdentifier],
+            windowOverride: windowMultiLineOverride(windowKey)
+        )
+        return settings
+    }
+
     /// The disabled-apps set adjusted for the focused window's own choice, so every availability
     /// gate honors "off in this chat" and "on in this chat" without learning about windows.
     func disabledApps(for focusSnapshot: FocusSnapshot) -> Set<String> {

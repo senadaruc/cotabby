@@ -139,7 +139,12 @@ struct SuggestionSettingsSnapshot: Equatable, Sendable {
     let responseLanguages: [String]
     let debounceMilliseconds: Int
     let focusPollIntervalMilliseconds: Int
-    let isMultiLineEnabled: Bool
+    /// The global toggle in the stored snapshot. A request's copy carries the value resolved for
+    /// its app and window instead (`SuggestionCoordinator.requestSettings(for:)`), which is why this
+    /// one field is mutable.
+    var isMultiLineEnabled: Bool
+    /// Per-app overrides of `isMultiLineEnabled`, keyed by bundle identifier.
+    var multiLineAppOverrides: [String: Bool] = [:]
     /// Whether new suggestions may start inside an unfinished word. The coordinator reads this
     /// request-timing policy from its current snapshot; matching an already visible tail remains
     /// independent so turning it off does not make ghost text disappear while the user follows it.
