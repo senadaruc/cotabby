@@ -4,6 +4,9 @@ import Foundation
 nonisolated enum ScopedFeature: String, Codable, CaseIterable, Sendable {
     case autocomplete
     case translation
+    /// Multi-line suggestions. Unlike the other two it is not an on/off gate for a whole feature but
+    /// a generation option; the app layer overrides the global Settings toggle (see `resolveMultiLine`).
+    case multiLine
 }
 
 /// File overview:
@@ -47,6 +50,13 @@ nonisolated enum WindowFeatureScope {
     /// The feature's effective state in a window: its own choice when it has one, else the app's.
     static func resolve(appEnabled: Bool, windowOverride: Bool?) -> Bool {
         windowOverride ?? appEnabled
+    }
+
+    /// Whether a suggestion in this window may span several lines: the window's own choice, else the
+    /// app's, else the global Settings toggle. The app layer exists so the global default can stay
+    /// single-line while a mail client, where replies run over several lines, opts in.
+    static func resolveMultiLine(globalEnabled: Bool, appOverride: Bool?, windowOverride: Bool?) -> Bool {
+        windowOverride ?? appOverride ?? globalEnabled
     }
 
     /// The disabled-apps set the suggestion availability gate should use for the focused window.

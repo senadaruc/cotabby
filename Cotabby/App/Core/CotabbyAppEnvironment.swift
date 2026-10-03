@@ -372,6 +372,9 @@ final class CotabbyAppEnvironment {
                 )
             )
         }
+        suggestionCoordinator.windowMultiLineOverride = { [weak windowFeatureOverrides] windowKey in
+            windowFeatureOverrides?.override(for: .multiLine, windowKey: windowKey)
+        }
         suggestionCoordinator.emojiInputObserver = { [weak inlineCommandCoordinator] event in
             inlineCommandCoordinator?.observe(event) ?? false
         }

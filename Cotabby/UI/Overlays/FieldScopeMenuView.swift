@@ -1,8 +1,9 @@
 import AppKit
 import SwiftUI
 
-/// The popup shown when the user clicks Cotabby's field-edge icon: turn Autocomplete and Translate
-/// on or off for the whole app, or for just this window (a chat, document, or page).
+/// The popup shown when the user clicks Cotabby's field-edge icon: turn Autocomplete, multi-line
+/// suggestions, and Translate on or off for the whole app, or for just this window (a chat,
+/// document, or page).
 ///
 /// Presentation only. App-level answers are written to their existing owners (the disabled-apps
 /// list in `SuggestionSettingsModel`, the app list in `TranslationPreferencesStore`), so Settings
@@ -80,6 +81,21 @@ struct FieldScopeMenuView: View {
                             disabled: !enabled
                         )
                         onChange(.autocomplete)
+                    }
+                ),
+                isAvailable: true
+            )
+
+            // Multi-line is a generation option rather than a feature gate: the app switch shows this
+            // app's choice, which starts as the global Settings toggle until the user flips it here.
+            featureRow(
+                title: "Multi-line",
+                feature: .multiLine,
+                appEnabled: Binding(
+                    get: { suggestionSettings.isMultiLineEnabled(forApplication: target.bundleIdentifier) },
+                    set: { enabled in
+                        suggestionSettings.setMultiLineEnabled(enabled, forApplication: target.bundleIdentifier)
+                        onChange(.multiLine)
                     }
                 ),
                 isAvailable: true

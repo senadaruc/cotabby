@@ -26,6 +26,17 @@ final class WindowFeatureScopeTests: XCTestCase {
         XCTAssertEqual(WindowFeatureScope.normalizedTitle(title)?.count, WindowFeatureScope.maximumTitleCharacters)
     }
 
+    /// Multi-line falls through three layers: the window's choice, then the app's, then the global
+    /// toggle. Each layer wins only when it has an answer of its own.
+    func test_multiLineResolvesWindowThenAppThenGlobal() {
+        XCTAssertFalse(WindowFeatureScope.resolveMultiLine(globalEnabled: false, appOverride: nil, windowOverride: nil))
+        XCTAssertTrue(WindowFeatureScope.resolveMultiLine(globalEnabled: true, appOverride: nil, windowOverride: nil))
+        XCTAssertTrue(WindowFeatureScope.resolveMultiLine(globalEnabled: false, appOverride: true, windowOverride: nil))
+        XCTAssertFalse(WindowFeatureScope.resolveMultiLine(globalEnabled: true, appOverride: false, windowOverride: nil))
+        XCTAssertFalse(WindowFeatureScope.resolveMultiLine(globalEnabled: true, appOverride: true, windowOverride: false))
+        XCTAssertTrue(WindowFeatureScope.resolveMultiLine(globalEnabled: false, appOverride: false, windowOverride: true))
+    }
+
     func test_windowChoiceWinsOverApp() {
         XCTAssertTrue(WindowFeatureScope.resolve(appEnabled: false, windowOverride: true))
         XCTAssertFalse(WindowFeatureScope.resolve(appEnabled: true, windowOverride: false))

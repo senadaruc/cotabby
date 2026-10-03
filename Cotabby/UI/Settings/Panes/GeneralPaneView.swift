@@ -109,7 +109,8 @@ struct GeneralPaneView: View {
                 Toggle(isOn: multiLineEnabledBinding) {
                     SettingsRowLabel(
                         title: "Allow Multi-line Suggestions",
-                        description: "Allow continuations that span more than one line. Off keeps suggestions to a single line.",
+                        description: "Allow continuations that span more than one line. Off keeps suggestions to a " +
+                            "single line. Apps and windows can override this from the field icon.",
                         systemImage: "text.alignleft"
                     )
                 }

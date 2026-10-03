@@ -56,7 +56,7 @@ extension SuggestionCoordinator {
         // Construct a hypothetical request without materializing it into ContextBuffer: that
         // buffer belongs to observed editor text, and advancing it here would stale the visible word.
         let context = FocusedInputContext(snapshot: plan.requestSnapshot, generation: session.baseContext.generation)
-        let request = SuggestionRequestFactory.buildRequest(context: context, settings: settingsSnapshot,
+        let request = SuggestionRequestFactory.buildRequest(context: context, settings: requestSettings(for: context),
             configuration: configuration, clipboardContext: pinnedClipboardContext(rawContext: rawContext),
             visualContextSummary: permissionManager.screenRecordingGranted
                 ? visualContextCoordinator.excerpt(for: session.baseContext) : nil).request

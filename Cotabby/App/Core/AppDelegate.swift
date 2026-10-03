@@ -344,6 +344,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             updateActivationIndicator(for: focusModel.snapshot)
         case .translation:
             environment.translationCoordinator.handleScopeChange()
+        case .multiLine:
+            // A generation option, not a gate: the next request resolves the new choice, and the
+            // suggestion already on screen stays until typing replaces it.
+            break
         }
     }
 
