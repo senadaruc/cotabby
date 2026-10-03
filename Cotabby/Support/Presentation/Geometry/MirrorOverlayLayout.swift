@@ -35,6 +35,12 @@ struct MirrorOverlayLayout: Equatable {
     /// that need to flip secondary chrome (Phase 3 prefix hint will use this).
     let isRightToLeft: Bool
 
+    /// The user's bold/italic suggestion style (Settings → Appearance). Carried here, rather than
+    /// passed to the view separately, because the card's width is measured in the styled face: a
+    /// bold suggestion measured as regular would be cut short by the trailing ellipsis.
+    let isBold: Bool
+    let isItalic: Bool
+
     /// Which trigger surfaced this presentation. Plumbed through purely for diagnostics so the
     /// debug overlay can show why mirror mode is up.
     let reason: CompletionRenderMode.MirrorReason
@@ -84,6 +90,8 @@ struct MirrorOverlayLayout: Equatable {
         autoAcceptTrailingPunctuation: Bool = true,
         sizeMultiplier: CGFloat = 1,
         hostFontSize: CGFloat? = nil,
+        isBold: Bool = false,
+        isItalic: Bool = false,
         reason: CompletionRenderMode.MirrorReason
     ) -> MirrorOverlayLayout {
         let normalizedSuggestion = normalizedDisplayText(suggestion)
@@ -99,7 +107,9 @@ struct MirrorOverlayLayout: Equatable {
         // caret height is what is untrustworthy here, not a size the host states outright).
         let baseFontSize = hostFontSize.flatMap { $0 > 0 && $0.isFinite ? $0 : nil } ?? Metrics.fontSize
         let scaledFontSize = max(Metrics.absoluteMinimumFontSize, baseFontSize * sizeMultiplier)
-        let measuredTextWidth = measuredWidth(of: normalizedSuggestion, fontSize: scaledFontSize)
+        let measuredTextWidth = measuredWidth(
+            of: normalizedSuggestion, fontSize: scaledFontSize, isBold: isBold, isItalic: isItalic
+        )
         let keycapReservation = showsAcceptanceHint ? Metrics.keycapReservation : 0
 
         // Reserve the keycap on top of the measured text width so the panel follows the actual
@@ -146,6 +156,8 @@ struct MirrorOverlayLayout: Equatable {
             suggestionText: normalizedSuggestion,
             highlightedPrefix: highlightedPrefix,
             isRightToLeft: geometry.isRightToLeft,
+            isBold: isBold,
+            isItalic: isItalic,
             reason: reason
         )
     }
@@ -278,9 +290,12 @@ struct MirrorOverlayLayout: Equatable {
         return collapsed
     }
 
-    private static func measuredWidth(of text: String, fontSize: CGFloat) -> CGFloat {
+    private static func measuredWidth(of text: String, fontSize: CGFloat, isBold: Bool, isItalic: Bool) -> CGFloat {
+        // The card draws in the system face, so it is measured in the system face with the same
+        // style the view applies (`MirrorOverlayView` uses SwiftUI's bold and italic).
+        let font = GhostFontStyler.styled(NSFont.systemFont(ofSize: fontSize), bold: isBold, italic: isItalic)
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: fontSize)
+            .font: font
         ]
         return (text as NSString).size(withAttributes: attributes).width
     }

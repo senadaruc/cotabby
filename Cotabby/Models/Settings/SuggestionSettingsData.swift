@@ -93,6 +93,10 @@ struct SuggestionPresentationSettings: Equatable {
     /// Draws the ghost at exactly the size measured for the host's own text, so the size multiplier
     /// and the floor/ceiling above are not applied. Off by default, which keeps the user's tuning.
     var matchesHostTextSize: Bool = false
+    /// Draw suggestions in the bold and/or italic face of the font matched to the host. Styling only:
+    /// the plain matched font still measures the host's text, so caret placement is unaffected.
+    var isGhostTextBold: Bool = false
+    var isGhostTextItalic: Bool = false
     /// UI-only developer preference. Release builds ignore it; it never enters inference snapshots.
     var showDevelopmentDebugOverlays: Bool = false
 }
@@ -415,6 +419,16 @@ extension SuggestionSettingsData {
     var fadeInSuggestions: Bool {
         get { presentation.fadeInSuggestions }
         set { presentation.fadeInSuggestions = newValue }
+    }
+
+    var isGhostTextBold: Bool {
+        get { presentation.isGhostTextBold }
+        set { presentation.isGhostTextBold = newValue }
+    }
+
+    var isGhostTextItalic: Bool {
+        get { presentation.isGhostTextItalic }
+        set { presentation.isGhostTextItalic = newValue }
     }
 
     var fadeInDurationSeconds: Double {
