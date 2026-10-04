@@ -2,26 +2,33 @@ import AppKit
 import SwiftUI
 
 /// File overview:
-/// Settings → Memory: everything about conversation memory, the local LEANN index of the user's
-/// chat and mail history that suggestions can draw on.
+/// Settings → Memory: everything about conversation memory, the encrypted, on-device index of the
+/// user's chat and mail history that suggestions and answers draw on.
 ///
-/// Presentation only. The process lifecycle (install, start, restart) belongs to
-/// `MemoryServiceSupervisor`; what the running service reports and every action sent to it go
-/// through `MemoryControlModel`. The pane is split into sections by responsibility so each file
-/// stays readable: this one holds the service switch and install flow, the others hold sources,
-/// index settings, privacy and the playground.
+/// Presentation only. Memory's lifecycle (on/off, the embedding model, starting the engine) belongs
+/// to `MemoryEngineController`; settings, sources and searches go through `MemoryControlModel`. The
+/// pane is split into sections by responsibility so each file stays readable: this one holds the
+/// switch, the model and the engine's state, the others hold sources, index and privacy, and the
+/// playground.
 struct MemoryPaneView: View {
-    @ObservedObject var supervisor: MemoryServiceSupervisor
+    @ObservedObject var controller: MemoryEngineController
     @ObservedObject var control: MemoryControlModel
+    @ObservedObject var downloads: ModelDownloadManager
     @State private var confirmingReset = false
+
+    init(controller: MemoryEngineController, control: MemoryControlModel) {
+        self.controller = controller
+        self.control = control
+        downloads = controller.downloads
+    }
 
     var body: some View {
         SettingsPaneScaffold {
-            serviceSection
-            if supervisor.state == .running {
+            engineSection
+            if controller.state == .running {
                 MemorySourcesSection(control: control, historySync: control.historySync)
-                MemoryIndexSection(control: control)
-                MemoryPlaygroundSection(control: control, supervisor: supervisor)
+                MemoryIndexSection(control: control, controller: controller)
+                MemoryPlaygroundSection(control: control)
             }
         }
         .onAppear {
@@ -37,14 +44,14 @@ struct MemoryPaneView: View {
         .onDisappear { control.endObserving() }
     }
 
-    // MARK: - Service
+    // MARK: - Engine
 
-    private var serviceSection: some View {
+    private var engineSection: some View {
         Section {
-            Toggle(isOn: Binding(get: { supervisor.isEnabled }, set: { supervisor.setEnabled($0) })) {
+            Toggle(isOn: Binding(get: { controller.isEnabled }, set: { controller.setEnabled($0) })) {
                 SettingsRowLabel(
                     title: "Conversation Memory",
-                    description: "Remember your chat and mail history on this Mac so suggestions can use what " +
+                    description: "Remember your chat and mail history on this Mac, encrypted, so suggestions can use what " +
                         "was said earlier in the same conversation. Nothing leaves the Mac, and memory is never " +
                         "sent to an endpoint model.",
                     systemImage: "brain"
@@ -52,20 +59,16 @@ struct MemoryPaneView: View {
             }
             .settingsItem(.memoryService)
 
-            if supervisor.isEnabled {
+            if controller.isEnabled {
                 HStack(alignment: .firstTextBaseline) {
-                    Text("Service")
+                    Text("Status")
                     Spacer()
                     Text(stateLabel)
                         .foregroundStyle(stateIsProblem ? .orange : .secondary)
                         .multilineTextAlignment(.trailing)
                 }
-                serviceActions
-                fullDiskAccessRow
-                if let status = control.status, supervisor.state == .running {
-                    detailRow("Versions", "cotabby-memory \(status.serviceVersion) · LEANN \(status.leannVersion ?? "?") · Python \(status.python)")
-                    detailRow("Index", indexSummary(status.index))
-                }
+                engineActions
+                FullDiskAccessRow(historySync: control.historySync)
                 if let error = control.lastError {
                     Text(error)
                         .font(.caption)
@@ -78,40 +81,21 @@ struct MemoryPaneView: View {
     }
 
     @ViewBuilder
-    private var serviceActions: some View {
-        switch supervisor.state {
-        case .needsInstall:
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Installing downloads Python packages (LEANN, PyTorch, sentence-transformers; about 2 GB) " +
-                     "into Cotabby's folder, and later an embedding model (about 1.2 GB) on the first index build.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if supervisor.uvPath == nil {
-                    Text("Cotabby uses uv to install them. Install uv first, in Terminal:")
-                        .font(.caption)
-                    Text("curl -LsSf https://astral.sh/uv/install.sh | sh")
-                        .font(.caption.monospaced())
-                        .textSelection(.enabled)
-                }
-                HStack {
-                    Button("Install") { supervisor.install() }
-                        .disabled(supervisor.uvPath == nil && MemoryServiceSupervisor.findUV() == nil)
-                    if supervisor.uvPath == nil {
-                        Button("Check Again") { supervisor.install() }
-                    }
-                }
-            }
+    private var engineActions: some View {
+        switch controller.state {
+        case .needsModel:
+            modelDownload
         case .failed:
             HStack {
-                Button("Restart") { supervisor.restart() }
-                Button("Reinstall") { supervisor.install() }
-                Button("Show Install Log") { NSWorkspace.shared.open(supervisor.paths.installLog) }
+                Button("Try Again") { controller.restart() }
+                Button("Open Memory Folder") { NSWorkspace.shared.open(controller.paths.root) }
             }
         case .running:
             HStack {
-                Button("Restart") { supervisor.restart() }
-                Button("Open Memory Folder") { NSWorkspace.shared.open(supervisor.paths.root) }
+                Button("Restart") { controller.restart() }
+                Button("Open Memory Folder") { NSWorkspace.shared.open(controller.paths.root) }
             }
+            .controlSize(.small)
         case .keyMismatch:
             VStack(alignment: .leading, spacing: 6) {
                 Text("Memory is encrypted with a key this Mac's Keychain no longer has, so it cannot be read. " +
@@ -121,64 +105,71 @@ struct MemoryPaneView: View {
                 Button("Delete Memory and Start Over…", role: .destructive) { confirmingReset = true }
             }
             .confirmationDialog("Delete the unreadable memory?", isPresented: $confirmingReset) {
-                Button("Delete Memory", role: .destructive) { supervisor.deleteMemoryData() }
+                Button("Delete Memory", role: .destructive) { controller.deleteMemoryData() }
             } message: {
-                Text("Your sources and settings stay; only the stored messages and the index are deleted.")
+                Text("Your sources and settings stay; only the stored messages are deleted.")
             }
-        case .installing, .starting, .disabled:
+        case .starting, .disabled:
             EmptyView()
         }
     }
 
-    // MARK: - Full Disk Access
-
-    /// WhatsApp's and Mail's history is protected by Full Disk Access. macOS offers no prompt an
-    /// app can show for it (unlike Accessibility), so the row says where it stands and takes the
-    /// user straight to the list, and to this exact copy of Cotabby to add: with a development and
-    /// an installed copy side by side, adding the wrong one is the usual mistake.
-    private var fullDiskAccessRow: some View {
-        FullDiskAccessRow(historySync: control.historySync)
-    }
-
-    private func detailRow(_ label: String, _ value: String) -> some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text(label)
-            Spacer()
-            Text(value)
+    /// The embedding model is downloaded once (about 640 MB) and runs inside Cotabby on this Mac.
+    private var modelDownload: some View {
+        let model = MemoryEngineController.embeddingModel
+        let modelState = downloads.state(for: model)
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("Memory understands messages with a small embedding model that runs on this Mac " +
+                 "(\(model.displayName), \(model.approximateSizeLabel), downloaded from Hugging Face once).")
+                .font(.caption)
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.trailing)
-                .textSelection(.enabled)
+            switch modelState {
+            case .downloading(let progress, _, _):
+                ProgressView(value: progress ?? 0)
+                HStack {
+                    Text(modelState.statusText).font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Pause") { downloads.pause(model) }
+                    Button("Cancel") { downloads.cancel(model) }
+                }
+                .controlSize(.small)
+            case .paused:
+                HStack {
+                    Text(modelState.statusText).font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Resume") { downloads.resume(model) }
+                }
+                .controlSize(.small)
+            case .failed(let message):
+                Text(message).font(.caption).foregroundStyle(.orange)
+                Button("Download Again") { controller.downloadModel() }
+            case .idle, .downloaded:
+                Button("Download Model") { controller.downloadModel() }
+            }
         }
-        .font(.callout)
     }
 
     private var stateLabel: String {
-        switch supervisor.state {
+        switch controller.state {
         case .disabled: return "Off"
-        case .needsInstall(let reason): return reason
-        case .installing(let step): return step
+        case .needsModel: return "Needs its embedding model"
         case .starting: return "Starting…"
-        case .running: return control.status?.busy == true ? "Running · working in the background" : "Running"
+        case .running:
+            let status = controller.status
+            return status.isIndexing ? "Running · indexing in the background" : "Running"
         case .failed(let message): return message
         case .keyMismatch: return "Memory cannot be read with this Mac's key"
         }
     }
 
     private var stateIsProblem: Bool {
-        switch supervisor.state {
+        switch controller.state {
         case .failed, .keyMismatch: return true
         default: return false
         }
     }
 
     static func byteLabel(_ bytes: Int) -> String {
-        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
-    }
-
-    private func indexSummary(_ index: MemoryIndexStatus) -> String {
-        guard index.built else { return index.needsRebuild.map { "not built (\($0))" } ?? "not built yet" }
-        var parts = ["\(index.passages) passages", Self.byteLabel(index.sizeBytes)]
-        if let reason = index.needsRebuild { parts.append("needs rebuild: \(reason)") }
-        return parts.joined(separator: " · ")
+        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .memory)
     }
 }

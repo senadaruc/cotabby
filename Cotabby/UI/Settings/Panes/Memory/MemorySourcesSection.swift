@@ -2,12 +2,11 @@ import AppKit
 import SwiftUI
 
 /// File overview:
-/// The Memory pane's sources and background jobs: which message sources feed memory, whether
-/// each is ready (permission, sign-in, folder), how much it holds, and the sync/build work running.
+/// The Memory pane's sources: which message sources feed memory, whether each is ready
+/// (permission, folder), how much it holds, and whether answers to questions may use it.
 ///
 /// Presentation only: every change goes through `MemoryControlModel`. Requirements are rendered
-/// from what the service declares per source (`MemorySource.requirements`), so a new connector on
-/// the Python side appears here without Swift changes beyond its requirement kinds.
+/// from each source's declared requirements (`MemorySourceCatalog`).
 struct MemorySourcesSection: View {
     @ObservedObject var control: MemoryControlModel
     @ObservedObject var historySync: MemoryHistorySync
@@ -30,14 +29,6 @@ struct MemorySourcesSection: View {
             }
         }
         .settingsItem(.memorySources)
-
-        if !control.jobs.isEmpty {
-            Section("Background Work") {
-                ForEach(control.jobs.prefix(6)) { job in
-                    jobRow(job)
-                }
-            }
-        }
     }
 
     // MARK: - Source
@@ -73,6 +64,18 @@ struct MemorySourcesSection: View {
                 requirementControl(requirement, source: source)
             }
 
+            if source.enabled {
+                Toggle(isOn: Binding(
+                    get: { source.isAnswerSource },
+                    set: { control.setAnswerSource(source.id, enabled: $0) }
+                )) {
+                    Text("Use for answers to questions")
+                        .font(.caption)
+                }
+                .controlSize(.small)
+                .help("Answers can quote facts from any conversation of this source, shown with where they came from before you insert them.")
+            }
+
             if source.stats.messages > 0 || source.enabled {
                 HStack {
                     Text(Self.statsLabel(source.stats))
@@ -84,7 +87,7 @@ struct MemorySourcesSection: View {
                                   || historySync.syncing.contains(source.id))
                     Button("Forget") { control.forget(source.id) }
                         .disabled(source.stats.messages == 0)
-                        .help("Delete everything remembered from this source and rebuild the index without it.")
+                        .help("Delete everything remembered from this source.")
                 }
                 .controlSize(.small)
             }
@@ -114,7 +117,7 @@ struct MemorySourcesSection: View {
                     }
                 }
                 .controlSize(.small)
-                .help("Add Cotabby to Full Disk Access so its memory service can read \(source.title)'s local history.")
+                .help("Add Cotabby to Full Disk Access so it can read \(source.title)'s local history.")
             }
         default:
             if !requirement.detail.isEmpty {
@@ -135,10 +138,12 @@ struct MemorySourcesSection: View {
         control.setSourceOption(sourceID, key: "folder", value: url.path)
     }
 
-    /// What to show as a source's readiness. For sources Cotabby reads itself, only Cotabby knows
-    /// whether macOS lets it read them, so its own readiness replaces the service's placeholder.
+    /// What to show as a source's readiness: whether macOS lets Cotabby read it, and how the last
+    /// sync went.
     static func check(for source: MemorySource, historySync: MemoryHistorySync) -> (ok: Bool, message: String) {
-        guard source.pushed else { return (source.check.ok, source.check.message) }
+        if source.id == DocumentsHistoryReader.id, (source.options["folder"] ?? "").isEmpty {
+            return (false, "Choose a folder for this source.")
+        }
         guard let readiness = historySync.readiness[source.id] else { return (true, "Checking access…") }
         if readiness.isReady, let outcome = historySync.lastOutcome[source.id] {
             return (true, "Ready · \(outcome)")
@@ -153,34 +158,6 @@ struct MemorySourcesSection: View {
             parts.append("synced " + RelativeDateTimeFormatter().localizedString(for: Date(timeIntervalSince1970: last), relativeTo: Date()))
         }
         return parts.joined(separator: " · ")
-    }
-
-    // MARK: - Jobs
-
-    private func jobRow(_ job: MemoryJob) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(job.title)
-                Spacer()
-                Text(job.status)
-                    .font(.caption)
-                    .foregroundStyle(job.status == "failed" ? .orange : .secondary)
-                if job.isActive {
-                    Button("Cancel") { control.cancelJob(job.id) }
-                        .controlSize(.small)
-                }
-            }
-            if job.isActive {
-                ProgressView(value: job.progress)
-            }
-            let detail = job.error ?? job.message
-            if !detail.isEmpty {
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(job.error == nil ? Color.secondary : Color.orange)
-                    .lineLimit(2)
-            }
-        }
     }
 }
 

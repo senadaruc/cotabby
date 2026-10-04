@@ -65,12 +65,12 @@ final class MemoryStoreTests: XCTestCase {
 
     func test_upsertIsIdempotentAndEditsNeedIndexingAgain() throws {
         let store = try makeStore()
-        XCTAssertEqual(try store.upsert(source: "chat", records: [record("c1", "original text here", id: "m1")]), 1)
+        XCTAssertEqual(try store.upsert(source: "chat", records: [record("c1", "original text here", id: "m1")]).changed, 1)
         let message = try XCTUnwrap(try store.unindexedMessages(sources: ["chat"], limit: 10).first)
         try store.saveIndexEntries([(message, [("p1", [Float16](repeating: 0.5, count: 4))])], model: "m")
         XCTAssertEqual(try store.unindexedCount(sources: ["chat"]), 0)
-        XCTAssertEqual(try store.upsert(source: "chat", records: [record("c1", "original text here", id: "m1")]), 0)
-        XCTAssertEqual(try store.upsert(source: "chat", records: [record("c1", "edited text here", id: "m1")]), 1)
+        XCTAssertEqual(try store.upsert(source: "chat", records: [record("c1", "original text here", id: "m1")]).changed, 0)
+        XCTAssertEqual(try store.upsert(source: "chat", records: [record("c1", "edited text here", id: "m1")]).replacedRecordIDs.count, 1)
         XCTAssertEqual(try store.unindexedMessages(sources: ["chat"], limit: 10).map(\.text), ["edited text here"])
         XCTAssertTrue(try store.vectors(model: "m").isEmpty, "an edited message loses its old vector")
     }

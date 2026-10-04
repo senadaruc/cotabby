@@ -147,19 +147,6 @@ final class MemoryHistoryReaderTests: XCTestCase {
         XCTAssertEqual(AppleMailHistoryReader.baseSubject("Reminder: invoice"), "Reminder: invoice")
     }
 
-    // MARK: - Sync batching
-
-    func test_batchesStayUnderTheRequestLimit() {
-        let big = String(repeating: "x", count: 250_000)
-        let records = (0..<5).map {
-            MemoryIngestRecord(sourceMessageID: "\($0)", conversationID: "c", conversationTitle: "t", sender: "s",
-                               isFromMe: false, timestamp: Date(), text: big, participants: [], subject: nil)
-        }
-        let batches = MemoryHistorySync.batches(records)
-        XCTAssertEqual(batches.map(\.count), [2, 2, 1])
-        XCTAssertEqual(MemoryHistorySync.batches([]).count, 0)
-    }
-
     // MARK: - Outlook
 
     private func outlookFixture() throws -> OutlookHistoryReader {
@@ -201,61 +188,32 @@ final class MemoryHistoryReaderTests: XCTestCase {
         if case .notFound = reader.readiness() {} else { XCTFail("expected notFound") }
     }
 
-    // MARK: - Teams staging
+    // MARK: - Documents
 
-    private func teamsFixture() throws -> TeamsCacheStager {
-        let root = directory.appendingPathComponent("EBWebView", isDirectory: true)
-        for profile in ["WV2Profile_tfw", "WV2Profile_tfl"] {
-            let base = root.appendingPathComponent("\(profile)/IndexedDB/\(TeamsCacheStager.originFolder)")
-            let leveldb = URL(fileURLWithPath: base.path + ".leveldb")
-            try FileManager.default.createDirectory(at: leveldb, withIntermediateDirectories: true)
-            try Data("MANIFEST-000001\n".utf8).write(to: leveldb.appendingPathComponent("CURRENT"))
-            try Data("table".utf8).write(to: leveldb.appendingPathComponent("000005.ldb"))
-        }
-        // Other origins and other storage in the profile are never copied.
-        let other = root.appendingPathComponent("WV2Profile_tfw/IndexedDB/https_example.com_0.indexeddb.leveldb")
-        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: root.appendingPathComponent("WV2Profile_tfw/Local Storage"), withIntermediateDirectories: true)
-        return TeamsCacheStager(webViewRoot: root.path)
-    }
+    func test_documentsBecomeParagraphRecordsAndResumeFromTheNewestFileRead() throws {
+        let folder = directory.appendingPathComponent("Notes", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("sub"), withIntermediateDirectories: true)
+        let pricing = folder.appendingPathComponent("pricing.md")
+        try "The SOC platform costs 4,000 EUR per month.\n\nshort\n\nPilots run for six weeks with two playbooks."
+            .write(to: pricing, atomically: true, encoding: .utf8)
+        let other = folder.appendingPathComponent("sub/notes.txt")
+        try "Second file paragraph that is long enough.".write(to: other, atomically: true, encoding: .utf8)
+        try "binary".write(to: folder.appendingPathComponent("image.png"), atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_000)], ofItemAtPath: pricing.path)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 2_000)], ofItemAtPath: other.path)
 
-    func test_teamsStagingCopiesOnlyTheTeamsIndexedDBOfEachProfileIntoAPrivateFolder() throws {
-        let stager = try teamsFixture()
-        XCTAssertEqual(stager.readiness(), .ready)
-        let staging = directory.appendingPathComponent("staging", isDirectory: true)
-        let copy = try stager.stage(into: staging)
-        XCTAssertEqual(copy.deletingLastPathComponent().standardizedFileURL, staging.standardizedFileURL)
-        let copied = try FileManager.default.subpathsOfDirectory(atPath: copy.path).sorted()
-        XCTAssertEqual(copied.filter { $0.hasSuffix(".leveldb") }, [
-            "WV2Profile_tfl/\(TeamsCacheStager.originFolder).leveldb",
-            "WV2Profile_tfw/\(TeamsCacheStager.originFolder).leveldb"
-        ])
-        XCTAssertFalse(copied.contains { $0.contains("example.com") || $0.contains("Local Storage") })
-        let permissions = try FileManager.default.attributesOfItem(atPath: copy.path)[.posixPermissions] as? Int
-        XCTAssertEqual(permissions, 0o700)
-    }
-
-    func test_teamsSignatureChangesWhenTheCacheDoes() throws {
-        let stager = try teamsFixture()
-        let before = try XCTUnwrap(stager.signature())
-        XCTAssertEqual(stager.signature(), before)
-        let leveldb = directory.appendingPathComponent("EBWebView/WV2Profile_tfw/IndexedDB/\(TeamsCacheStager.originFolder).leveldb")
-        try Data("new log entry".utf8).write(to: leveldb.appendingPathComponent("000006.log"))
-        XCTAssertNotEqual(stager.signature(), before)
-    }
-
-    func test_teamsWithoutAContainerIsNotFound() {
-        let stager = TeamsCacheStager(webViewRoot: directory.appendingPathComponent("missing").path)
-        if case .notFound = stager.readiness() {} else { XCTFail("expected notFound") }
-        XCTAssertNil(stager.signature())
-    }
-
-    func test_importSummaryReadsTheJobResult() {
-        XCTAssertEqual(MemoryHistorySync.importSummary(["teams": ["stored": 12, "read": 40]], sourceID: "teams"), "Added 12 messages")
-        XCTAssertEqual(MemoryHistorySync.importSummary(["teams": ["stored": 0]], sourceID: "teams"), "Up to date")
-        XCTAssertEqual(MemoryHistorySync.importSummary(["teams": ["error": "No Teams cache was found."]], sourceID: "teams"),
-                       "No Teams cache was found.")
-        XCTAssertEqual(MemoryHistorySync.importSummary(nil, sourceID: "teams"), "Imported")
+        let reader = DocumentsHistoryReader(folder: folder.path)
+        XCTAssertEqual(reader.readiness(), .ready)
+        let page = try reader.read(after: nil, since: nil, limit: 100)
+        XCTAssertEqual(page.records.map(\.text), [
+            "The SOC platform costs 4,000 EUR per month.", "Pilots run for six weeks with two playbooks.",
+            "Second file paragraph that is long enough.",
+        ], "short paragraphs and other file types are skipped")
+        XCTAssertEqual(page.records.first?.conversationID, "pricing.md")
+        XCTAssertEqual(page.records.last?.conversationID, "sub/notes.txt")
+        XCTAssertEqual(page.nextCursor, "2000.0")
+        XCTAssertTrue(try reader.read(after: page.nextCursor, since: nil, limit: 100).records.isEmpty)
+        XCTAssertEqual(try reader.read(after: "1000.0", since: nil, limit: 100).records.count, 1)
     }
 
     // MARK: - Full Disk Access probe

@@ -1,5 +1,0 @@
-# Pinned runtime dependencies Cotabby installs into the memory service venv.
-# The service itself runs from the app bundle via PYTHONPATH, so it is not listed.
-leann==0.3.8
-# AES-GCM for encrypting the message store at rest (vault.py).
-cryptography>=43

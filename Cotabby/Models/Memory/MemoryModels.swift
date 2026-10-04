@@ -1,166 +1,149 @@
 import Foundation
 
 /// File overview:
-/// The values Cotabby exchanges with the conversation memory service (`MemoryService/`, Python).
+/// The values conversation memory's engine, its settings file and the Memory pane share.
 ///
-/// Each type mirrors one JSON shape the service returns (see `MemoryService/src/cotabby_memory/
-/// service.py`). They are decoded with `convertFromSnakeCase`, so Swift names follow Swift style and
-/// the service keeps Python style. Keeping every wire shape in this one file makes a protocol change
-/// a single, reviewable diff on the Swift side.
+/// `MemoryConfiguration` is the user's memory settings, persisted as `config.json` in the memory
+/// data folder with snake_case keys (the file the earlier Python service wrote, which still loads:
+/// unknown keys are ignored and missing ones take their defaults). The rest are read-only values the
+/// engine produces for the pane and for suggestions. Keeping them in one file makes a change to
+/// what memory exposes one reviewable diff.
 
-/// `status`: what the running service reports about itself.
-struct MemoryServiceStatus: Decodable, Equatable, Sendable {
-    let serviceVersion: String
-    let protocolVersion: Int
-    let leannVersion: String?
-    let python: String
-    let dataDir: String
-    let uptimeSeconds: Double
-    let busy: Bool
-    let index: MemoryIndexStatus
-    let enabledSources: [String]
-}
-
-/// `index.status`.
-struct MemoryIndexStatus: Decodable, Equatable, Sendable {
-    let built: Bool
-    let builtAt: Double?
-    let passages: Int
-    let sizeBytes: Int
-    /// Why the index must be rebuilt before it reflects the settings and the store, if it must.
-    let needsRebuild: String?
-}
-
-/// The index settings the Memory pane edits (`config.index`). Every LEANN build and search knob the
-/// service exposes; ranges are enforced by the service, which reports rejected keys.
+/// How memory is searched (`config.index`).
 struct MemoryIndexSettings: Codable, Equatable, Sendable {
-    var backend: String
-    var embeddingMode: String
-    var embeddingModel: String
-    var chunkSize: Int
-    var chunkOverlap: Int
-    var graphDegree: Int
-    var buildComplexity: Int
-    var recompute: Bool
-    var compact: Bool
-    var searchComplexity: Int
-    var topK: Int
-    var vectorWeight: Double
+    /// Messages retrieved per lookup.
+    var topK: Int = 4
+    /// 1 = rank by meaning only, 0 = by shared words only.
+    var vectorWeight: Double = 0.7
+    /// Words per embedded passage, and the overlap between a long mail's passages.
+    var chunkSize: Int = PassageChunker.defaultSize
+    var chunkOverlap: Int = PassageChunker.defaultOverlap
 
-    static let backends = ["hnsw", "diskann"]
-    static let embeddingModes = ["sentence-transformers", "ollama", "openai", "mlx"]
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        topK = min(max(try container.decodeIfPresent(Int.self, forKey: .topK) ?? 4, 1), 20)
+        vectorWeight = min(max(try container.decodeIfPresent(Double.self, forKey: .vectorWeight) ?? 0.7, 0), 1)
+        chunkSize = min(max(try container.decodeIfPresent(Int.self, forKey: .chunkSize) ?? PassageChunker.defaultSize, 64), 400)
+        chunkOverlap = min(max(try container.decodeIfPresent(Int.self, forKey: .chunkOverlap) ?? PassageChunker.defaultOverlap, 0), chunkSize / 2)
+    }
 }
 
 /// One source's saved settings (`config.sources[id]`).
 struct MemorySourceSettings: Codable, Equatable, Sendable {
     var enabled: Bool
     var options: [String: String]
+    /// Whether answers to questions may use this source's facts; nil follows the source's default.
+    var answerSource: Bool?
 
-    init(enabled: Bool, options: [String: String]) {
+    init(enabled: Bool, options: [String: String] = [:], answerSource: Bool? = nil) {
         self.enabled = enabled
         self.options = options
+        self.answerSource = answerSource
     }
 
-    /// Options are free-form JSON on the service side; the pane only edits strings, so any other
-    /// value type is shown as its JSON text rather than failing the whole config decode.
+    /// Options were free-form JSON in older files; any non-string value is kept as its text rather
+    /// than failing the whole configuration.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
         let raw = try container.decodeIfPresent([String: MemoryJSONValue].self, forKey: .options) ?? [:]
         options = raw.mapValues(\.text)
+        answerSource = try container.decodeIfPresent(Bool.self, forKey: .answerSource)
     }
 }
 
 /// `config.privacy`.
 struct MemoryPrivacySettings: Codable, Equatable, Sendable {
-    var excludedConversations: [String]
-    var excludedParticipants: [String]
-    var retentionDays: Int
+    var excludedConversations: [String] = []
+    var excludedParticipants: [String] = []
+    /// Messages older than this many days are not stored (and are purged); 0 keeps everything.
+    var retentionDays: Int = 365
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        excludedConversations = try container.decodeIfPresent([String].self, forKey: .excludedConversations) ?? []
+        excludedParticipants = try container.decodeIfPresent([String].self, forKey: .excludedParticipants) ?? []
+        retentionDays = max(0, try container.decodeIfPresent(Int.self, forKey: .retentionDays) ?? 365)
+    }
 }
 
-/// `config.get` / `config.set`.
+/// `config.answers`: drafting answers to questions from memory.
+struct MemoryAnswerSettings: Codable, Equatable, Sendable {
+    var enabled = false
+    /// Similarity (0-1) the best fact must reach before a draft is offered.
+    var minimumConfidence = 0.45
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        minimumConfidence = min(max(try container.decodeIfPresent(Double.self, forKey: .minimumConfidence) ?? 0.45, 0), 1)
+    }
+}
+
+/// Everything the user configures about memory.
 struct MemoryConfiguration: Codable, Equatable, Sendable {
-    var index: MemoryIndexSettings
-    var sources: [String: MemorySourceSettings]
-    var privacy: MemoryPrivacySettings
+    var index = MemoryIndexSettings()
+    var sources: [String: MemorySourceSettings] = [:]
+    var privacy = MemoryPrivacySettings()
+    var answers = MemoryAnswerSettings()
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        index = try container.decodeIfPresent(MemoryIndexSettings.self, forKey: .index) ?? MemoryIndexSettings()
+        sources = try container.decodeIfPresent([String: MemorySourceSettings].self, forKey: .sources) ?? [:]
+        privacy = try container.decodeIfPresent(MemoryPrivacySettings.self, forKey: .privacy) ?? MemoryPrivacySettings()
+        answers = try container.decodeIfPresent(MemoryAnswerSettings.self, forKey: .answers) ?? MemoryAnswerSettings()
+    }
+
+    /// Sources the user switched on.
+    var enabledSourceIDs: [String] {
+        sources.filter(\.value.enabled).keys.sorted()
+    }
 }
 
-/// `sources.list`: one connector, its settings and its state.
-struct MemorySource: Decodable, Equatable, Identifiable, Sendable {
-    struct Requirement: Decodable, Equatable, Sendable {
+/// One memory source as the pane shows it: what it is, its settings, and what is stored from it.
+struct MemorySource: Equatable, Identifiable, Sendable {
+    struct Requirement: Equatable, Sendable {
         let kind: String
         let title: String
         let detail: String
     }
 
-    struct Check: Decodable, Equatable, Sendable {
-        let ok: Bool
-        let message: String
-    }
-
-    struct Stats: Decodable, Equatable, Sendable {
+    struct Stats: Equatable, Sendable {
         let messages: Int
         let pending: Int
         let conversations: Int
         let newestTimestamp: Double?
         let lastSync: Double?
+
+        static let empty = Stats(messages: 0, pending: 0, conversations: 0, newestTimestamp: nil, lastSync: nil)
     }
 
     let id: String
     let title: String
     let description: String
-    /// "local" (files on this Mac) or "cloud" (a service the user signed into).
-    let kind: String
     /// The apps whose fields this source's memory serves.
     let appBundleIds: [String]
     let requirements: [Requirement]
+    /// Option keys the pane edits, with a label each (a folder for Documents).
     let optionsSchema: [String: String]
-    /// True for sources Cotabby reads itself and pushes (`MemoryHistorySync`).
-    let pushed: Bool
     let enabled: Bool
     let options: [String: String]
-    let check: Check
+    /// Whether answers may draw on this source.
+    let isAnswerSource: Bool
     let stats: Stats
-
-    private enum CodingKeys: String, CodingKey {
-        case id, title, description, kind, appBundleIds, requirements, optionsSchema, pushed, enabled, options, check, stats
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(String.self, forKey: .id)
-        title = try container.decode(String.self, forKey: .title)
-        description = try container.decode(String.self, forKey: .description)
-        kind = try container.decode(String.self, forKey: .kind)
-        appBundleIds = try container.decode([String].self, forKey: .appBundleIds)
-        requirements = try container.decode([Requirement].self, forKey: .requirements)
-        optionsSchema = try container.decode([String: String].self, forKey: .optionsSchema)
-        pushed = try container.decodeIfPresent(Bool.self, forKey: .pushed) ?? false
-        enabled = try container.decode(Bool.self, forKey: .enabled)
-        options = try container.decode([String: MemoryJSONValue].self, forKey: .options).mapValues(\.text)
-        check = try container.decode(Check.self, forKey: .check)
-        stats = try container.decode(Stats.self, forKey: .stats)
-    }
 }
 
-/// `jobs.list`: one queued, running or finished piece of background work.
-struct MemoryJob: Decodable, Equatable, Identifiable, Sendable {
-    let id: Int
-    let kind: String
-    let title: String
-    let status: String
-    let progress: Double
-    let message: String
-    let createdAt: Double
-    let startedAt: Double?
-    let finishedAt: Double?
-    let error: String?
-
-    var isActive: Bool { status == "queued" || status == "running" }
-}
-
-/// A conversation the service knows (`conversations.find`, `search`).
-struct MemoryConversation: Decodable, Equatable, Hashable, Sendable {
+/// A conversation memory knows.
+struct MemoryConversation: Equatable, Hashable, Sendable {
     let source: String
     let conversationId: String
     let title: String
@@ -168,9 +151,9 @@ struct MemoryConversation: Decodable, Equatable, Hashable, Sendable {
     let lastTimestamp: Double
 }
 
-/// `search`: what memory returned for one query, and how widely it had to look.
-struct MemorySearchResult: Decodable, Equatable, Sendable {
-    struct Hit: Decodable, Equatable, Identifiable, Sendable {
+/// What memory returned for one query, and how widely it had to look.
+struct MemorySearchResult: Equatable, Sendable {
+    struct Hit: Equatable, Identifiable, Sendable {
         let recordId: String
         let source: String
         let conversationId: String
@@ -181,13 +164,15 @@ struct MemorySearchResult: Decodable, Equatable, Sendable {
         let subject: String?
         let text: String
         let score: Double
+        /// Cosine similarity of the best passage (0 when only keyword search found it).
+        let similarity: Double
         /// "vector", "keyword" or "both": which retrieval path found it.
         let via: String
 
         var id: String { recordId }
     }
 
-    /// "conversation", "person", "global", or "none" when the conversation was not recognized.
+    /// "conversation", "person", "global", "answer", or "none" when the conversation was not recognized.
     let scope: String
     let conversation: MemoryConversation?
     let elapsedMs: Double
@@ -196,8 +181,22 @@ struct MemorySearchResult: Decodable, Equatable, Sendable {
     static let empty = MemorySearchResult(scope: "none", conversation: nil, elapsedMs: 0, hits: [])
 }
 
-/// A JSON value of any type, for the few free-form fields (source options). `text` renders it for
-/// the pane's string fields.
+/// What the engine reports about its index and background work, for the pane.
+struct MemoryEngineStatus: Equatable, Sendable {
+    /// Passages in the in-memory index.
+    var passages = 0
+    /// Messages stored but not yet searchable by meaning.
+    var pendingMessages = 0
+    /// Resident size of the vectors.
+    var vectorBytes = 0
+    /// What background indexing is doing or waiting for ("Indexing 1,200 of 31,000", "Waiting for power").
+    var activity = ""
+    var isIndexing = false
+    /// Passages embedded per second during the last indexing run.
+    var passagesPerSecond: Double?
+}
+
+/// A JSON value of any type, for the free-form option values older settings files may hold.
 enum MemoryJSONValue: Decodable, Equatable, Sendable {
     case string(String)
     case number(Double)

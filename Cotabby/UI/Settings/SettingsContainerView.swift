@@ -27,7 +27,7 @@ struct SettingsContainerView: View {
     @ObservedObject var systemMetricsStore: SystemMetricsStore
     @ObservedObject var performanceTuner: PerformanceTuner
     @ObservedObject var modelProfileStore: ModelPerformanceProfileStore
-    @ObservedObject var memorySupervisor: MemoryServiceSupervisor
+    @ObservedObject var memoryController: MemoryEngineController
     let memoryControl: MemoryControlModel
 
     let onShowWelcome: () -> Void
@@ -151,7 +151,7 @@ struct SettingsContainerView: View {
         case .writing:
             WritingPaneView(suggestionSettings: suggestionSettings)
         case .memory:
-            MemoryPaneView(supervisor: memorySupervisor, control: memoryControl)
+            MemoryPaneView(controller: memoryController, control: memoryControl)
         case .translation:
             TranslationPaneView(preferences: translationPreferences, service: translationService)
         case .context:

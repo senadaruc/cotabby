@@ -2,9 +2,8 @@ import AppKit
 import SwiftUI
 
 /// File overview:
-/// The Memory pane's playground and log: pick one of your real conversations, type what you might
-/// write there, and see exactly what memory would hand a suggestion (and how widely it had to
-/// look), plus the service's recent log lines.
+/// The Memory pane's playground: pick one of your real conversations, type what you might write
+/// there, and see exactly what memory would hand a suggestion (and how widely it had to look).
 ///
 /// Conversations are picked from the service's list of recently active ones rather than typed, so
 /// there is nothing to spell exactly, and the search names the conversation by id (the scope a
@@ -12,13 +11,11 @@ import SwiftUI
 /// is never used by suggestions.
 struct MemoryPlaygroundSection: View {
     @ObservedObject var control: MemoryControlModel
-    @ObservedObject var supervisor: MemoryServiceSupervisor
     @State private var query = ""
     @State private var sourceID = ""
     @State private var conversationKey = ""
     @State private var filter = ""
     @State private var global = false
-    @State private var showingLogs = false
 
     private var searchableSources: [MemorySource] {
         control.sources.filter { $0.enabled && $0.stats.messages > 0 }
@@ -90,27 +87,6 @@ struct MemoryPlaygroundSection: View {
             if !source.isEmpty { control.loadConversations(source: source) }
         }
 
-        Section {
-            DisclosureGroup("Service Log", isExpanded: $showingLogs) {
-                ScrollView {
-                    Text(control.logLines.suffix(200).joined(separator: "\n"))
-                        .font(.caption.monospaced())
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(height: 180)
-                HStack {
-                    Button("Refresh") { Task { await control.loadLogs() } }
-                    Button("Open Log Folder") {
-                        NSWorkspace.shared.open(supervisor.paths.dataDirectory.appendingPathComponent("logs"))
-                    }
-                }
-                .controlSize(.small)
-            }
-            .onChange(of: showingLogs) { _, expanded in
-                if expanded { Task { await control.loadLogs() } }
-            }
-        }
     }
 
     /// Picks the first source that has messages once the source list has loaded (the list arrives
@@ -122,7 +98,7 @@ struct MemoryPlaygroundSection: View {
 
     private func runSearch() {
         if global {
-            control.search(query: query, title: "", sources: searchableSources.map(\.id), global: true)
+            control.searchEverything(query: query, sources: searchableSources.map(\.id))
         } else if let conversation = selectedConversation {
             control.search(query: query, conversation: conversation)
         }
@@ -144,6 +120,7 @@ struct MemoryPlaygroundSection: View {
         case "conversation": scope = "from this conversation"
         case "person": scope = "from this conversation and others with exactly the same people"
         case "global": scope = "from all of memory"
+        case "answer": scope = "from your answer sources"
         default: scope = "conversation not found, so nothing (suggestions never fall back to other chats)"
         }
         return "\(result.hits.count) result\(result.hits.count == 1 ? "" : "s") \(scope) in \(Int(result.elapsedMs.rounded())) ms"

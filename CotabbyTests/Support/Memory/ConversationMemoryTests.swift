@@ -97,14 +97,22 @@ final class ConversationMemoryTests: XCTestCase {
 
     @MainActor
     func test_retrieverReturnsNothingWhereMemoryMustNotApply() {
-        let retriever = MemoryRetriever(client: MemoryServiceClient(socketPath: "/tmp/cm-none.sock"), isServiceRunning: { true })
+        let retriever = MemoryRetriever(engine: { nil })
         Self.retained.append(retriever)
         retriever.updateSources([])
         let context = CotabbyTestFixtures.focusedInputContext(bundleIdentifier: "net.whatsapp.WhatsApp", windowTitle: "Ayşe")
         XCTAssertEqual(retriever.memorySnippets(for: context, engine: .llamaOpenSource), [], "no enabled source")
         XCTAssertFalse(retriever.hasMemory(forApplication: "net.whatsapp.WhatsApp"))
         XCTAssertEqual(retriever.memorySnippets(for: context, engine: .openAICompatible), [], "endpoint never")
+        retriever.updateSources([Self.source("whatsapp", apps: ["net.whatsapp.WhatsApp"])])
+        XCTAssertTrue(retriever.hasMemory(forApplication: "net.whatsapp.WhatsApp"))
+        XCTAssertEqual(retriever.memorySnippets(for: context, engine: .llamaOpenSource), [], "memory switched off (no engine)")
     }
 
     @MainActor private static var retained: [AnyObject] = []
+
+    static func source(_ id: String, apps: [String]) -> MemorySource {
+        MemorySource(id: id, title: id, description: "", appBundleIds: apps, requirements: [], optionsSchema: [:],
+                     enabled: true, options: [:], isAnswerSource: false, stats: .empty)
+    }
 }

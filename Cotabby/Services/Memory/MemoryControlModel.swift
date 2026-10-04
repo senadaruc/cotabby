@@ -2,55 +2,35 @@ import Combine
 import Foundation
 
 /// File overview:
-/// The Memory settings pane's view of the running memory service: its status, settings, sources,
-/// background jobs and logs, plus the actions the pane offers (sync, rebuild, forget, search).
+/// The Memory settings pane's view of conversation memory: its settings, sources and playground,
+/// plus the actions the pane offers (sync, forget, re-index, privacy, search).
 ///
-/// Why separate from `MemoryServiceSupervisor`: the supervisor owns the *process* (install, start,
-/// restart) and must keep working with no window open. This model owns what a person looks at and
-/// asks for through the socket, and only polls while the pane is visible (`beginObserving` /
-/// `endObserving`), so a closed Settings window costs nothing. Built once by
-/// `CotabbyAppEnvironment`; the pane observes it and calls its actions, never the client directly.
+/// Why separate from `MemoryEngineController`: the controller owns the engine's lifecycle and must
+/// work with no window open; this model holds what a person looks at, and only refreshes while the
+/// pane is visible (`beginObserving` / `endObserving`). Every engine call runs off the main actor,
+/// since the engine's work is synchronous and may touch disk. Built once by `CotabbyAppEnvironment`.
 @MainActor
 final class MemoryControlModel: ObservableObject {
-    @Published private(set) var status: MemoryServiceStatus?
     @Published private(set) var configuration: MemoryConfiguration?
     @Published private(set) var sources: [MemorySource] = []
-    @Published private(set) var jobs: [MemoryJob] = []
-    @Published private(set) var logLines: [String] = []
     @Published private(set) var lastError: String?
-    /// Keys the service refused in the last settings change, shown next to the controls.
-    @Published private(set) var rejectedSettings: [String] = []
     @Published private(set) var playgroundResult: MemorySearchResult?
     @Published private(set) var isSearching = false
+    /// Recently active conversations of one source, for the Playground's picker.
+    @Published private(set) var playgroundConversations: [MemoryConversation] = []
 
-    private let client: MemoryServiceClient
-    private let supervisor: MemoryServiceSupervisor
-    /// Reads and pushes the sources only Cotabby may read; the pane observes it directly too.
+    let controller: MemoryEngineController
+    /// Reads the sources on this Mac; the pane observes it directly too.
     let historySync: MemoryHistorySync
     private var observers = 0
     private var pollTask: Task<Void, Never>?
 
-    init(client: MemoryServiceClient, supervisor: MemoryServiceSupervisor, historySync: MemoryHistorySync) {
-        self.client = client
-        self.supervisor = supervisor
+    init(controller: MemoryEngineController, historySync: MemoryHistorySync) {
+        self.controller = controller
         self.historySync = historySync
     }
 
-    private var retentionDays: Int { configuration?.privacy.retentionDays ?? 365 }
-
-    private func isPushed(_ id: String) -> Bool {
-        sources.first { $0.id == id }?.pushed ?? historySync.pushedSourceIDs.contains(id)
-    }
-
-    /// The pushed sources the user switched on, and the retention window, as the periodic sync
-    /// needs them (read fresh from the service, since the pane may be closed).
-    func enabledPushedSources() async -> (sources: [String], retentionDays: Int) {
-        guard let config = try? await client.call("config.get", as: MemoryConfiguration.self) else {
-            return ([], 365)
-        }
-        let enabled = historySync.pushedSourceIDs.filter { config.sources[$0]?.enabled == true }
-        return (enabled, config.privacy.retentionDays)
-    }
+    private var engine: MemoryEngine? { controller.engine }
 
     // MARK: - Observation
 
@@ -61,8 +41,8 @@ final class MemoryControlModel: ObservableObject {
             while !Task.isCancelled {
                 guard let self else { return }
                 await self.refresh()
-                // Poll fast while work is running so progress bars move, slowly otherwise.
-                let interval: UInt64 = self.jobs.contains(where: \.isActive) ? 1 : 5
+                // Counts change while indexing; refresh faster then.
+                let interval: UInt64 = self.controller.status.isIndexing ? 2 : 5
                 try? await Task.sleep(nanoseconds: interval * 1_000_000_000)
             }
         }
@@ -75,39 +55,24 @@ final class MemoryControlModel: ObservableObject {
         pollTask = nil
     }
 
-    /// Reloads everything the pane shows. Quietly does nothing while the service is not running.
+    /// Reloads the settings and the sources (with their stored counts).
     func refresh() async {
-        guard supervisor.state == .running else {
-            status = nil
+        guard let engine else {
+            configuration = nil
+            sources = []
             return
         }
-        do {
-            async let status = client.call("status", as: MemoryServiceStatus.self)
-            async let configuration = client.call("config.get", as: MemoryConfiguration.self)
-            async let sources = client.call("sources.list", as: [MemorySource].self)
-            async let jobs = client.call("jobs.list", as: [MemoryJob].self)
-            let loaded = try await (status, configuration, sources, jobs)
-            self.status = loaded.0
-            if self.configuration != loaded.1 { self.configuration = loaded.1 }
-            if self.sources != loaded.2 { self.sources = loaded.2 }
-            if self.jobs != loaded.3 { self.jobs = loaded.3 }
-            lastError = nil
-        } catch {
-            lastError = error.localizedDescription
-        }
-    }
-
-    func loadLogs() async {
-        struct Tail: Decodable { let lines: [String] }
-        if let tail = try? await client.call("logs.tail", params: ["lines": 300], as: Tail.self) {
-            logLines = tail.lines
-        }
+        let (configuration, sources) = await Task.detached(priority: .userInitiated) {
+            (engine.configuration, engine.sources())
+        }.value
+        if self.configuration != configuration { self.configuration = configuration }
+        if self.sources != sources { self.sources = sources }
     }
 
     // MARK: - Actions
 
     func setSourceEnabled(_ id: String, enabled: Bool) {
-        perform("sources.configure", ["id": id, "enabled": enabled]) {
+        change({ $0.sources[id, default: MemorySourceSettings(enabled: false)].enabled = enabled }) {
             if enabled {
                 self.historySync.refreshReadiness()
                 await self.sync(id)
@@ -116,155 +81,124 @@ final class MemoryControlModel: ObservableObject {
     }
 
     func setSourceOption(_ id: String, key: String, value: String) {
-        perform("sources.configure", ["id": id, "options": [key: value]])
+        change({ $0.sources[id, default: MemorySourceSettings(enabled: false)].options[key] = value }) {
+            self.historySync.refreshReadiness()
+        }
     }
 
-    /// Syncs one source, or every enabled one. Sources Cotabby reads itself go through
-    /// `MemoryHistorySync`; the rest are synced by the service.
+    func setAnswerSource(_ id: String, enabled: Bool) {
+        change { $0.sources[id, default: MemorySourceSettings(enabled: false)].answerSource = enabled }
+    }
+
+    func updateIndexSettings(_ settings: MemoryIndexSettings) {
+        change { $0.index = settings }
+    }
+
+    func updatePrivacy(_ privacy: MemoryPrivacySettings) {
+        change { $0.privacy = privacy }
+    }
+
+    func updateAnswers(_ answers: MemoryAnswerSettings) {
+        change { $0.answers = answers }
+    }
+
+    /// Syncs one source, or every enabled one.
     func sync(_ id: String? = nil) async {
         if let id {
-            if isPushed(id) {
-                await historySync.sync(id, retentionDays: retentionDays)
-                await refresh()
-            } else {
-                await run("sources.sync", ["id": id])
+            await historySync.sync(id)
+        } else {
+            for source in sources where source.enabled && MemoryHistorySync.pausedSources[source.id] == nil {
+                await historySync.sync(source.id)
             }
-            return
-        }
-        await run("sources.sync", [:])
-        for source in sources where source.pushed && source.enabled {
-            await historySync.sync(source.id, retentionDays: retentionDays)
         }
         await refresh()
     }
 
     func forget(_ id: String) {
-        perform("sources.forget", ["id": id])
+        perform { try $0.forget(source: id) }
     }
 
+    /// Embeds every message again (after a model or settings change, or to repair the index).
     func rebuildIndex() {
-        perform("index.rebuild", [:])
-    }
-
-    func removeIndex() {
-        perform("index.remove", [:])
-    }
-
-    func cancelJob(_ id: Int) {
-        perform("jobs.cancel", ["id": id])
-    }
-
-    /// Sends changed index settings. The service validates ranges and reports what it refused.
-    func updateIndexSettings(_ settings: MemoryIndexSettings) {
-        guard let data = try? MemoryServiceClient.encoder.encode(settings),
-              let patch = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-        updateConfiguration(["index": patch])
-    }
-
-    func updatePrivacy(_ privacy: MemoryPrivacySettings) {
-        guard let data = try? MemoryServiceClient.encoder.encode(privacy),
-              let patch = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-        updateConfiguration(["privacy": patch]) {
-            await self.run("privacy.purge", [:])
-        }
+        perform { try $0.rebuildIndex() }
     }
 
     func deleteAllMemory() {
-        perform("privacy.delete_all", [:])
+        perform { try $0.deleteEverything() }
     }
 
-    private func updateConfiguration(_ patch: [String: Any], then: (@MainActor () async -> Void)? = nil) {
-        struct Reply: Decodable {
-            let config: MemoryConfiguration
-            let rejected: [String]
-        }
+    private func change(_ edit: @escaping @Sendable (inout MemoryConfiguration) -> Void, then: (@MainActor () async -> Void)? = nil) {
+        perform({ try $0.updateConfiguration(edit) }, then: then)
+    }
+
+    private func perform(_ work: @escaping @Sendable (MemoryEngine) throws -> Void, then: (@MainActor () async -> Void)? = nil) {
+        guard let engine else { return }
         Task {
             do {
-                let reply = try await client.call("config.set", params: ["patch": patch], as: Reply.self)
-                configuration = reply.config
-                rejectedSettings = reply.rejected
-                await then?()
-                await refresh()
+                try await Task.detached(priority: .userInitiated) { try work(engine) }.value
+                lastError = nil
             } catch {
                 lastError = error.localizedDescription
             }
+            await then?()
+            await refresh()
         }
     }
 
     // MARK: - Playground
 
-    /// Recently active conversations of one source, for the Playground's picker.
-    @Published private(set) var playgroundConversations: [MemoryConversation] = []
-
     func loadConversations(source: String) {
+        guard let engine else { return }
         Task {
-            playgroundConversations = (try? await client.call(
-                "conversations.list", params: ["sources": [source], "limit": 300], as: [MemoryConversation].self
-            )) ?? []
+            playgroundConversations = await Task.detached(priority: .userInitiated) {
+                engine.recentConversations(sources: [source], limit: 300)
+            }.value
         }
     }
 
-    /// Searches one exact conversation (by id, so duplicate names cannot get in the way), the way a
-    /// suggestion written there would.
+    /// Searches one exact conversation the way a suggestion written there would.
     func search(query: String, conversation: MemoryConversation) {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        var scope = MemoryEngine.Scope()
+        scope.conversation = (conversation.source, conversation.conversationId)
+        runSearch(query, scope)
+    }
+
+    /// Searches every enabled source (exploring only; suggestions never search this widely).
+    func searchEverything(query: String, sources: [String]) {
+        var scope = MemoryEngine.Scope()
+        scope.global = true
+        scope.sources = sources
+        runSearch(query, scope)
+    }
+
+    /// What an answer to `question` would draw on, from the answer sources.
+    func searchAnswers(question: String) {
+        guard let engine else { return }
+        let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        let answerSources = sources.filter { $0.enabled && $0.isAnswerSource }.map(\.id)
         isSearching = true
         Task {
-            defer { isSearching = false }
-            do {
-                playgroundResult = try await client.call(
-                    "search",
-                    params: ["query": trimmed, "scope": ["source": conversation.source, "conversation_id": conversation.conversationId]],
-                    as: MemorySearchResult.self
-                )
-                lastError = nil
-            } catch {
-                lastError = error.localizedDescription
-            }
+            playgroundResult = await Task.detached(priority: .userInitiated) {
+                engine.answerSearch(question: trimmed, sources: answerSources, currentConversation: nil, excludingRecordIDs: [])
+            }.value
+            isSearching = false
         }
     }
 
-    /// Runs one search the way a suggestion would (scoped to a conversation title within the
-    /// app's sources), or across all of memory when `global` is set.
-    func search(query: String, title: String, sources: [String], global: Bool) {
+    private func runSearch(_ query: String, _ scope: MemoryEngine.Scope) {
+        guard let engine else { return }
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             playgroundResult = nil
             return
         }
-        var scope: [String: Any] = global ? ["global": true] : ["title": title, "sources": sources]
-        if global { scope["sources"] = sources }
         isSearching = true
         Task {
-            defer { isSearching = false }
-            do {
-                playgroundResult = try await client.call(
-                    "search", params: ["query": trimmed, "scope": scope], as: MemorySearchResult.self
-                )
-                lastError = nil
-            } catch {
-                lastError = error.localizedDescription
-            }
+            playgroundResult = await Task.detached(priority: .userInitiated) {
+                engine.search(query: trimmed, scope: scope)
+            }.value
+            isSearching = false
         }
-    }
-
-    // MARK: - Plumbing
-
-    private func perform(_ method: String, _ params: [String: Any], then: (@MainActor () async -> Void)? = nil) {
-        Task {
-            await run(method, params)
-            await then?()
-        }
-    }
-
-    private func run(_ method: String, _ params: [String: Any]) async {
-        do {
-            try await client.send(method, params: params, timeout: 30)
-            lastError = nil
-        } catch {
-            lastError = error.localizedDescription
-        }
-        await refresh()
     }
 }

@@ -186,14 +186,22 @@ nonisolated final class MemoryStore: @unchecked Sendable {
 
     // MARK: - Writing
 
-    /// Inserts or replaces records (already scrubbed) and their conversations. Returns how many
-    /// messages changed; a changed message loses its vectors and terms until it is indexed again.
+    struct UpsertResult: Equatable, Sendable {
+        /// Messages inserted or changed.
+        let changed: Int
+        /// Messages that existed and changed: their vectors are gone and must leave the index too.
+        let replacedRecordIDs: [String]
+    }
+
+    /// Inserts or replaces records (already scrubbed) and their conversations. A changed message
+    /// loses its vectors and terms until it is indexed again.
     @discardableResult
-    func upsert(source: String, records: [MemoryIngestRecord]) throws -> Int {
+    func upsert(source: String, records: [MemoryIngestRecord]) throws -> UpsertResult {
         lock.lock()
         defer { lock.unlock() }
         return try database.transaction {
             var changed = 0
+            var replaced: [String] = []
             for record in records {
                 let recordID = Self.recordID(source: source, sourceMessageID: record.sourceMessageID)
                 let convKey = conversationKey(source: source, conversationID: record.conversationID)
@@ -217,12 +225,28 @@ nonisolated final class MemoryStore: @unchecked Sendable {
                             .blob(try vault.seal(record.text)), .text(textTag),
                         ]
                     )
-                    if existing != nil { try removeIndexEntries(recordIDs: [recordID]) }
+                    if existing != nil {
+                        try removeIndexEntries(recordIDs: [recordID])
+                        replaced.append(recordID)
+                    }
+                    // Keyword terms need no model, so a message is findable by its words as soon
+                    // as it is stored; vectors follow when indexing reaches it.
+                    try writeTerms(recordID: recordID, source: source, text: record.text + " " + (record.subject ?? ""))
                     changed += 1
                 }
                 try upsertConversation(source: source, record: record, conversationKey: convKey)
             }
-            return changed
+            return UpsertResult(changed: changed, replacedRecordIDs: replaced)
+        }
+    }
+
+    /// Every message must be indexed again (the passage settings changed): drops all vectors and terms.
+    func resetIndex() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        try database.transaction {
+            for table in ["vectors", "terms", "term_documents"] { try database.run("DELETE FROM \(table)") }
+            try database.run("UPDATE messages SET indexed = 0")
         }
     }
 
@@ -292,22 +316,28 @@ nonisolated final class MemoryStore: @unchecked Sendable {
                          .real(message.timestamp), .text(model), .blob(try vault.sealData(bytes))]
                     )
                 }
-                let terms = MemoryTerms.terms(message.text + " " + (message.subject ?? ""))
-                var frequency: [String: Int] = [:]
-                for term in terms { frequency[term, default: 0] += 1 }
-                for (term, count) in frequency {
-                    try database.run(
-                        "INSERT OR REPLACE INTO terms(tag, record_id, tf) VALUES (?, ?, ?)",
-                        [.text(termTag(term)), .text(message.recordID), .integer(Int64(count))]
-                    )
-                }
-                try database.run(
-                    "INSERT OR REPLACE INTO term_documents(record_id, source, length) VALUES (?, ?, ?)",
-                    [.text(message.recordID), .text(message.source), .integer(Int64(terms.count))]
-                )
+                // Rewritten here too, for messages stored before terms existed.
+                try writeTerms(recordID: message.recordID, source: message.source, text: message.text + " " + (message.subject ?? ""))
                 try database.run("UPDATE messages SET indexed = 1 WHERE record_id = ?", [.text(message.recordID)])
             }
         }
+    }
+
+    private func writeTerms(recordID: String, source: String, text: String) throws {
+        try database.run("DELETE FROM terms WHERE record_id = ?", [.text(recordID)])
+        let terms = MemoryTerms.terms(text)
+        var frequency: [String: Int] = [:]
+        for term in terms { frequency[term, default: 0] += 1 }
+        for (term, count) in frequency {
+            try database.run(
+                "INSERT OR REPLACE INTO terms(tag, record_id, tf) VALUES (?, ?, ?)",
+                [.text(termTag(term)), .text(recordID), .integer(Int64(count))]
+            )
+        }
+        try database.run(
+            "INSERT OR REPLACE INTO term_documents(record_id, source, length) VALUES (?, ?, ?)",
+            [.text(recordID), .text(source), .integer(Int64(terms.count))]
+        )
     }
 
     /// Drops every vector not made by `model` (the embedding model changed) and marks their

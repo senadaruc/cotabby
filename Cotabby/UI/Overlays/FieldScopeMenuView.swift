@@ -106,7 +106,7 @@ struct FieldScopeMenuView: View {
             // Memory's app switch is the app's memory sources (WhatsApp's for WhatsApp, Mail's for
             // Mail), so turning it on here is the same as in Settings → Memory.
             let memorySources = memoryControl.sources.filter { $0.appBundleIds.contains(target.bundleIdentifier) }
-            if !memorySources.isEmpty, memoryControl.status != nil {
+            if !memorySources.isEmpty, memoryControl.controller.state == .running {
                 featureRow(
                     title: "Memory",
                     feature: .memory,

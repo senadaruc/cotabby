@@ -46,9 +46,9 @@ final class CotabbyAppEnvironment {
     let performanceTuner: PerformanceTuner
     let qualityMetricsStore: SuggestionQualityMetricsStore
     let typingHistoryStore: TypingHistoryStore
-    /// Conversation memory: the supervisor owns the Python service process (install, start,
-    /// restart); the control model is what the Memory pane reads and acts through.
-    let memorySupervisor: MemoryServiceSupervisor
+    /// Conversation memory: the controller owns the engine's lifecycle (on/off, its embedding
+    /// model, the encryption key); the control model is what the Memory pane reads and acts through.
+    let memoryController: MemoryEngineController
     let memoryControl: MemoryControlModel
     /// Answers the suggestion pipeline's memory lookups (`SuggestionMemoryProviding`).
     let memoryRetriever: MemoryRetriever
@@ -326,21 +326,17 @@ final class CotabbyAppEnvironment {
         // "Clear History" control can reach it, and before the picker which reads and writes it.
         let emojiUsageStore = EmojiUsageStore()
 
-        // Conversation memory. Constructing the supervisor touches no process: it only reads paths
-        // and the enabled flag. `AppDelegate` starts it after launch.
-        let memorySupervisor = MemoryServiceSupervisor()
-        let memoryHistorySync = MemoryHistorySync(
-            client: memorySupervisor.client,
-            isServiceRunning: { [weak memorySupervisor] in memorySupervisor?.state == .running },
+        // Conversation memory. Constructing the controller loads nothing: it reads paths and the
+        // enabled flag. `AppDelegate` starts it after launch.
+        let memoryController = MemoryEngineController(
             isOnACPower: { [weak powerSourceMonitor] in powerSourceMonitor?.isPluggedIn ?? false }
         )
-        let memoryControl = MemoryControlModel(
-            client: memorySupervisor.client, supervisor: memorySupervisor, historySync: memoryHistorySync
+        let memoryHistorySync = MemoryHistorySync(
+            engine: { [weak memoryController] in memoryController?.engine },
+            isOnACPower: { [weak powerSourceMonitor] in powerSourceMonitor?.isPluggedIn ?? false }
         )
-        let memoryRetriever = MemoryRetriever(
-            client: memorySupervisor.client,
-            isServiceRunning: { [weak memorySupervisor] in memorySupervisor?.state == .running }
-        )
+        let memoryControl = MemoryControlModel(controller: memoryController, historySync: memoryHistorySync)
+        let memoryRetriever = MemoryRetriever(engine: { [weak memoryController] in memoryController?.engine })
 
 
         let settingsCoordinator = SettingsCoordinator(
@@ -363,7 +359,7 @@ final class CotabbyAppEnvironment {
             },
             clearEmojiHistory: { emojiUsageStore.clear() },
             typingHistoryStore: typingHistoryStore,
-            memorySupervisor: memorySupervisor,
+            memoryController: memoryController,
             memoryControl: memoryControl,
             translationPreferences: translationPreferences,
             translationService: translationService
@@ -503,7 +499,7 @@ final class CotabbyAppEnvironment {
         self.performanceMetricsStore = performanceMetricsStore
         self.qualityMetricsStore = qualityMetricsStore
         self.typingHistoryStore = typingHistoryStore
-        self.memorySupervisor = memorySupervisor
+        self.memoryController = memoryController
         self.memoryControl = memoryControl
         self.memoryRetriever = memoryRetriever
         self.modelProfileStore = modelProfileStore
@@ -565,10 +561,10 @@ final class CotabbyAppEnvironment {
     /// appears). The apply step is idempotent (`selectEngine`/`selectModel` no-op when already
     /// current), so the redundant values `@Published` replays on subscription are harmless.
     /// Extracted from `init` to keep the initializer's complexity bounded.
-    /// Pushed memory sources (WhatsApp, Mail) sync once the service is ready and every 15 minutes
-    /// on AC after that; nothing runs while memory is off or the service is down.
+    /// Memory sources sync once the engine is running and every 15 minutes on AC after that;
+    /// nothing runs while memory is off.
     private func observeMemoryService() {
-        memorySupervisor.$state
+        memoryController.$state
             .map { $0 == .running }
             .removeDuplicates()
             .sink { [weak self, weak memoryControl] running in
@@ -576,11 +572,11 @@ final class CotabbyAppEnvironment {
                 let historySync = memoryControl.historySync
                 if running {
                     historySync.refreshReadiness()
-                    historySync.startPeriodicSync { await memoryControl.enabledPushedSources() }
-                    Task { await self?.memoryRetriever.reloadSources() }
+                    historySync.startPeriodicSync()
                 } else {
                     historySync.stopPeriodicSync()
                 }
+                Task { await self?.memoryRetriever.reloadSources() }
             }
             .store(in: &cancellables)
         // Whenever the pane (or the popup) reloads the source list, the retriever's app -> sources

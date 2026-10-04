@@ -8,15 +8,14 @@ import Foundation
 /// stated once here, without AppKit, the socket or the service, and pinned by tests. The retriever
 /// (`MemoryRetriever`) only applies them.
 
-/// The conversation a field belongs to, as memory's `search` scope expects it.
+/// The conversation a field belongs to: what memory's search is scoped to.
 nonisolated struct ConversationScope: Equatable, Hashable, Sendable {
-    /// The chat name or mail subject as the app shows it; the service matches it within `sources`.
+    /// The chat name or mail subject as the app shows it; memory matches it within `sources`.
     let title: String
     /// The memory sources that serve the focused app (`whatsapp` for WhatsApp, `apple_mail` for
     /// Mail). Title matching never crosses into other apps' history.
     let sources: [String]
 
-    var jsonObject: [String: Any] { ["title": title, "sources": sources] }
 }
 
 nonisolated enum ConversationScopeResolver {
@@ -25,7 +24,7 @@ nonisolated enum ConversationScopeResolver {
     ///
     /// The title is the one per-window feature choices already use (`featureScopeWindowTitle`): the
     /// open chat's name in WhatsApp (read from its header), the window title elsewhere. In Mail a
-    /// compose window's title is the message subject ("Re: POC results"), which the service matches
+    /// compose window's title is the message subject ("Re: POC results"), which memory matches
     /// to the thread with reply prefixes removed.
     static func scope(
         bundleIdentifier: String,
