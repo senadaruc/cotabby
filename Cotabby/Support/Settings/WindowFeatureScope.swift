@@ -7,6 +7,9 @@ nonisolated enum ScopedFeature: String, Codable, CaseIterable, Sendable {
     /// Multi-line suggestions. Unlike the other two it is not an on/off gate for a whole feature but
     /// a generation option; the app layer overrides the global Settings toggle (see `resolveMultiLine`).
     case multiLine
+    /// Conversation memory: whether earlier messages of this conversation may inform suggestions.
+    /// The app layer is whether the app's memory sources are on (Settings → Memory).
+    case memory
 }
 
 /// File overview:

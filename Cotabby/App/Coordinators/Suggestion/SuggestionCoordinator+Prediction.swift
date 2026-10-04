@@ -132,7 +132,8 @@ extension SuggestionCoordinator {
             configuration: configuration,
             clipboardContext: clipboardContext,
             visualContextSummary: visualContextSummary,
-            historyExamples: historyExamples(for: context)
+            historyExamples: historyExamples(for: context),
+            memorySnippets: memorySnippets(for: context)
         )
         latestGenerationNumber = context.generation
         let request = requestBuildResult.request
@@ -303,7 +304,8 @@ extension SuggestionCoordinator {
             configuration: configuration,
             clipboardContext: clipboardContext,
             visualContextSummary: visualContextSummary,
-            historyExamples: historyExamples(for: context)
+            historyExamples: historyExamples(for: context),
+            memorySnippets: memorySnippets(for: context)
         )
         latestGenerationNumber = context.generation
         let request = requestBuildResult.request
@@ -378,7 +380,8 @@ extension SuggestionCoordinator {
             visualContextSummary: permissionManager.screenRecordingGranted
                 ? visualContextCoordinator.excerpt(for: context)
                 : nil,
-            historyExamples: historyExamples(for: context)
+            historyExamples: historyExamples(for: context),
+            memorySnippets: memorySnippets(for: context)
         )
         let request = requestBuildResult.request
         let suggestionEngine = suggestionEngine

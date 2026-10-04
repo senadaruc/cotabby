@@ -50,6 +50,8 @@ final class CotabbyAppEnvironment {
     /// restart); the control model is what the Memory pane reads and acts through.
     let memorySupervisor: MemoryServiceSupervisor
     let memoryControl: MemoryControlModel
+    /// Answers the suggestion pipeline's memory lookups (`SuggestionMemoryProviding`).
+    let memoryRetriever: MemoryRetriever
     let translationPreferences: TranslationPreferencesStore
     let translationCoordinator: TranslationCoordinator
     let settingsCoordinator: SettingsCoordinator
@@ -335,6 +337,10 @@ final class CotabbyAppEnvironment {
         let memoryControl = MemoryControlModel(
             client: memorySupervisor.client, supervisor: memorySupervisor, historySync: memoryHistorySync
         )
+        let memoryRetriever = MemoryRetriever(
+            client: memorySupervisor.client,
+            isServiceRunning: { [weak memorySupervisor] in memorySupervisor?.state == .running }
+        )
 
 
         let settingsCoordinator = SettingsCoordinator(
@@ -460,6 +466,14 @@ final class CotabbyAppEnvironment {
         suggestionCoordinator.recordAcceptedForTuning = { [weak modelProfileStore] modelKey, shownWords in
             modelProfileStore?.recordAccepted(modelKey: modelKey, shownWords: shownWords)
         }
+        memoryRetriever.windowMemoryOverride = { [weak windowFeatureOverrides] windowKey in
+            windowFeatureOverrides?.override(for: .memory, windowKey: windowKey)
+        }
+        memoryRetriever.isAllowedByTuning = { [weak performanceTuner, weak suggestionSettings] in
+            guard let performanceTuner, let suggestionSettings else { return true }
+            return performanceTuner.tuning(for: suggestionSettings.snapshot).allowsMemoryRetrieval
+        }
+        suggestionCoordinator.memoryProvider = memoryRetriever
         suggestionCoordinator.emojiInputObserver = { [weak inlineCommandCoordinator] event in
             inlineCommandCoordinator?.observe(event) ?? false
         }
@@ -491,6 +505,7 @@ final class CotabbyAppEnvironment {
         self.typingHistoryStore = typingHistoryStore
         self.memorySupervisor = memorySupervisor
         self.memoryControl = memoryControl
+        self.memoryRetriever = memoryRetriever
         self.modelProfileStore = modelProfileStore
         self.performanceConditionsMonitor = performanceConditionsMonitor
         self.performanceTuner = performanceTuner
@@ -556,15 +571,24 @@ final class CotabbyAppEnvironment {
         memorySupervisor.$state
             .map { $0 == .running }
             .removeDuplicates()
-            .sink { [weak memoryControl] running in
+            .sink { [weak self, weak memoryControl] running in
                 guard let memoryControl else { return }
                 let historySync = memoryControl.historySync
                 if running {
                     historySync.refreshReadiness()
                     historySync.startPeriodicSync { await memoryControl.enabledPushedSources() }
+                    Task { await self?.memoryRetriever.reloadSources() }
                 } else {
                     historySync.stopPeriodicSync()
                 }
+            }
+            .store(in: &cancellables)
+        // Whenever the pane (or the popup) reloads the source list, the retriever's app -> sources
+        // map follows, so switching a source on or off takes effect on the next suggestion.
+        memoryControl.$sources
+            .sink { [weak memoryRetriever] sources in
+                guard !sources.isEmpty else { return }
+                memoryRetriever?.updateSources(sources)
             }
             .store(in: &cancellables)
     }

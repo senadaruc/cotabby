@@ -108,6 +108,14 @@ final class SuggestionEngineRouter {
                     suppressionReason: "historyWithheldFromEndpoint"
                 )
             }
+            // Conversation memory is held to the same rule: private history never leaves the Mac.
+            guard request.memorySnippets.isEmpty else {
+                CotabbyLogger.suggestion.info("Withheld a request carrying conversation memory from the endpoint", metadata: metadata)
+                return SuggestionResult(
+                    generation: request.generation, rawText: "", text: "", latency: 0,
+                    suppressionReason: "memoryWithheldFromEndpoint"
+                )
+            }
             CotabbyLogger.suggestion.debug("Routing to OpenAI-compatible endpoint", metadata: metadata)
             let result = try await openAICompatibleEngine.generateSuggestion(for: request, onPartial: onPartial)
             return finish(result, request: request, engine: .openAICompatible, modelName: endpointModelNameProvider() ?? "Local Endpoint")

@@ -169,6 +169,17 @@ final class SuggestionEngineRouterRoutingTests: XCTestCase {
         XCTAssertEqual(rig.metrics.entries.first?.latencyMs, 20)
     }
 
+    func test_endpointNeverReceivesARequestCarryingConversationMemory() async throws {
+        let rig = makeRig(engine: .openAICompatible)
+
+        let result = try await rig.router.generateSuggestion(
+            for: CotabbyTestFixtures.suggestionRequest(memorySnippets: ["12 Sep · Ayşe: the invoice is paid"])
+        )
+
+        XCTAssertTrue(rig.endpoint.requests.isEmpty)
+        XCTAssertEqual(result.suppressionReason, "memoryWithheldFromEndpoint")
+    }
+
     func test_endpointNeverReceivesARequestCarryingTypingHistory() async throws {
         let rig = makeRig(engine: .openAICompatible)
 

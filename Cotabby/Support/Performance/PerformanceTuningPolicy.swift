@@ -21,6 +21,8 @@ struct PerformanceTuning: Equatable, Sendable {
     var debounceFloorMilliseconds: Int?
     var allowsVisualContext = true
     var allowsPredictAhead = true
+    /// Whether conversation memory may be looked up (an embedding pass per new query).
+    var allowsMemoryRetrieval = true
     /// The end-to-end latency the length was fitted to, or nil when length was not fitted.
     var targetLatencyMs: Int?
     /// Plain-language reasons, in order, for the Performance pane and the logs.
@@ -30,6 +32,7 @@ struct PerformanceTuning: Equatable, Sendable {
 
     var isHoldingBack: Bool {
         wordRange != nil || debounceFloorMilliseconds != nil || !allowsVisualContext || !allowsPredictAhead
+            || !allowsMemoryRetrieval
     }
 }
 
@@ -93,7 +96,9 @@ enum PerformanceTuningPolicy {
             tuning.debounceFloorMilliseconds = pressuredDebounceFloorMs
             tuning.allowsVisualContext = false
             tuning.allowsPredictAhead = false
-            tuning.reasons.append(contentsOf: ["calmer typing reaction", "screen text off", "predict-ahead paused"])
+            tuning.allowsMemoryRetrieval = false
+            tuning.reasons.append(contentsOf: ["calmer typing reaction", "screen text off", "predict-ahead paused",
+                                               "memory paused"])
         }
         return tuning
     }

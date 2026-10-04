@@ -337,11 +337,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             applicationName: snapshot.applicationName,
             windowTitle: snapshot.context?.featureScopeWindowTitle
         )
+        // The Memory row needs the current source list; load it while the popup opens.
+        Task { await environment.memoryControl.refresh() }
         let menu = FieldScopeMenuView(
             target: target,
             suggestionSettings: suggestionSettings,
             translationPreferences: environment.translationPreferences,
             windowOverrides: environment.windowFeatureOverrides,
+            memoryControl: environment.memoryControl,
             onChange: { [weak self] feature in self?.handleFieldScopeChange(feature) },
             onOpenSettings: { [weak self] in
                 self?.fieldScopeMenuController.dismiss()
@@ -359,8 +362,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             updateActivationIndicator(for: focusModel.snapshot)
         case .translation:
             environment.translationCoordinator.handleScopeChange()
-        case .multiLine:
-            // A generation option, not a gate: the next request resolves the new choice, and the
+        case .multiLine, .memory:
+            // Generation inputs, not gates: the next request resolves the new choice, and the
             // suggestion already on screen stays until typing replaces it.
             break
         }

@@ -19,6 +19,8 @@ struct FieldScopeMenuView: View {
     @ObservedObject var suggestionSettings: SuggestionSettingsModel
     @ObservedObject var translationPreferences: TranslationPreferencesStore
     @ObservedObject var windowOverrides: WindowFeatureOverrideStore
+    /// Conversation memory's sources; the Memory row appears for apps that have one.
+    @ObservedObject var memoryControl: MemoryControlModel
     let onChange: (ScopedFeature) -> Void
     let onOpenSettings: () -> Void
 
@@ -100,6 +102,26 @@ struct FieldScopeMenuView: View {
                 ),
                 isAvailable: true
             )
+
+            // Memory's app switch is the app's memory sources (WhatsApp's for WhatsApp, Mail's for
+            // Mail), so turning it on here is the same as in Settings → Memory.
+            let memorySources = memoryControl.sources.filter { $0.appBundleIds.contains(target.bundleIdentifier) }
+            if !memorySources.isEmpty, memoryControl.status != nil {
+                featureRow(
+                    title: "Memory",
+                    feature: .memory,
+                    appEnabled: Binding(
+                        get: { memorySources.contains(where: \.enabled) },
+                        set: { enabled in
+                            for source in memorySources {
+                                memoryControl.setSourceEnabled(source.id, enabled: enabled)
+                            }
+                            onChange(.memory)
+                        }
+                    ),
+                    isAvailable: true
+                )
+            }
 
             featureRow(
                 title: "Translate",

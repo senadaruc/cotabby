@@ -76,6 +76,7 @@ final class PerformanceTuningPolicyTests: XCTestCase {
         XCTAssertEqual(tuning.debounceFloorMilliseconds, PerformanceTuningPolicy.pressuredDebounceFloorMs)
         XCTAssertFalse(tuning.allowsVisualContext)
         XCTAssertFalse(tuning.allowsPredictAhead)
+        XCTAssertFalse(tuning.allowsMemoryRetrieval)
         XCTAssertEqual(tuning.reasons.first, "On battery")
     }
 

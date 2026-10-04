@@ -205,6 +205,24 @@ final class SuggestionCoordinator: ObservableObject {
         historyProvider?.historyExamples(for: context, engine: settingsSnapshot.selectedEngine) ?? []
     }
 
+    /// Conversation memory, set by `CotabbyAppEnvironment` once the memory objects exist. When a
+    /// lookup lands while nothing is on screen, a prediction is offered for the focused field so
+    /// the memory is used without waiting for the next keystroke; a visible suggestion is never
+    /// replaced by this.
+    var memoryProvider: (any SuggestionMemoryProviding)? {
+        didSet {
+            memoryProvider?.onMemoryReady = { [weak self] in
+                guard let self, self.interactionState.activeSession == nil, !self.overlayState.isVisible,
+                      let identity = self.focusModel.snapshot.context?.identity else { return }
+                self.schedulePredictionForCurrentFocusIfPossible(matching: identity)
+            }
+        }
+    }
+
+    func memorySnippets(for context: FocusedInputContext) -> [String] {
+        memoryProvider?.memorySnippets(for: context, engine: settingsSnapshot.selectedEngine) ?? []
+    }
+
     /// Pure state for recognizing a quick second press of the Accept Word key. Only real key presses
     /// feed it; the queued post-exhaustion accept stays a plain one-word accept.
     var doubleTapAcceptanceState = DoubleTapAcceptanceState()

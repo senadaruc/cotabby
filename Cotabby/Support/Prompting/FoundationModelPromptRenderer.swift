@@ -140,6 +140,15 @@ enum FoundationModelPromptRenderer {
         // The user's own earlier sentences live in the per-request prompt, not the instructions:
         // they change as the topic moves, and instructions are the cached part of Apple's session.
         // The framing says what they are for so the chat-tuned model borrows wording, not content.
+        // Earlier messages of this conversation (conversation memory), per request for the same
+        // reason as history below; framed as context to stay consistent with, not text to repeat.
+        let memory = request.memorySnippets.filter { !$0.isEmpty }
+        if !memory.isEmpty {
+            sections.append("")
+            sections.append("Earlier in this conversation (for context; stay consistent with it, do not repeat it):")
+            sections.append(contentsOf: memory)
+        }
+
         let examples = request.historyExamples.filter { !$0.isEmpty }
         if !examples.isEmpty {
             sections.append("")

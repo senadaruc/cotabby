@@ -31,6 +31,7 @@ enum BaseCompletionPromptRenderer {
         visualContextSummary: String? = nil,
         surfaceContext: SurfaceContext? = nil,
         historyExamples: [String] = [],
+        memorySnippets: [String] = [],
         usesCompactSurfaceContext: Bool = false,
         contextBudget: Int = defaultContextBudget,
         maxScreenCharacters: Int = 4000,
@@ -62,6 +63,9 @@ enum BaseCompletionPromptRenderer {
             // total budget below (priority 40), so an unusually long prefix can trim it, but in normal use
             // the whole blob lands.
             sections.append(Self.contextSection("notes", "Notes the writer keeps in mind: \(notes)", priority: 40, maxChars: 1300))
+        }
+        if let memory = Self.memorySection(memorySnippets) {
+            sections.append(memory)
         }
         if let history = Self.historySection(historyExamples) {
             sections.append(history)
@@ -175,6 +179,33 @@ enum BaseCompletionPromptRenderer {
     }
 
     private static let historyMaxCharacters = 760
+
+    /// Earlier messages of the same conversation from conversation memory. Phrased as part of the
+    /// document a base model continues (a recap of the thread), not as an instruction, and placed
+    /// just above the user's own earlier writing in priority: it is about this conversation, while
+    /// history is about the author's style. All or nothing, so a budget cut never leaves half a line
+    /// that misattributes who said what.
+    private static func memorySection(_ lines: [String]) -> PromptSection? {
+        let heading = "Earlier in this conversation:"
+        var content = heading
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            guard content.count + trimmed.count + 1 <= memoryMaxCharacters else { continue }
+            content += "\n" + trimmed
+        }
+        guard content.count > heading.count else { return nil }
+        return PromptSection(
+            name: "memory",
+            content: content,
+            priority: 39,
+            minChars: content.count,
+            maxChars: content.count,
+            truncation: .preserveStart
+        )
+    }
+
+    private static let memoryMaxCharacters = 960
 
     private static func contextSection(
         _ name: String,
