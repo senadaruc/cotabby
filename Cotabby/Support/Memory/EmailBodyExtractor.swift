@@ -13,6 +13,14 @@ nonisolated enum EmailBodyExtractor {
     /// The maximum characters of body kept. Memory only needs the gist of a message, and quoted
     /// history (stripped by the service) makes long tails mostly repetition.
     static let maximumCharacters = 6000
+    /// Email is attacker-controlled input parsed inside Cotabby, so the structure it may describe
+    /// is bounded: nesting deeper than this, or more parts than this, is not read (no legitimate
+    /// mail comes close), so a crafted message can neither overflow the stack nor stall a sync.
+    static let maximumDepth = 8
+    static let maximumParts = 64
+    /// Messages larger than this (attachments included) are skipped by the Mail reader before
+    /// being loaded at all.
+    static let maximumMessageBytes = 10 * 1024 * 1024
 
     /// Mail's `.emlx` files start with the message's byte length on its own line, followed by the
     /// raw message and an XML property list. Returns the body text, or nil when there is none.
@@ -28,8 +36,10 @@ nonisolated enum EmailBodyExtractor {
     }
 
     static func body(fromMessage message: Data) -> String? {
+        guard message.count <= maximumMessageBytes else { return nil }
         let part = MIMEPart(message)
-        guard let text = bestText(in: part) else { return nil }
+        var budget = maximumParts
+        guard let text = bestText(in: part, depth: 0, budget: &budget) else { return nil }
         let cleaned = text
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\u{00A0}", with: " ")
@@ -40,18 +50,20 @@ nonisolated enum EmailBodyExtractor {
 
     // MARK: - Choosing the text part
 
-    private static func bestText(in part: MIMEPart) -> String? {
+    private static func bestText(in part: MIMEPart, depth: Int, budget: inout Int) -> String? {
         if part.isAttachment { return nil }
         if part.mediaType.hasPrefix("multipart/") {
-            let children = part.children()
+            guard depth < maximumDepth else { return nil }
+            let children = part.children(limit: budget)
+            budget -= children.count
             if part.mediaType == "multipart/alternative" {
                 // Alternatives are ordered plainest first; prefer plain text, then HTML.
                 if let plain = children.first(where: { $0.mediaType == "text/plain" && !$0.isAttachment }) {
                     return plain.decodedText()
                 }
             }
-            for child in children {
-                if let text = bestText(in: child) { return text }
+            for child in children where budget >= 0 {
+                if let text = bestText(in: child, depth: depth + 1, budget: &budget) { return text }
             }
             return nil
         }
@@ -181,13 +193,13 @@ private nonisolated struct MIMEPart {
     /// The parts of a multipart body, split on the boundary as raw bytes. Splitting decoded text
     /// instead would mangle a part in a legacy charset (Windows-1254, ISO-8859-9) before its own
     /// charset is applied.
-    func children() -> [MIMEPart] {
+    func children(limit: Int) -> [MIMEPart] {
         guard let boundary = parameter("boundary", of: "content-type"), !boundary.isEmpty else { return [] }
         let delimiter = Data(("--" + boundary).utf8)
         var parts: [MIMEPart] = []
         var searchStart = body.startIndex
         var partStart: Data.Index?
-        while let found = body.range(of: delimiter, in: searchStart..<body.endIndex) {
+        while parts.count < limit, let found = body.range(of: delimiter, in: searchStart..<body.endIndex) {
             if let start = partStart {
                 var end = found.lowerBound
                 // The line break before a delimiter belongs to the delimiter, not the part.

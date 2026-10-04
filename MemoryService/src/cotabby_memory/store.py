@@ -396,13 +396,16 @@ class MessageStore:
 
     def conversations_seen_by(self, audience: Iterable[str], exclude: tuple[str, str] | None = None,
                               limit: int = 50) -> list[tuple[str, str]]:
-        """(source, conversation_id) pairs in which EVERY member of `audience` took part, across
+        """(source, conversation_id) pairs with EXACTLY the same people as `audience`, across
         sources, most recent first: the "same person" scope.
 
-        The rule is about who will read the suggestion. Text from another conversation may only
-        surface if everyone being written to now was in that conversation, so a suggestion never
-        repeats something to a person who was not there: writing to Ayşe can draw on a group Ayşe
-        was in, but writing to a group of Ali and Can cannot draw on a private chat with Ali.
+        The rule is about who will read the suggestion: text from another conversation may only
+        surface if the people being written to now are exactly the people who were in that one. A
+        superset rule ("everyone current was there") is not safe, because member lists do not say
+        when someone joined or left: a WhatsApp group lists members who left, and a new member never
+        saw earlier messages, so a group cannot vouch for what any one member saw. So a 1:1 with
+        Ayşe can draw on another 1:1 with Ayşe (her mail thread, say), groups only on groups with the
+        same members, and never one into the other.
         """
         tags = sorted({self._participant_tag(p) for p in audience if normalize_participant(p)})
         if not tags:
@@ -412,11 +415,11 @@ class MessageStore:
             rows = self._db.execute(
                 f"""SELECT p.source, p.conv_key FROM participants p
                     JOIN conversations c ON c.source = p.source AND c.conv_key = p.conv_key
-                    WHERE p.participant_tag IN ({placeholders})
                     GROUP BY p.source, p.conv_key
                     HAVING COUNT(DISTINCT p.participant_tag) = ?
+                       AND SUM(p.participant_tag IN ({placeholders})) = ?
                     ORDER BY MAX(c.last_timestamp) DESC LIMIT ?""",
-                (*tags, len(tags), limit),
+                (len(tags), *tags, len(tags), limit),
             ).fetchall()
         pairs = [(r["source"], self._conversation_names(r["source"], r["conv_key"])[0]) for r in rows]
         return [p for p in pairs if p != exclude]

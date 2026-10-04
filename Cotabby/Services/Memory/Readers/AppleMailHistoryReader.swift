@@ -89,7 +89,8 @@ nonisolated struct AppleMailHistoryReader: MemoryHistoryReading {
             let body: String?
             if summary.count >= 40 {
                 body = summary
-            } else if let path = files[rowid], let data = FileManager.default.contents(atPath: path) {
+            } else if let path = files[rowid], Self.fileSize(path) <= EmailBodyExtractor.maximumMessageBytes,
+                      let data = FileManager.default.contents(atPath: path) {
                 body = EmailBodyExtractor.bodyFromEmlx(data)
             } else {
                 body = nil
@@ -177,6 +178,10 @@ nonisolated struct AppleMailHistoryReader: MemoryHistoryReading {
             result.removeSubrange(range)
         }
         return result.trimmingCharacters(in: .whitespaces)
+    }
+
+    static func fileSize(_ path: String) -> Int {
+        ((try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? NSNumber)?.intValue ?? .max
     }
 
     static func displayName(address: String, comment: String?) -> String {

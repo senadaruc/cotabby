@@ -76,4 +76,15 @@ final class EmailBodyExtractorTests: XCTestCase {
     func test_numericEntities() {
         XCTAssertEqual(EmailBodyExtractor.decodeEntities("&#350;irket &#xFC;"), "Şirket ü")
     }
+
+    /// Mail is attacker-controlled: absurd nesting must be refused quickly, not recursed into.
+    func test_deeplyNestedMultipartIsRefusedWithoutRecursingForever() {
+        var raw = "Content-Type: text/plain\n\nInnermost."
+        for level in 0..<5000 {
+            raw = "Content-Type: multipart/mixed; boundary=b\(level)\n\n--b\(level)\n\(raw)\n--b\(level)--\n"
+        }
+        let started = Date()
+        XCTAssertNil(EmailBodyExtractor.body(fromMessage: Data(raw.utf8)))
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+    }
 }

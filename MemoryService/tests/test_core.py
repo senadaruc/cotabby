@@ -179,16 +179,18 @@ def test_search_stays_in_the_conversation_then_the_same_person(tmp_path: Path):
     assert [h["conversation_id"] for h in own["hits"]] == ["whatsapp-ayse"]
 
     wider = service.search({"query": "invoice September", "scope": {"title": "Ayşe", "sources": ["chat"]}, "top_k": 3})
-    assert wider["scope"] == "person"
+    assert wider["scope"] == "person"  # The invoice mail thread has exactly Ayşe, like the chat.
     assert {h["conversation_id"] for h in wider["hits"]} == {"whatsapp-ayse", "mail-ayse"}
 
 
-def test_a_group_chat_never_draws_on_a_members_private_chat(tmp_path: Path):
-    """Writing to Ali and Can together must not surface what Ali said to the user alone: Can was
-    not there. Writing to Ali alone may draw on the group, because Ali was in it."""
+def test_widening_needs_exactly_the_same_people(tmp_path: Path):
+    """Writing to Ali and Can together never surfaces Ali's private chat (Can was not there), and
+    writing to Ali alone never surfaces the group either: member lists do not record when someone
+    joined or left, so a group cannot vouch for what one member saw. Another 1:1 with Ali can."""
     service = make_service(tmp_path, [
         record("group", "the budget for the trip is fixed", title="Trip", sender="Ali", participants=("Ali", "Can")),
         record("ali", "the budget for my private project is secret", title="Ali", sender="Ali"),
+        record("ali-mail", "budget numbers attached", title="Budget", sender="Ali"),
     ])
     run_sync(service)
 
@@ -197,7 +199,7 @@ def test_a_group_chat_never_draws_on_a_members_private_chat(tmp_path: Path):
 
     with_ali = service.search({"query": "budget", "scope": {"title": "Ali", "sources": ["chat"]}, "top_k": 5})
     assert with_ali["scope"] == "person"
-    assert {h["conversation_id"] for h in with_ali["hits"]} == {"ali", "group"}
+    assert {h["conversation_id"] for h in with_ali["hits"]} == {"ali", "ali-mail"}
 
 
 def test_a_title_without_the_apps_sources_resolves_nothing(tmp_path: Path):

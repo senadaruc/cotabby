@@ -12,8 +12,8 @@ import Foundation
 /// - Conversation: the chat session's JID (`…@s.whatsapp.net` for a person, `…@g.us` for a
 ///   group), titled with the partner or group name, which is what WhatsApp's chat header shows and
 ///   what Cotabby reads from the focused window (`ConversationHeaderPolicy`).
-/// - Participants: JIDs, not names, so the memory's audience rule ("only conversations every
-///   current reader was in") matches the same person across their 1:1 chat and shared groups.
+/// - Participants: JIDs, not names, so memory's audience rule (only conversations with exactly the
+///   same people) identifies a person reliably; names are not unique and can change.
 /// - Only messages with text (including captions), from 1:1 chats and groups; status updates,
 ///   broadcasts and group system events are skipped.
 /// - Cursor: the message's Core Data primary key, which only grows.
