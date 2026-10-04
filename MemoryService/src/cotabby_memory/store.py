@@ -136,6 +136,9 @@ class MessageStore:
         self._db = sqlite3.connect(path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         os.chmod(path, 0o600)
+        # Deleted and overwritten rows are zeroed on disk instead of lingering in free pages, so a
+        # purge, an exclusion or "Delete All" actually removes the bytes.
+        self._db.execute("PRAGMA secure_delete = ON")
         with self._lock:
             self._migrate()
             self._db.executescript(_SCHEMA)
@@ -155,6 +158,10 @@ class MessageStore:
                 for table in ("messages_fts", "messages", "conversations", "participants", "cursors"):
                     self._db.execute(f"DROP TABLE IF EXISTS {table}")
                 self._db.commit()
+                # The dropped plaintext pages stay in the file's free list (and the WAL) until the
+                # file is rebuilt; VACUUM rewrites it and the checkpoint empties the WAL.
+                self._db.execute("VACUUM")
+                self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
     def _check_key(self) -> None:
         row = self._db.execute("SELECT value FROM meta WHERE key = 'key_check'").fetchone()

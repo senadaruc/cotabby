@@ -10,7 +10,10 @@ How the index stays current:
   embedding model or chunking), or when messages were deleted or edited (exclusions, retention,
   a source removed), because LEANN's HNSW backend cannot remove passages.
 
-What LEANN keeps on disk: only embeddings and ids. LEANN writes each passage's text into
+What LEANN keeps on disk: only embeddings and ids. (Embeddings are not encrypted, since LEANN
+memory-maps them; published inversion attacks can partially reconstruct text from embeddings, so
+the index folder is still protected by 0700 permissions and FileVault rather than relied on as
+ciphertext.) LEANN writes each passage's text into
 `*.passages.jsonl` and a plaintext keyword index into `*.bm25.sqlite`; after every build and
 append, `redact_passages` blanks the text, rewrites the offset table, and deletes the keyword
 index (search uses vector similarity only at the LEANN level; keyword matching runs on the
@@ -68,6 +71,21 @@ class IndexManager:
         self._searcher = None
         self._searcher_config: IndexConfig | None = None
         self._state_path = self.root / "state.json"
+        self._clean_up_after_interruption()
+
+    def _clean_up_after_interruption(self) -> None:
+        """LEANN writes passage text and a plaintext keyword index before `redact_passages` runs.
+        If the service stopped in between (a crash, a force quit mid-build), that text would stay
+        on disk, so every start removes half-finished build folders and redacts the live index
+        again (a no-op when it is already clean)."""
+        for leftover in ("building", "previous"):
+            _remove_tree(self.root / leftover)
+        if self.index_path.with_name(self.INDEX_NAME + ".meta.json").exists():
+            try:
+                redact_passages(self.index_path)
+            except Exception:  # noqa: BLE001 - a damaged index is rebuilt rather than blocking startup
+                log.exception("could not redact the index; marking it for rebuild")
+                self.mark_needs_rebuild("index files were damaged")
 
     @property
     def index_path(self) -> Path:

@@ -282,3 +282,31 @@ def test_keyword_search_matches_word_prefixes(tmp_path: Path):
     store = MessageStore(tmp_path / "m.sqlite", Vault(KEY))
     store.upsert([record("c1", "the invoice is paid"), record("c1", "lunch tomorrow")])
     assert [m.text for m in store.keyword_search("invo", [("chat", "c1")], limit=5)] == ["the invoice is paid"]
+
+
+def test_migrating_a_plaintext_store_leaves_no_plaintext_in_the_file(tmp_path: Path):
+    """A schema-1 (plaintext) store is dropped on upgrade; its pages must not linger in the file."""
+    import sqlite3
+
+    path = tmp_path / "m.sqlite"
+    old = sqlite3.connect(path)
+    old.execute("PRAGMA journal_mode = WAL")
+    old.execute("CREATE TABLE messages (record_id TEXT PRIMARY KEY, text TEXT)")
+    old.executemany("INSERT INTO messages VALUES (?, ?)", [(str(i), f"Plaintext-marker-{i} " * 20) for i in range(200)])
+    old.commit()
+    old.close()
+    MessageStore(path, Vault(KEY)).close()
+    for file in tmp_path.iterdir():
+        assert b"Plaintext-marker" not in file.read_bytes(), file.name
+
+
+def test_an_interrupted_build_leaves_no_plaintext_behind(tmp_path: Path):
+    """Text LEANN wrote before redaction (a crash mid-build) is removed on the next start."""
+    from cotabby_memory.index import IndexManager
+
+    store = MessageStore(tmp_path / "m.sqlite", Vault(KEY))
+    building = tmp_path / "indexes" / "building"
+    building.mkdir(parents=True)
+    (building / "memory.leann.passages.jsonl").write_text('{"id": "1", "text": "Leaked-marker", "metadata": {}}\n')
+    IndexManager(tmp_path, store)
+    assert not building.exists()
