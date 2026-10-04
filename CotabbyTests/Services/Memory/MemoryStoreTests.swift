@@ -67,7 +67,7 @@ final class MemoryStoreTests: XCTestCase {
         let store = try makeStore()
         XCTAssertEqual(try store.upsert(source: "chat", records: [record("c1", "original text here", id: "m1")]).changed, 1)
         let message = try XCTUnwrap(try store.unindexedMessages(sources: ["chat"], limit: 10).first)
-        try store.saveIndexEntries([(message, [("p1", [Float16](repeating: 0.5, count: 4))])], model: "m")
+        try store.saveIndexEntries([(message, [("p1", HalfPrecision.encode([0.5, 0.5, 0.5, 0.5]))])], model: "m")
         XCTAssertEqual(try store.unindexedCount(sources: ["chat"]), 0)
         XCTAssertEqual(try store.upsert(source: "chat", records: [record("c1", "original text here", id: "m1")]).changed, 0)
         XCTAssertEqual(try store.upsert(source: "chat", records: [record("c1", "edited text here", id: "m1")]).replacedRecordIDs.count, 1)
@@ -79,7 +79,7 @@ final class MemoryStoreTests: XCTestCase {
         let store = try makeStore()
         try store.upsert(source: "chat", records: [record("c1", "the invoice is paid")])
         let message = try XCTUnwrap(try store.unindexedMessages(sources: ["chat"], limit: 1).first)
-        let vector: [Float16] = [0.25, -0.5, 1, 0]
+        let vector = HalfPrecision.encode([0.25, -0.5, 1, 0])
         try store.saveIndexEntries([(message, [("p1", vector)])], model: "old-model")
         XCTAssertEqual(try store.vectors(model: "old-model").first?.vector, vector)
         XCTAssertEqual(try store.invalidateVectors(notMadeBy: "new-model"), 1)
@@ -147,7 +147,7 @@ final class MemoryStoreTests: XCTestCase {
             record("whatsapp-ayse", "the \(marker) is ready", sender: "Ayşe Yılmaz", title: "Ayşe Yılmaz", participants: ["ayse@example.com"]),
         ])
         let message = try XCTUnwrap(try store.unindexedMessages(sources: ["whatsapp"], limit: 1).first)
-        try store.saveIndexEntries([(message, [("p1", [1, 2, 3])])], model: "m")
+        try store.saveIndexEntries([(message, [("p1", HalfPrecision.encode([1, 2, 3]))])], model: "m")
         try store.setCursor("cursor-\(marker)", source: "whatsapp")
         for file in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
             let data = try Data(contentsOf: file)

@@ -69,4 +69,13 @@ final class MemoryTextRulesTests: XCTestCase {
     func test_termsAreUnicodeWordsLongerThanOneCharacter() {
         XCTAssertEqual(MemoryTerms.terms("Yarın 3'te Karaköy'de, OK?"), ["yarın", "te", "karaköy", "de", "ok"])
     }
+
+    func test_halfPrecisionRoundTripsVectorsClosely() {
+        let values: [Float] = [0.25, -0.5, 1, 0, 0.123456, -0.98765]
+        let decoded = HalfPrecision.decode(HalfPrecision.encode(values))
+        for (original, restored) in zip(values, decoded) {
+            XCTAssertEqual(original, restored, accuracy: 0.001)
+        }
+        XCTAssertEqual(HalfPrecision.encode([]), [])
+    }
 }

@@ -365,9 +365,9 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
             let slice = passages[start..<min(start + Self.passagesPerCall, passages.count)]
             vectors += try embedding.embedPassages(slice.map(\.text))
         }
-        var grouped: [Int: [(passageID: String, vector: [Float16])]] = [:]
+        var grouped: [Int: [(passageID: String, vector: [UInt16])]] = [:]
         for (passage, vector) in zip(passages, vectors) {
-            grouped[passage.message, default: []].append((passage.passageID, vector.map { Float16($0) }))
+            grouped[passage.message, default: []].append((passage.passageID, HalfPrecision.encode(vector)))
         }
         let entries = messages.enumerated().map { (message: $0.element, passages: grouped[$0.offset] ?? []) }
         try store.saveIndexEntries(entries, model: modelIdentifier)

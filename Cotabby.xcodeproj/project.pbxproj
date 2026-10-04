@@ -310,6 +310,7 @@
 		3E235B9AECC972973A94B678 /* ConfidenceSuppressionPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2F60BE5EDABE8882CA2F63B /* ConfidenceSuppressionPolicyTests.swift */; };
 		3E6BD683DA505C9737463890 /* SettingsNavigationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D1AC5EC06664F49A6AE2B17 /* SettingsNavigationModel.swift */; };
 		3E78D03ABA7141D344AB8285 /* he.txt in Resources */ = {isa = PBXBuildFile; fileRef = C9C000E46A1E404932F89C81 /* he.txt */; };
+		3E9CF4812543AE904B935909 /* HalfPrecision.swift in Sources */ = {isa = PBXBuildFile; fileRef = 762D70202F409AE373C1317D /* HalfPrecision.swift */; };
 		3EAFEEC83B25B023C606A726 /* ContextBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7B8727111208CB506C25C4F /* ContextBuffer.swift */; };
 		3F8E5F610B3AD803DDA007CC /* KeycapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF96999230079A768BEFD0FC /* KeycapView.swift */; };
 		3FA7429EE4BDE4CE0D8E7DA0 /* SuggestionQualityMetricsStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC5CD24D2FF35FD36B8D78DE /* SuggestionQualityMetricsStoreTests.swift */; };
@@ -753,6 +754,7 @@
 		9F8656C10B45DA6699A43787 /* TypefaceMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E5BA02F079AD5EB20CDB215 /* TypefaceMatcher.swift */; };
 		9FB9E31E17A569CF8DA58D31 /* PromptPrefaceEchoFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 526A242A8882769455BE163A /* PromptPrefaceEchoFilter.swift */; };
 		9FCCC213FCB5A028DD222FD3 /* GhosttyConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = C498A848A5A4C4544A6202FA /* GhosttyConfiguration.swift */; };
+		A03B942B71CAA98BCB466357 /* HalfPrecision.swift in Sources */ = {isa = PBXBuildFile; fileRef = 762D70202F409AE373C1317D /* HalfPrecision.swift */; };
 		A061CB3EEB9ABEF16CC93422 /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = AC03B99F8F0C435522D44238 /* LICENSE */; };
 		A06D86F7475984F7AD810EFC /* InputModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A29DF1C68154C21E6943D38E /* InputModels.swift */; };
 		A145F5E9E5BEC53EB46A596E /* PhrasePredictionScreenContextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74D4296C2F9A14E96AD86D7F /* PhrasePredictionScreenContextTests.swift */; };
@@ -1550,6 +1552,7 @@
 		74AB26FDFBBAC0C6375C4192 /* GhostTextColorPreset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhostTextColorPreset.swift; sourceTree = "<group>"; };
 		74D4296C2F9A14E96AD86D7F /* PhrasePredictionScreenContextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhrasePredictionScreenContextTests.swift; sourceTree = "<group>"; };
 		7513810E78F3C94FE972EB07 /* LGPL-3.0.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "LGPL-3.0.txt"; sourceTree = "<group>"; };
+		762D70202F409AE373C1317D /* HalfPrecision.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HalfPrecision.swift; sourceTree = "<group>"; };
 		76BC705A82669AEFBC704F59 /* InlinePreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlinePreviewView.swift; sourceTree = "<group>"; };
 		771EAA74003DAD7D4F3FD199 /* OnboardingTemplateFeatureListTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingTemplateFeatureListTests.swift; sourceTree = "<group>"; };
 		7736E6B390C822F91CC1DA99 /* OCRTextHygiene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OCRTextHygiene.swift; sourceTree = "<group>"; };
@@ -2907,6 +2910,7 @@
 				239F7F8DAD1C39CDC04963D7 /* ConversationScopeResolver.swift */,
 				2953826B814C4B3E589A5E38 /* EmailBodyExtractor.swift */,
 				2D2E67DBA751F7AF3F841508 /* EmbeddingSchedulePolicy.swift */,
+				762D70202F409AE373C1317D /* HalfPrecision.swift */,
 				CA63D64CD4E61EC9E09B6195 /* MemoryServicePaths.swift */,
 				F5B85621862EC5A04BDCC60C /* MemoryTextRules.swift */,
 			);
@@ -4671,6 +4675,7 @@
 				9210DC383F2D181F617A2D74 /* GhostTextPreview.swift in Sources */,
 				E9D65F5D5452B595886F43DC /* GhostWrapBandPolicy.swift in Sources */,
 				9FCCC213FCB5A028DD222FD3 /* GhosttyConfiguration.swift in Sources */,
+				3E9CF4812543AE904B935909 /* HalfPrecision.swift in Sources */,
 				31FE2E49FD1491E90B32B956 /* HardwareCapabilityProbe.swift in Sources */,
 				507E7BCCD189A64C3F8ECB79 /* HomePaneView.swift in Sources */,
 				EBE0052259FC97E5C29BD330 /* HostAdvanceFit.swift in Sources */,
@@ -5080,6 +5085,7 @@
 				C657A9C35E432D0A21D96F9F /* GhostTextPreview.swift in Sources */,
 				A974EF146F549AD4DFD11D66 /* GhostWrapBandPolicy.swift in Sources */,
 				8F5E73A575C8A4C3DF7FACAB /* GhosttyConfiguration.swift in Sources */,
+				A03B942B71CAA98BCB466357 /* HalfPrecision.swift in Sources */,
 				8D380BEC82C2969F3ED2161A /* HardwareCapabilityProbe.swift in Sources */,
 				B65B49F24F59154A7611FD22 /* HomePaneView.swift in Sources */,
 				B42C9D3DCDE6E50DC75D0342 /* HostAdvanceFit.swift in Sources */,

@@ -3,7 +3,7 @@ import Foundation
 
 /// File overview:
 /// The in-memory vector index conversation memory searches: every passage's embedding, held as
-/// Float16 rows, scored exactly against a query with Accelerate.
+/// half-precision rows (`HalfPrecision`), scored exactly against a query with Accelerate.
 ///
 /// Why an exact scan rather than an approximate graph (HNSW/USearch): memory searches are filtered
 /// (one conversation, the same people, the answer sources, never an excluded chat), and a scan
@@ -12,7 +12,7 @@ import Foundation
 /// `VectorSearching` is the seam where an approximate index can come in if the corpus outgrows a
 /// scan (around half a million passages).
 ///
-/// Memory: Float16 rows (2 KB per passage for 1024 dimensions), converted to Float32 a block at a
+/// Memory: half-precision rows (2 KB per passage for 1024 dimensions), converted to Float32 a block at a
 /// time while scoring. Nothing is written to disk here; the sealed vectors live in `MemoryStore`.
 nonisolated protocol VectorSearching: AnyObject, Sendable {
     var count: Int { get }
@@ -33,7 +33,7 @@ nonisolated final class FlatVectorIndex: VectorSearching, @unchecked Sendable {
 
     private let lock = NSLock()
     private var entries: [Entry] = []
-    private var rows: [Float16] = []
+    private var rows: [UInt16] = []
     private var rowByPassage: [String: Int] = [:]
     private(set) var dimensions: Int
 
@@ -54,7 +54,7 @@ nonisolated final class FlatVectorIndex: VectorSearching, @unchecked Sendable {
     var byteSize: Int {
         lock.lock()
         defer { lock.unlock() }
-        return rows.count * MemoryLayout<Float16>.size
+        return rows.count * MemoryLayout<UInt16>.size
     }
 
     func replaceAll(_ vectors: [MemoryStore.StoredVector]) {

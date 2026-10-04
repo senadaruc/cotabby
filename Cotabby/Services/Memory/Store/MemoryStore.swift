@@ -37,7 +37,7 @@ nonisolated final class MemoryStore: @unchecked Sendable {
         let source: String
         let conversationKey: String
         let timestamp: Double
-        let vector: [Float16]
+        let vector: [UInt16]
     }
 
     /// Keyword search decrypts at most this many of a scope's most recent messages per query.
@@ -301,7 +301,7 @@ nonisolated final class MemoryStore: @unchecked Sendable {
 
     /// Stores one message's passage vectors and keyword terms and marks it indexed, in one
     /// transaction: a message is either fully searchable or not at all.
-    func saveIndexEntries(_ entries: [(message: StoredMessage, passages: [(passageID: String, vector: [Float16])])], model: String) throws {
+    func saveIndexEntries(_ entries: [(message: StoredMessage, passages: [(passageID: String, vector: [UInt16])])], model: String) throws {
         lock.lock()
         defer { lock.unlock() }
         try database.transaction {
@@ -490,7 +490,7 @@ nonisolated final class MemoryStore: @unchecked Sendable {
             guard let passageID = row["passage_id"]?.string, let recordID = row["record_id"]?.string,
                   let source = row["source"]?.string, let convKey = row["conv_key"]?.string,
                   let sealed = row["vector"]?.data, let bytes = try? vault.openData(sealed) else { return nil }
-            let vector = bytes.withUnsafeBytes { Array($0.bindMemory(to: Float16.self)) }
+            let vector = bytes.withUnsafeBytes { Array($0.bindMemory(to: UInt16.self)) }
             return StoredVector(passageID: passageID, recordID: recordID, source: source, conversationKey: convKey,
                                 timestamp: row["timestamp"]?.double ?? 0, vector: vector)
         }
