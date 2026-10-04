@@ -56,6 +56,8 @@ class Connector(ABC):
     # focused app to sources with this list (see `sources.list`).
     app_bundle_ids: tuple[str, ...] = ()
     requirements: tuple[Requirement, ...] = ()
+    # True for sources Cotabby reads and pushes with `records.ingest` (see pushed.py).
+    pushed: bool = False
     # Option keys the pane may edit, with a short label each.
     options_schema: dict[str, str] = {}
 
@@ -78,4 +80,5 @@ class Connector(ABC):
             "app_bundle_ids": list(self.app_bundle_ids),
             "requirements": [r.__dict__ for r in self.requirements],
             "options_schema": self.options_schema,
+            "pushed": self.pushed,
         }

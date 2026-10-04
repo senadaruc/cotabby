@@ -310,3 +310,55 @@ def test_an_interrupted_build_leaves_no_plaintext_behind(tmp_path: Path):
     (building / "memory.leann.passages.jsonl").write_text('{"id": "1", "text": "Leaked-marker", "metadata": {}}\n')
     IndexManager(tmp_path, store)
     assert not building.exists()
+
+
+# MARK: - Records pushed by Cotabby
+
+
+def pushed_service(tmp_path: Path) -> MemoryService:
+    service = MemoryService(tmp_path / "data", KEY)
+    service.config.apply({"index": {"vector_weight": 0.0}, "sources": {"whatsapp": {"enabled": True}}})
+    return service
+
+
+def test_ingested_records_pass_the_same_pipeline_and_become_searchable(tmp_path: Path):
+    service = pushed_service(tmp_path)
+    result = service.records_ingest({
+        "source": "whatsapp",
+        "cursor": "42",
+        "records": [
+            {"source_message_id": "1", "conversation_id": "905551112233@s.whatsapp.net", "conversation_title": "Ayşe",
+             "sender": "Ayşe", "is_from_me": False, "timestamp": time.time(), "text": "the invoice is paid",
+             "participants": ["905551112233@s.whatsapp.net"]},
+            {"source_message_id": "2", "conversation_id": "905551112233@s.whatsapp.net", "conversation_title": "Ayşe",
+             "sender": "Ayşe", "is_from_me": False, "timestamp": time.time(), "text": "Your code is 123456"},
+        ],
+    })
+    assert (result["stored"], result["dropped"]) == (1, 1)
+    assert service.store.cursor("whatsapp") == "42"
+    hits = service.search({"query": "invoice", "scope": {"title": "Ayşe", "sources": ["whatsapp"]}})["hits"]
+    assert [h["text"] for h in hits] == ["the invoice is paid"]
+
+
+def test_mail_records_lose_their_quoted_history(tmp_path: Path):
+    service = MemoryService(tmp_path / "data", KEY)
+    service.config.apply({"index": {"vector_weight": 0.0}, "sources": {"apple_mail": {"enabled": True}}})
+    service.records_ingest({"source": "apple_mail", "records": [{
+        "source_message_id": "9", "conversation_id": "thread-1", "conversation_title": "POC results",
+        "sender": "ayse@x.com", "is_from_me": False, "timestamp": time.time(), "subject": "POC results",
+        "text": "Numbers look great.\n\nOn Mon, Can wrote:\n> please send the numbers",
+    }]})
+    assert [m.text for m in service.store.iter_messages("apple_mail")] == ["Numbers look great."]
+
+
+def test_ingest_is_refused_for_disabled_or_service_read_sources(tmp_path: Path):
+    service = MemoryService(tmp_path / "data", KEY)
+    with pytest.raises(RequestError) as disabled:
+        service.records_ingest({"source": "whatsapp", "records": []})
+    assert disabled.value.code == "source_disabled"
+    with pytest.raises(RequestError) as not_pushed:
+        service.records_ingest({"source": "documents", "records": []})
+    assert not_pushed.value.code == "not_pushed"
+    with pytest.raises(RequestError) as sync:
+        service.sources_sync({"id": "whatsapp"})
+    assert sync.value.code == "pushed_source"

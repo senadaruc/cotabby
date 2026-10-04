@@ -29,7 +29,7 @@ from .connectors.base import Connector, ConnectorError
 from .index import IndexManager
 from .jobs import Job, JobManager
 from .records import MessageRecord, normalize_participant
-from .scrub import scrub
+from .scrub import scrub, strip_mail_quotes
 from .store import Conversation, MessageStore
 from .vault import Vault
 
@@ -76,6 +76,8 @@ class MemoryService:
             "sources.configure": self.sources_configure,
             "sources.sync": self.sources_sync,
             "sources.forget": self.sources_forget,
+            "sources.cursor": lambda params: {"cursor": self.store.cursor(str(params.get("id", "")))},
+            "records.ingest": self.records_ingest,
             "jobs.list": lambda params: self.jobs.list(),
             "jobs.cancel": lambda params: {"cancelled": self.jobs.cancel(int(params.get("id", 0)))},
             "index.status": lambda params: self.index.status(self.config.index),
@@ -162,9 +164,12 @@ class MemoryService:
 
     def sources_sync(self, params: dict[str, Any]) -> dict[str, Any]:
         requested = params.get("id")
-        sources = [str(requested)] if requested else self._enabled_sources()
+        sources = [str(requested)] if requested else [
+            s for s in self._enabled_sources() if not self.connectors[s].pushed
+        ]
         for source_id in sources:
-            self._connector(source_id)
+            if self._connector(source_id).pushed:
+                raise RequestError("pushed_source", f"{source_id} is synced by Cotabby; use records.ingest.")
         title = f"Sync {', '.join(sources) or 'nothing'}"
         job = self.jobs.submit(f"sync:{','.join(sorted(sources))}", title, lambda job: self._sync(job, sources))
         return job.snapshot()
@@ -180,10 +185,7 @@ class MemoryService:
 
     def _sync(self, job: Job, sources: list[str]) -> dict[str, Any]:
         summary: dict[str, Any] = {}
-        retention = self.config.privacy.retention_days
-        since = time.time() - retention * 86400 if retention else None
-        excluded_conversations = set(self.config.privacy.excluded_conversations)
-        excluded_people = {normalize_participant(p) for p in self.config.privacy.excluded_participants}
+        since = self._retention_cutoff()
         for position, source_id in enumerate(sources):
             connector = self._connector(source_id)
             options = self.config.sources.get(source_id).options if source_id in self.config.sources else {}
@@ -198,24 +200,7 @@ class MemoryService:
             except ConnectorError as error:
                 summary[source_id] = {"error": str(error)}
                 continue
-            kept: list[MessageRecord] = []
-            dropped = 0
-            for record in result.records:
-                if record.conversation_id in excluded_conversations:
-                    dropped += 1
-                    continue
-                if excluded_people & {normalize_participant(p) for p in (*record.participants, record.sender)}:
-                    dropped += 1
-                    continue
-                if since is not None and record.timestamp < since:
-                    dropped += 1
-                    continue
-                cleaned = scrub(record.text)
-                if cleaned is None:
-                    dropped += 1
-                    continue
-                kept.append(_with_text(record, cleaned))
-            changed = self.store.upsert(kept)
+            changed, dropped = self._ingest(result.records)
             if result.cursor is not None:
                 self.store.set_cursor(source_id, result.cursor)
             summary[source_id] = {"read": len(result.records), "stored": changed, "dropped": dropped,
@@ -224,6 +209,70 @@ class MemoryService:
         summary["index"] = self.index.sync(self.config.index, self._enabled_sources(),
                                            lambda fraction, message: job.report(0.65 + 0.35 * fraction, message))
         return summary
+
+    def _retention_cutoff(self) -> float | None:
+        retention = self.config.privacy.retention_days
+        return time.time() - retention * 86400 if retention else None
+
+    def _ingest(self, records: list[MessageRecord]) -> tuple[int, int]:
+        """The pipeline every message passes, whichever side read it: exclusions, retention, mail
+        quote stripping, secret scrubbing, then the encrypted store. Returns (stored, dropped)."""
+        since = self._retention_cutoff()
+        excluded_conversations = set(self.config.privacy.excluded_conversations)
+        excluded_people = {normalize_participant(p) for p in self.config.privacy.excluded_participants}
+        kept: list[MessageRecord] = []
+        dropped = 0
+        for record in records:
+            if record.conversation_id in excluded_conversations:
+                dropped += 1
+                continue
+            if excluded_people & {normalize_participant(p) for p in (*record.participants, record.sender)}:
+                dropped += 1
+                continue
+            if since is not None and record.timestamp < since:
+                dropped += 1
+                continue
+            text = strip_mail_quotes(record.text) if record.subject is not None else record.text
+            cleaned = scrub(text)
+            if cleaned is None:
+                dropped += 1
+                continue
+            kept.append(_with_text(record, cleaned))
+        return self.store.upsert(kept), dropped
+
+    def records_ingest(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Messages Cotabby read from a protected store (see connectors/pushed.py). Batches arrive
+        in order; `cursor` is stored after the batch, and `final` queues the index update once."""
+        source_id = str(params.get("source", ""))
+        connector = self._connector(source_id)
+        if not connector.pushed:
+            raise RequestError("not_pushed", f"{source_id} is read by the memory service itself.")
+        if source_id not in self._enabled_sources():
+            raise RequestError("source_disabled", f"{source_id} is turned off.")
+        records: list[MessageRecord] = []
+        for raw in params.get("records") or []:
+            try:
+                records.append(MessageRecord(
+                    source=source_id,
+                    source_message_id=str(raw["source_message_id"]),
+                    conversation_id=str(raw["conversation_id"]),
+                    conversation_title=str(raw.get("conversation_title") or ""),
+                    sender=str(raw.get("sender") or ""),
+                    is_from_me=bool(raw.get("is_from_me")),
+                    timestamp=float(raw["timestamp"]),
+                    text=str(raw.get("text") or ""),
+                    participants=tuple(str(p) for p in raw.get("participants") or ()),
+                    subject=None if raw.get("subject") is None else str(raw["subject"]),
+                ))
+            except (KeyError, TypeError, ValueError) as error:
+                raise RequestError("bad_record", f"Malformed record: {error}") from error
+        stored, dropped = self._ingest(records)
+        if params.get("cursor") is not None:
+            self.store.set_cursor(source_id, str(params["cursor"]))
+        job = None
+        if params.get("final"):
+            job = self.jobs.submit("index", "Update index", self._index_only).snapshot()
+        return {"stored": stored, "dropped": dropped, "job": job}
 
     # MARK: - Index
 
