@@ -55,17 +55,34 @@ final class MemoryHistorySync: ObservableObject {
 
     // MARK: - Readiness
 
-    /// The file used to test for Full Disk Access: the system's privacy database, which exists on
-    /// every Mac and which macOS lets a process open only with Full Disk Access. It is opened
-    /// read-only and closed at once; nothing is read.
-    nonisolated static let fullDiskAccessProbePath =
-        NSHomeDirectory() + "/Library/Application Support/com.apple.TCC/TCC.db"
+    /// Files that only Full Disk Access opens, in the order memory needs them: Mail's index,
+    /// WhatsApp's database, then common ones every Mac with those apps has. The system privacy
+    /// database is deliberately not used: newer macOS versions protect it beyond Full Disk Access,
+    /// so it reported "not granted" while the sources were readable.
+    nonisolated static var fullDiskAccessProbePaths: [String] {
+        let home = NSHomeDirectory()
+        return [
+            home + "/Library/Mail/V10/MailData/Envelope Index",
+            WhatsAppHistoryReader.defaultDatabasePath,
+            home + "/Library/Messages/chat.db",
+            home + "/Library/Safari/Bookmarks.plist"
+        ]
+    }
 
-    nonisolated static func probeFullDiskAccess(path: String = fullDiskAccessProbePath) -> Bool {
-        let descriptor = open(path, O_RDONLY)
-        guard descriptor >= 0 else { return false }
-        close(descriptor)
-        return true
+    /// True when any protected file opens, false when one exists but macOS refuses it, nil when none
+    /// of them exist (nothing to test against). Each file is opened read-only and closed at once;
+    /// nothing is read.
+    nonisolated static func probeFullDiskAccess(paths: [String] = fullDiskAccessProbePaths) -> Bool? {
+        var refused = false
+        for path in paths {
+            let descriptor = open(path, O_RDONLY)
+            if descriptor >= 0 {
+                close(descriptor)
+                return true
+            }
+            if errno == EPERM || errno == EACCES { refused = true }
+        }
+        return refused ? false : nil
     }
 
     /// Re-checks Full Disk Access, and the sources' readiness when it changed (granting it in System

@@ -62,6 +62,10 @@ class IndexManager:
     INDEX_NAME = "memory.leann"
     # LEANN post-filters, so a scoped vector search asks for this many neighbours before filtering.
     SCOPED_OVERFETCH = 300
+    # An append embeds inside the lock that searches also take, so only small deltas are appended;
+    # larger ones (a first sync of a mailbox, tens of thousands of messages) rebuild in a side
+    # folder while searches keep using the current index. Measured: about 50 messages a second.
+    APPEND_LIMIT = 500
 
     def __init__(self, data_dir: Path, store: MessageStore):
         self.root = data_dir / "indexes"
@@ -157,6 +161,8 @@ class IndexManager:
         pending = [m for source in sources for m in self.store.iter_messages(source, only_unindexed=True)]
         if not pending:
             return {"mode": "none", "added": 0}
+        if len(pending) > self.APPEND_LIMIT:
+            return self._rebuild(config, sources, report)
         report(0.1, f"Adding {len(pending)} new messages")
         builder = self._builder(config)
         added = sum(self._add(builder, message, config) for message in pending)

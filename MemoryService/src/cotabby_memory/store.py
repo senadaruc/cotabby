@@ -394,6 +394,21 @@ class MessageStore:
         found = [self._conversation_by_key(r["source"], r["conv_key"]) for r in rows]
         return [c for c in found if c and (not wanted or c.source in wanted)]
 
+    def recent_conversations(self, sources: Iterable[str], limit: int = 200) -> list[Conversation]:
+        """The most recently active conversations of `sources` (for the Playground's picker)."""
+        wanted = list(sources)
+        if not wanted:
+            return []
+        placeholders = ",".join("?" for _ in wanted)
+        with self._lock:
+            rows = self._db.execute(
+                f"""SELECT source, conv_key FROM conversations WHERE source IN ({placeholders})
+                    ORDER BY last_timestamp DESC LIMIT ?""",
+                (*wanted, limit),
+            ).fetchall()
+        found = [self._conversation_by_key(r["source"], r["conv_key"]) for r in rows]
+        return [c for c in found if c]
+
     def conversations_seen_by(self, audience: Iterable[str], exclude: tuple[str, str] | None = None,
                               limit: int = 50) -> list[tuple[str, str]]:
         """(source, conversation_id) pairs with EXACTLY the same people as `audience`, across

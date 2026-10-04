@@ -193,6 +193,38 @@ final class MemoryControlModel: ObservableObject {
 
     // MARK: - Playground
 
+    /// Recently active conversations of one source, for the Playground's picker.
+    @Published private(set) var playgroundConversations: [MemoryConversation] = []
+
+    func loadConversations(source: String) {
+        Task {
+            playgroundConversations = (try? await client.call(
+                "conversations.list", params: ["sources": [source], "limit": 300], as: [MemoryConversation].self
+            )) ?? []
+        }
+    }
+
+    /// Searches one exact conversation (by id, so duplicate names cannot get in the way), the way a
+    /// suggestion written there would.
+    func search(query: String, conversation: MemoryConversation) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        isSearching = true
+        Task {
+            defer { isSearching = false }
+            do {
+                playgroundResult = try await client.call(
+                    "search",
+                    params: ["query": trimmed, "scope": ["source": conversation.source, "conversation_id": conversation.conversationId]],
+                    as: MemorySearchResult.self
+                )
+                lastError = nil
+            } catch {
+                lastError = error.localizedDescription
+            }
+        }
+    }
+
     /// Runs one search the way a suggestion would (scoped to a conversation title within the
     /// app's sources), or across all of memory when `global` is set.
     func search(query: String, title: String, sources: [String], global: Bool) {

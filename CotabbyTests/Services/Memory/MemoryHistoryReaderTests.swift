@@ -162,10 +162,11 @@ final class MemoryHistoryReaderTests: XCTestCase {
 
     // MARK: - Full Disk Access probe
 
-    func test_fullDiskAccessProbeIsTrueOnlyForAFileThatOpens() throws {
+    func test_fullDiskAccessProbeIsTrueForAnOpenableFileAndUnknownWhenNoneExist() throws {
         let readable = directory.appendingPathComponent("probe.db")
         try Data("x".utf8).write(to: readable)
-        XCTAssertTrue(MemoryHistorySync.probeFullDiskAccess(path: readable.path))
-        XCTAssertFalse(MemoryHistorySync.probeFullDiskAccess(path: directory.appendingPathComponent("missing.db").path))
+        let missing = directory.appendingPathComponent("missing.db").path
+        XCTAssertEqual(MemoryHistorySync.probeFullDiskAccess(paths: [missing, readable.path]), true)
+        XCTAssertNil(MemoryHistorySync.probeFullDiskAccess(paths: [missing]))
     }
 }

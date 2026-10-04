@@ -85,6 +85,7 @@ class MemoryService:
             "index.remove": self.index_remove,
             "index.warm": self.index_warm,
             "conversations.find": self.conversations_find,
+            "conversations.list": self.conversations_list,
             "search": self.search,
             "privacy.purge": self.privacy_purge,
             "privacy.delete_all": self.privacy_delete_all,
@@ -299,6 +300,13 @@ class MemoryService:
     def conversations_find(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         sources = params.get("sources") or None
         return [_conversation_json(c) for c in self.store.find_conversations(str(params.get("title", "")), sources)]
+
+    def conversations_list(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+        """Recently active conversations of the enabled sources (or the given ones), newest first."""
+        enabled = set(self._enabled_sources())
+        sources = [s for s in (params.get("sources") or enabled) if s in enabled]
+        limit = max(1, min(int(params.get("limit") or 200), 1000))
+        return [_conversation_json(c) for c in self.store.recent_conversations(sources, limit)]
 
     def _resolve(self, scope: dict[str, Any]) -> Conversation | None:
         """The conversation a request is about: by explicit id, else by its title (the chat name

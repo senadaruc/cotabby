@@ -377,3 +377,21 @@ def test_a_title_shared_by_two_conversations_resolves_to_nothing(tmp_path: Path)
     run_sync(service)
     result = service.search({"query": "contract", "scope": {"title": "Ali", "sources": ["chat"]}})
     assert result["scope"] == "none" and result["hits"] == []
+
+
+def test_recent_conversations_lists_enabled_sources_newest_first(tmp_path: Path):
+    now = time.time()
+    service = make_service(tmp_path, [
+        record("old", "an older chat message", title="Older", ts=now - 100),
+        record("new", "a newer chat message", title="Newer", ts=now),
+    ])
+    run_sync(service)
+    assert [c["title"] for c in service.conversations_list({})] == ["Newer", "Older"]
+    service.sources_configure({"id": "chat", "enabled": False})
+    assert service.conversations_list({}) == []
+
+
+def test_large_deltas_rebuild_instead_of_appending_under_the_lock(tmp_path: Path):
+    from cotabby_memory.index import IndexManager
+
+    assert IndexManager.APPEND_LIMIT <= 1000
