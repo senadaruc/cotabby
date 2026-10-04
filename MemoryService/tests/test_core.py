@@ -365,3 +365,15 @@ def test_ingest_is_refused_for_disabled_or_service_read_sources(tmp_path: Path):
     with pytest.raises(RequestError) as sync:
         service.sources_sync({"id": "whatsapp"})
     assert sync.value.code == "pushed_source"
+
+
+def test_a_title_shared_by_two_conversations_resolves_to_nothing(tmp_path: Path):
+    """Two different people both shown as "Ali": memory cannot tell which chat is open, so it
+    returns nothing rather than one Ali's messages while writing to the other."""
+    service = make_service(tmp_path, [
+        record("ali-1", "the contract is signed", title="Ali", sender="Ali One"),
+        record("ali-2", "the contract is cancelled", title="Ali", sender="Ali Two"),
+    ])
+    run_sync(service)
+    result = service.search({"query": "contract", "scope": {"title": "Ali", "sources": ["chat"]}})
+    assert result["scope"] == "none" and result["hits"] == []

@@ -315,8 +315,14 @@ class MemoryService:
             title = str(scope.get(key) or "").strip()
             if title:
                 found = self.store.find_conversations(title, sources)
-                if found:
+                # A title shared by several conversations (two contacts both shown as "Ali", two
+                # threads both called "Invoice") cannot say which one is being written in, and
+                # guessing would hand one conversation's messages to another. Ambiguous means none.
+                if len(found) == 1:
                     return found[0]
+                if len(found) > 1:
+                    log.info("title matches %d conversations; not using memory", len(found))
+                    return None
         return None
 
     def search(self, params: dict[str, Any]) -> dict[str, Any]:
