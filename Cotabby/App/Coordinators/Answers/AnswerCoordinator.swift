@@ -123,7 +123,12 @@ final class AnswerCoordinator {
 
     private func prepare(for input: FocusedInputSnapshot) async {
         let started = Date()
-        guard let incoming = await resolver.latestIncoming(for: input), isStillCurrent(input) else { return }
+        guard let incoming = await resolver.latestIncoming(for: input) else {
+            // No quoted mail, an unknown or ambiguous conversation, or the user already replied.
+            log("skipped", ["reason": "no_incoming_message", "app": input.bundleIdentifier ?? ""])
+            return
+        }
+        guard isStillCurrent(input) else { return }
         guard let question = QuestionDetector.question(in: incoming.text) else {
             log("skipped", ["reason": "no_question"])
             return
