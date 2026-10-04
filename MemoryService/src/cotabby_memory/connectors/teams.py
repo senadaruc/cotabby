@@ -42,6 +42,9 @@ SOURCE_ID = "teams"
 # app installs and recordings are thread activity, not conversation.
 _TEXT_TYPES = {"richtext/html", "text", "richtext"}
 
+# Prefix of the participant that marks a Teams group (see `records_from`).
+GROUP_MARKER = "teams-group:"
+
 # Conversation ids for Teams' own feeds (notifications, call logs), not chats.
 _SYSTEM_PREFIXES = ("48:",)
 
@@ -141,6 +144,14 @@ def records_from(conversations: list[dict[str, Any]], messages: list[dict[str, A
         people = set(chat.members) if chat and chat.members else set()
         people |= set(_one_to_one_members(conversation_id))
         people |= writers.get(conversation_id, set())
+        if not _one_to_one_members(conversation_id):
+            # Only a 1:1 chat's audience is known for certain (both ids are in its conversation
+            # id). A group's cached member list is often partial, so a group in which only Ali
+            # has written would look exactly like the 1:1 with Ali, and the "same people" scope
+            # would surface that private chat inside the group. A marker unique to the
+            # conversation keeps every group's set from equalling any other's: groups keep
+            # their own memory and never share it.
+            people.add(f"{GROUP_MARKER}{conversation_id}")
         return tuple(sorted(p for p in people if p and p != me))
 
     titles: dict[str, str] = {}

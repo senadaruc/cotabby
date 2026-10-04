@@ -84,7 +84,7 @@ def test_teams_participants_include_everyone_who_wrote_and_never_the_user():
     records, _ = teams.records_from(*fixture(), after_ms=0)
     grouped = by_conversation(records)
     assert grouped[ONE_TO_ONE][0].participants == (ALI,)
-    assert grouped[GROUP][0].participants == (ALI, VALON)
+    assert grouped[GROUP][0].participants == (ALI, VALON, teams.GROUP_MARKER + GROUP)
     assert all(r.participants == grouped[GROUP][0].participants for r in grouped[GROUP])
     assert [r.is_from_me for r in grouped[ONE_TO_ONE]] == [False, True]
 
@@ -212,3 +212,22 @@ def test_teams_and_outlook_are_listed_with_their_apps(tmp_path: Path):
     assert "com.microsoft.teams2" in listed["teams"]["app_bundle_ids"]
     assert listed["teams"]["pushed"] and listed["outlook"]["pushed"]
     assert listed["outlook"]["app_bundle_ids"] == ["com.microsoft.Outlook"]
+
+
+def test_a_group_never_shares_memory_with_a_one_to_one_even_when_only_that_person_wrote(tmp_path: Path):
+    """The cached member list of a group is often partial. A group where only Ali has written
+    (besides the user) must not count as "the same people" as the 1:1 with Ali, in either direction."""
+    conversations = [{"id": GROUP, "type": "Chat", "members": [{"id": ME}], "threadProperties": {"topic": "Ops"}}]
+    messages = [
+        message(ONE_TO_ONE, ALI, "Ali Pakkan", "my salary negotiation is private", T0 + 1_000),
+        message(GROUP, ALI, "Ali Pakkan", "the release is on Friday", T0 + 2_000),
+        message(GROUP, ME, "Senad Aruc", "thanks", T0 + 3_000),
+    ]
+    records, _ = teams.records_from(conversations, messages, {}, after_ms=0)
+    service = MemoryService(tmp_path / "data", KEY)
+    service.config.apply({"index": {"vector_weight": 0.0}, "sources": {"teams": {"enabled": True}}})
+    service.store.upsert(records)
+    in_group = service.search({"query": "salary negotiation", "scope": {"title": "Ops", "sources": ["teams"]}})
+    assert all(h["conversation_id"] == GROUP for h in in_group["hits"])
+    in_dm = service.search({"query": "release Friday", "scope": {"title": "Ali Pakkan", "sources": ["teams"]}})
+    assert all(h["conversation_id"] == ONE_TO_ONE for h in in_dm["hits"])
