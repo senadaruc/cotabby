@@ -262,8 +262,12 @@ final class MemoryServiceSupervisor: ObservableObject {
                     self.consecutiveFailures = 0
                     self.state = .running
                     CotabbyLogger.app.info("Memory service ready")
+                case .error(let code, _) where code == "busy":
+                    // The previous service (from before a relaunch) still holds the data lock while
+                    // it exits; the exit handler retries with backoff.
+                    self.state = .starting
                 case .error(let code, let message):
-                    // A startup refusal is not a crash to retry: stop the restart loop and say why.
+                    // Other startup refusals are not crashes to retry: stop the loop and say why.
                     self.stopping = true
                     self.state = code == "key_mismatch" ? .keyMismatch : .failed(message)
                 case .noReply:

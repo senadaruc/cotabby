@@ -17,9 +17,10 @@ import pytest
 KEY_LINE = json.dumps({"key": base64.b64encode(bytes(range(32))).decode()}) + "\n"
 
 
-def start(data_dir: Path, parent_pid: int, key_line: str = KEY_LINE) -> subprocess.Popen:
+def start(data_dir: Path, parent_pid: int, key_line: str = KEY_LINE, socket_path: Path | None = None) -> subprocess.Popen:
+    extra = ["--socket", str(socket_path)] if socket_path else []
     process = subprocess.Popen(
-        [sys.executable, "-m", "cotabby_memory", "--data-dir", str(data_dir), "--parent-pid", str(parent_pid)],
+        [sys.executable, "-m", "cotabby_memory", "--data-dir", str(data_dir), "--parent-pid", str(parent_pid), *extra],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
         env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")},
     )
@@ -101,12 +102,13 @@ def test_the_service_exits_with_its_parent(tmp_path):
 
 
 def test_a_stopping_service_leaves_a_newer_services_socket_alone():
-    """A relaunched Cotabby starts a new service on the same socket path while the old one is
-    still noticing its parent is gone; the old one's shutdown must not delete the new socket."""
-    data_dir = Path(tempfile.mkdtemp(prefix="cm-"))
-    old = start(data_dir, os.getpid())
-    sock_path = Path(json.loads(old.stdout.readline())["socket"])
-    new = start(data_dir, os.getpid())
+    """If a newer service has bound the socket path by the time an older one shuts down, the older
+    one must not delete it. (On one data folder the data lock already orders them; this covers a
+    shared socket path.)"""
+    sock_path = Path(tempfile.mkdtemp(prefix="cm-")) / "shared.sock"
+    old = start(Path(tempfile.mkdtemp(prefix="cm-")), os.getpid(), socket_path=sock_path)
+    assert json.loads(old.stdout.readline())["event"] == "ready"
+    new = start(Path(tempfile.mkdtemp(prefix="cm-")), os.getpid(), socket_path=sock_path)
     assert json.loads(new.stdout.readline())["event"] == "ready"
     old.terminate()
     old.wait(timeout=10)
@@ -125,3 +127,21 @@ def test_the_service_refuses_to_start_with_the_wrong_key():
     wrong = start(data_dir, os.getpid(), json.dumps({"key": base64.b64encode(bytes(32)).decode()}) + "\n")
     assert json.loads(wrong.stdout.readline())["code"] == "key_mismatch"
     assert wrong.wait(timeout=10) == 3
+
+
+def test_a_second_service_on_the_same_data_waits_for_the_first_to_exit():
+    """Two services must never write the same index: the second waits for the data lock."""
+    data_dir = Path(tempfile.mkdtemp(prefix="cm-"))
+    first = start(data_dir, os.getpid())
+    assert json.loads(first.stdout.readline())["event"] == "ready"
+    second = start(data_dir, os.getpid())
+    # The second cannot become ready while the first holds the lock...
+    import select
+    ready, _, _ = select.select([second.stdout], [], [], 1.5)
+    assert not ready
+    # ...and becomes ready as soon as the first exits.
+    first.terminate()
+    assert first.wait(timeout=10) == 0
+    assert json.loads(second.stdout.readline())["event"] == "ready"
+    second.terminate()
+    second.wait(timeout=10)

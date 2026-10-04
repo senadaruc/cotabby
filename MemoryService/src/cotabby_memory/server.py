@@ -217,6 +217,26 @@ def _process_alive(pid: int) -> bool:
     return True
 
 
+def _acquire_data_lock(data_dir: Path, timeout: float):
+    """An exclusive flock on `<data>/service.lock`, held for the process lifetime (the kernel
+    releases it when the process exits, however it exits). Returns the open file, or None if
+    another process still held it after `timeout` seconds."""
+    import fcntl
+    import time
+
+    handle = open(data_dir / "service.lock", "w")
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return handle
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                handle.close()
+                return None
+            time.sleep(0.2)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="cotabby-memory")
     parser.add_argument("--data-dir", required=True, type=Path)
@@ -228,6 +248,13 @@ def main(argv: list[str] | None = None) -> int:
     data_dir: Path = args.data_dir.expanduser()
     data_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(data_dir, 0o700)
+    # One service per data folder: a second one (Cotabby relaunched while the previous service is
+    # still exiting) waits for the lock rather than writing the same index and store concurrently.
+    lock = _acquire_data_lock(data_dir, timeout=15)
+    if lock is None:
+        print(json.dumps({"event": "error", "code": "busy",
+                          "message": "Another memory service is still using this data."}), flush=True)
+        return 4
     tail = configure_logging(data_dir, args.verbose)
     # LEANN appends every query (the user's typed text) to this file when the variable is set.
     os.environ.pop("LEANN_QUERY_LOG", None)
@@ -252,7 +279,13 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"event": "error", "message": f"Socket path too long: {socket_path}"}), flush=True)
         return 2
     asyncio.run(Server(service, socket_path, args.parent_pid).run())
-    return 0
+    logging.shutdown()
+    # Exit now, without waiting for worker threads: a job thread can be minutes into an embedding
+    # pass on the GPU, and the interpreter would otherwise wait for it while a relaunched Cotabby's
+    # new service starts on the same data. An interrupted build is discarded on the next start
+    # (`IndexManager._clean_up_after_interruption`) and store writes are SQLite transactions.
+    sys.stdout.flush()
+    os._exit(0)
 
 
 if __name__ == "__main__":
