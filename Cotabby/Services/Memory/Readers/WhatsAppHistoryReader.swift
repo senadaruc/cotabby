@@ -113,7 +113,10 @@ nonisolated struct WhatsAppHistoryReader: MemoryHistoryReading {
                 sender: sender,
                 isFromMe: isFromMe,
                 timestamp: Date(timeIntervalSince1970: appleDate + Self.appleEpochOffset),
-                text: text,
+                // Capped like mail bodies: memory needs the gist, and one enormous message must not
+                // exceed the service's request limit and stall every later sync at this cursor.
+                text: text.count > EmailBodyExtractor.maximumCharacters
+                    ? String(text.prefix(EmailBodyExtractor.maximumCharacters)) : text,
                 participants: try members(of: session, chatJID: jid, isGroup: isGroup),
                 subject: nil
             ))

@@ -49,7 +49,8 @@ final class MemoryHistoryReaderTests: XCTestCase {
             (3, 'budget is fixed', 0, 810000200, 2, 11, 'G1', 'Can P', 0),
             (4, NULL, 0, 810000300, 1, NULL, 'A3', NULL, 0),
             (5, 'Can joined', 0, 810000400, 2, NULL, 'G2', NULL, 1),
-            (6, 'my status', 1, 810000500, 3, NULL, 'S1', NULL, 0);
+            (6, 'my status', 1, 810000500, 3, NULL, 'S1', NULL, 0),
+            (7, printf('%.*c', 20000, 'x'), 0, 810000600, 1, NULL, 'A4', NULL, 0);
         """)
         return WhatsAppHistoryReader(databasePath: path)
     }
@@ -59,7 +60,8 @@ final class MemoryHistoryReaderTests: XCTestCase {
         XCTAssertEqual(reader.readiness(), .ready)
         let page = try reader.read(after: nil, since: nil, limit: 100)
 
-        XCTAssertEqual(page.records.map(\.text), ["the invoice is paid", "thanks!", "budget is fixed"])
+        XCTAssertEqual(page.records.prefix(3).map(\.text), ["the invoice is paid", "thanks!", "budget is fixed"])
+        XCTAssertEqual(page.records.last?.text.count, EmailBodyExtractor.maximumCharacters, "huge messages are capped")
         let first = page.records[0]
         XCTAssertEqual(first.conversationID, "905551112233@s.whatsapp.net")
         XCTAssertEqual(first.conversationTitle, "Ayşe")
@@ -72,7 +74,7 @@ final class MemoryHistoryReaderTests: XCTestCase {
         XCTAssertEqual(Set(group.participants), ["905551112233@s.whatsapp.net", "905559998877@s.whatsapp.net"])
         // The cursor is the last row returned; rows the query skips (no text, system events, status)
         // are simply re-checked by the next read.
-        XCTAssertEqual(page.nextCursor, "3")
+        XCTAssertEqual(page.nextCursor, "7")
         XCTAssertFalse(page.hasMore)
     }
 
@@ -81,7 +83,7 @@ final class MemoryHistoryReaderTests: XCTestCase {
         let first = try reader.read(after: nil, since: nil, limit: 2)
         XCTAssertTrue(first.hasMore)
         let rest = try reader.read(after: first.nextCursor, since: nil, limit: 10)
-        XCTAssertEqual(rest.records.map(\.text), ["budget is fixed"])
+        XCTAssertEqual(rest.records.first?.text, "budget is fixed")
     }
 
     func test_anUnrecognizedLayoutIsRefused() throws {
