@@ -12,9 +12,13 @@ import Foundation
 /// - Conversation: Mail's own thread (`conversation_id`), titled with the thread's subject without
 ///   its "Re:"/"Fwd:" prefix; the compose window's title is that subject, which is how Cotabby finds
 ///   the thread for the message being written.
-/// - From me: the sender is one of the user's own addresses, learned from what was sent from Sent
-///   mailboxes (folder names vary by provider and language, so it is the addresses that matter).
-/// - Participants: every other address on the message (sender and recipients), lowercased.
+/// - From me: the message is filed in a Sent mailbox, carries a Sent label (Gmail), or has a copy
+///   with the same Message-ID there (Gmail shows a sent message in the inbox thread too). The From
+///   address alone is not enough: anyone can write the user's address there, and a spoofed mail
+///   marked as the user's own would put words in the user's mouth when answers quote memory.
+/// - Participants: every other address on the message (sender and recipients), lowercased; the
+///   user's own addresses are the senders of Sent mail.
+/// - Junk and spam mailboxes are skipped.
 /// - Body: Mail's stored summary when present, else the `.emlx` file parsed by
 ///   `EmailBodyExtractor`. Quoted history is stripped by the service.
 /// - Cursor: the message's ROWID, which only grows.
@@ -64,12 +68,13 @@ nonisolated struct AppleMailHistoryReader: MemoryHistoryReading {
         let rows = try database.rows(
             """
             SELECT m.ROWID AS rowid, m.conversation_id AS thread, m.date_received AS received,
-                   s.subject AS subject, a.address AS sender, a.comment AS sender_name, sm.summary AS summary
+                   s.subject AS subject, a.address AS sender, a.comment AS sender_name, sm.summary AS summary,
+                   \(try Self.sentExpression(database)) AS sent
             FROM messages m
             LEFT JOIN subjects s ON s.ROWID = m.subject
             LEFT JOIN addresses a ON a.ROWID = m.sender
             LEFT JOIN summaries sm ON sm.ROWID = m.summary
-            WHERE m.ROWID > ? AND m.deleted = 0 AND m.date_received >= ?
+            WHERE m.ROWID > ? AND m.deleted = 0 AND m.date_received >= ? AND m.mailbox NOT IN (\(Self.junkMailboxes))
             ORDER BY m.ROWID LIMIT ?
             """,
             [.integer(after), .real(sinceSeconds), .integer(Int64(limit))]
@@ -104,7 +109,7 @@ nonisolated struct AppleMailHistoryReader: MemoryHistoryReading {
                 conversationID: thread,
                 conversationTitle: subject,
                 sender: Self.displayName(address: senderAddress, comment: row["sender_name"]?.string),
-                isFromMe: ownAddresses.contains(senderAddress),
+                isFromMe: row["sent"]?.int == 1,
                 timestamp: Date(timeIntervalSince1970: row["received"]?.double ?? 0),
                 text: text,
                 participants: others.sorted(),
@@ -124,13 +129,40 @@ nonisolated struct AppleMailHistoryReader: MemoryHistoryReading {
         let rows = try database.rows(
             """
             SELECT DISTINCT lower(a.address) AS address FROM messages m
-            JOIN mailboxes mb ON mb.ROWID = m.mailbox
             JOIN addresses a ON a.ROWID = m.sender
-            WHERE mb.url LIKE '%Sent%' OR mb.url LIKE '%G%C3%B6nderil%' OR mb.url LIKE '%Gesendet%'
-               OR mb.url LIKE '%Envoy%' OR mb.url LIKE '%Enviad%'
+            WHERE m.mailbox IN (\(sentMailboxes))
             """
         )
         return Set(rows.compactMap { $0["address"]?.string })
+    }
+
+    /// The ROWIDs of Sent mailboxes, by URL (percent-encoded, so "Gönderilmiş" is matched encoded).
+    static let sentMailboxes = """
+        SELECT ROWID FROM mailboxes WHERE url LIKE '%Sent%' OR url LIKE '%G%C3%B6nderil%' OR url LIKE '%Gesendet%'
+           OR url LIKE '%Envoy%' OR url LIKE '%Enviad%'
+        """
+
+    /// Junk and spam mailboxes are never read: they hold the phishing and spoofed mail memory must
+    /// not learn from ("Gereksiz", "İstenmeyen" are the Turkish names, percent-encoded in the URL).
+    static let junkMailboxes = """
+        SELECT ROWID FROM mailboxes WHERE url LIKE '%Junk%' OR url LIKE '%Spam%' OR url LIKE '%Gereksiz%'
+           OR url LIKE '%%C4%B0stenmeyen%' OR url LIKE '%Istenmeyen%'
+        """
+
+    /// SQL that is 1 when the message `m` was sent by the user. The label and Message-ID checks are
+    /// added only when this version of Mail has those columns.
+    static func sentExpression(_ database: ReadOnlySQLiteDatabase) throws -> String {
+        var checks = ["m.mailbox IN (\(sentMailboxes))"]
+        if try database.hasColumns(["message_id", "mailbox_id"], in: "labels") {
+            checks.append("EXISTS (SELECT 1 FROM labels l WHERE l.message_id = m.ROWID AND l.mailbox_id IN (\(sentMailboxes)))")
+        }
+        if try database.hasColumns(["message_id"], in: "messages") {
+            checks.append("""
+                (m.message_id <> 0 AND EXISTS (SELECT 1 FROM messages t WHERE t.message_id = m.message_id \
+                AND t.deleted = 0 AND t.mailbox IN (\(sentMailboxes))))
+                """)
+        }
+        return "(" + checks.joined(separator: " OR ") + ")"
     }
 
     static func recipients(of messages: [Int64], database: ReadOnlySQLiteDatabase) throws -> [Int64: [String]] {

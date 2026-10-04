@@ -211,7 +211,8 @@ nonisolated struct OutlookHistoryReader: MemoryHistoryReading {
             let text = (row["preview"]?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { continue }
             let senderAddress = Self.addresses(row["sender"]?.string).first ?? ""
-            let isFromMe = (row["outgoing"]?.int ?? 0) != 0 || ownAddresses.contains(senderAddress)
+            // Outlook's own outgoing flag, not the From address: anyone can put the user's address there.
+            let isFromMe = (row["outgoing"]?.int ?? 0) != 0
             let everyone = [senderAddress] + Self.addresses(row["recipients_to"]?.string) + Self.addresses(row["recipients_cc"]?.string)
             let subject = AppleMailHistoryReader.baseSubject(row["subject"]?.string ?? "")
             let senderName = (row["sender_name"]?.string ?? "").split(separator: ";").first
