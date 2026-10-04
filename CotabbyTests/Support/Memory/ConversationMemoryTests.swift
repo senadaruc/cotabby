@@ -21,6 +21,19 @@ final class ConversationMemoryTests: XCTestCase {
         XCTAssertNil(ConversationScopeResolver.scope(bundleIdentifier: "net.whatsapp.WhatsApp", conversationTitle: nil, sourcesByBundle: sources))
     }
 
+    func test_teamsWindowTitlesNameTheOpenConversation() {
+        let teams = ["com.microsoft.teams2": ["teams"]]
+        XCTAssertEqual(
+            ConversationScopeResolver.scope(bundleIdentifier: "com.microsoft.teams2",
+                                            conversationTitle: "Chat | Ali Pakkan | imperum.io | senad@imperum.io | Microsoft Teams",
+                                            sourcesByBundle: teams),
+            ConversationScope(title: "Ali Pakkan", sources: ["teams"])
+        )
+        XCTAssertEqual(ConversationScopeResolver.teamsConversationTitle("Sohbet | POC Planning | imperum.io | Microsoft Teams"), "POC Planning")
+        XCTAssertNil(ConversationScopeResolver.teamsConversationTitle("Activity | imperum.io | senad@imperum.io | Microsoft Teams"))
+        XCTAssertNil(ConversationScopeResolver.teamsConversationTitle("Microsoft Teams"))
+    }
+
     func test_queryUsesCompleteBlocksSoItStaysStableWhileTyping() {
         let scope = ConversationScope(title: "Ayşe", sources: ["whatsapp"])
         XCTAssertEqual(ConversationScopeResolver.query(precedingText: "about the", scope: scope), "Ayşe")

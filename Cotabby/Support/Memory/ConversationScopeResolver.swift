@@ -32,11 +32,38 @@ nonisolated enum ConversationScopeResolver {
         conversationTitle: String?,
         sourcesByBundle: [String: [String]]
     ) -> ConversationScope? {
+        let raw = conversationTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let named = teamsBundleIdentifiers.contains(bundleIdentifier) ? teamsConversationTitle(raw) : raw
         guard let sources = sourcesByBundle[bundleIdentifier], !sources.isEmpty,
-              let title = conversationTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty,
+              let title = named, !title.isEmpty,
               !genericTitles.contains(title.lowercased()) else { return nil }
         return ConversationScope(title: title, sources: sources)
     }
+
+    static let teamsBundleIdentifiers: Set<String> = ["com.microsoft.teams2", "com.microsoft.teams"]
+
+    /// The chat or meeting name in a Teams window title. Teams titles its window
+    /// "<view> | <conversation> | <organization> | <account> | Microsoft Teams"
+    /// ("Chat | Ali Pakkan | imperum.io | senad@imperum.io | Microsoft Teams"); the conversation is
+    /// the first part that is not the view, the app, or the signed-in account. Nil when the window
+    /// shows no conversation (only a view such as "Activity").
+    static func teamsConversationTitle(_ windowTitle: String) -> String? {
+        var parts = windowTitle.components(separatedBy: " | ")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.contains("@") && $0.lowercased() != "microsoft teams" }
+        if let first = parts.first, teamsViews.contains(first.lowercased()) {
+            parts.removeFirst()
+        }
+        // A lone remaining part with a dot and no space is the organization's domain, not a chat.
+        guard let title = parts.first, !(title.contains(".") && !title.contains(" ")) else { return nil }
+        return title
+    }
+
+    /// Teams' left-rail views, as they prefix the window title (English and Turkish).
+    static let teamsViews: Set<String> = [
+        "chat", "activity", "teams", "calendar", "calls", "files", "meet", "apps", "onedrive",
+        "sohbet", "etkinlik", "ekipler", "takvim", "aramalar", "dosyalar", "uygulamalar"
+    ]
 
     /// Window titles that name an app or an empty compose window, not a conversation.
     static let genericTitles: Set<String> = [

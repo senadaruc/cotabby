@@ -61,4 +61,10 @@ def pushed_sources() -> list[PushedSource]:
             "Mail from all accounts in the Mail app, read from its local store.",
             ("com.apple.mail",), (FULL_DISK_ACCESS,),
         ),
+        PushedSource(
+            "outlook", "Outlook",
+            "Mail from Outlook for Mac's local database (subject, people and the first lines of each "
+            "message). New Outlook stops updating it; add that account to Apple Mail for newer mail.",
+            ("com.microsoft.Outlook",), (FULL_DISK_ACCESS,),
+        ),
     ]

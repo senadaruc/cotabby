@@ -10,6 +10,12 @@ current reader took part in (`MessageStore.conversations_seen_by`). A suggestion
 repeats something to a person who was not there: not another person's chat, and not a member's
 private chat inside a group. The conversation is found by title only within the focused app's
 sources, so a same-named chat in another app is never picked.
+
+Staged imports: a few protected stores are not message rows Cotabby can page through in Swift but
+a whole cache in a format only parsed here (Teams' Chromium IndexedDB). Cotabby copies such a
+cache into `staging/<id>/` inside this service's private data folder and calls
+`records.import_staged`; the service reads the copy, ingests it like any pushed batch, and deletes
+it, also when reading fails. Leftovers from a crash are deleted at the next start.
 """
 
 from __future__ import annotations
@@ -25,8 +31,9 @@ from typing import Any
 from . import PROTOCOL_VERSION, __version__
 from .config import ConfigStore, MemoryConfig
 from .connectors import all_connectors
+from .connectors import teams
 from .connectors.base import Connector, ConnectorError
-from .index import IndexManager
+from .index import IndexManager, _remove_tree
 from .jobs import Job, JobManager
 from .records import MessageRecord, normalize_participant
 from .scrub import scrub, strip_mail_quotes
@@ -34,6 +41,17 @@ from .store import Conversation, MessageStore
 from .vault import Vault
 
 log = logging.getLogger("cotabby_memory.service")
+
+
+# Sources whose protected cache Cotabby stages for the service to parse: id -> reader taking the
+# staged folders and the cursor (ms), returning the records and the next cursor.
+STAGED_READERS: dict[str, Callable[[list[Path], float], tuple[list[MessageRecord], float]]] = {
+    teams.SOURCE_ID: teams.read_cache,
+}
+
+# How far before the cursor a staged import re-reads, so messages edited after they were imported
+# are updated (the store's upsert makes the overlap free when nothing changed).
+STAGED_LOOKBACK_MS = 2 * 86400 * 1000
 
 
 class RequestError(Exception):
@@ -60,6 +78,9 @@ class MemoryService:
         self.connectors = connectors if connectors is not None else all_connectors()
         self._log_tail = log_tail or (lambda lines: [])
         self.started_at = time.time()
+        self.staging_dir = data_dir / "staging"
+        _remove_tree(self.staging_dir)
+        self.staging_dir.mkdir(mode=0o700)
 
     def close(self) -> None:
         self.jobs.shutdown()
@@ -78,6 +99,7 @@ class MemoryService:
             "sources.forget": self.sources_forget,
             "sources.cursor": lambda params: {"cursor": self.store.cursor(str(params.get("id", "")))},
             "records.ingest": self.records_ingest,
+            "records.import_staged": self.records_import_staged,
             "jobs.list": lambda params: self.jobs.list(),
             "jobs.cancel": lambda params: {"cancelled": self.jobs.cancel(int(params.get("id", 0)))},
             "index.status": lambda params: self.index.status(self.config.index),
@@ -101,6 +123,7 @@ class MemoryService:
             "leann_version": _package_version("leann"),
             "python": platform.python_version(),
             "data_dir": str(self.data_dir),
+            "staging_dir": str(self.staging_dir),
             "uptime_seconds": round(time.time() - self.started_at, 1),
             "busy": self.jobs.busy(),
             "index": self.index.status(self.config.index),
@@ -274,6 +297,52 @@ class MemoryService:
         if params.get("final"):
             job = self.jobs.submit("index", "Update index", self._index_only).snapshot()
         return {"stored": stored, "dropped": dropped, "job": job}
+
+    def records_import_staged(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Reads a cache Cotabby copied into `staging/` (see the module docstring) as a job, then
+        deletes the copy. Only a direct child of the staging folder is accepted, so a request can
+        never make the service read, or delete, anything else."""
+        source_id = str(params.get("source", ""))
+        connector = self._connector(source_id)
+        reader = STAGED_READERS.get(source_id)
+        if reader is None or not connector.pushed:
+            raise RequestError("not_staged", f"{source_id} is not imported from a staged copy.")
+        staged = Path(str(params.get("path", "")))
+        if staged.is_symlink():
+            raise RequestError("bad_path", "Staged copies must be folders directly inside the staging folder.")
+        try:
+            resolved = staged.resolve(strict=True)
+        except (OSError, RuntimeError) as error:
+            raise RequestError("bad_path", "The staged copy does not exist.") from error
+        if resolved.parent != self.staging_dir.resolve() or not resolved.is_dir():
+            raise RequestError("bad_path", "Staged copies must be folders directly inside the staging folder.")
+        if source_id not in self._enabled_sources():
+            _remove_tree(resolved)
+            raise RequestError("source_disabled", f"{source_id} is turned off.")
+
+        def run(job: Job) -> dict[str, Any]:
+            try:
+                job.report(0.05, f"{source_id}: reading the cache")
+                folders = sorted(p for p in resolved.rglob("*.indexeddb.leveldb") if p.is_dir())
+                cursor = float(self.store.cursor(source_id) or 0)
+                try:
+                    records, newest = reader(folders, max(0.0, cursor - STAGED_LOOKBACK_MS) if cursor else 0.0)
+                except ConnectorError as error:
+                    return {source_id: {"error": str(error)}}
+            finally:
+                # The copy holds the whole cache in plaintext; it must not outlive this read.
+                _remove_tree(resolved)
+            job.report(0.5, f"{source_id}: storing {len(records)} messages")
+            stored, dropped = self._ingest(records)
+            self.store.set_cursor(source_id, repr(max(newest, cursor)))
+            # Indexing is its own job (collapsed with any index update already queued), so the
+            # import itself ends in seconds and a long embedding run never holds the copy waiting.
+            index_job = self.jobs.submit("index", "Update index", self._index_only).snapshot() if stored else None
+            return {source_id: {"read": len(records), "stored": stored, "dropped": dropped}, "index_job": index_job}
+
+        # A kind unique to this copy: the queue collapses queued jobs of the same kind, which would
+        # leave a second copy unread and undeleted.
+        return self.jobs.submit(f"import:{source_id}:{resolved.name}", f"Import {connector.title}", run).snapshot()
 
     # MARK: - Index
 

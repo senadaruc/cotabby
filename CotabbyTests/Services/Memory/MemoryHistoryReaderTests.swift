@@ -160,6 +160,104 @@ final class MemoryHistoryReaderTests: XCTestCase {
         XCTAssertEqual(MemoryHistorySync.batches([]).count, 0)
     }
 
+    // MARK: - Outlook
+
+    private func outlookFixture() throws -> OutlookHistoryReader {
+        let data = directory.appendingPathComponent("Profiles/Main Profile/Data", isDirectory: true)
+        try FileManager.default.createDirectory(at: data, withIntermediateDirectories: true)
+        try makeDatabase(data.appendingPathComponent("Outlook.sqlite").path, """
+        CREATE TABLE Mail (Record_RecordID INTEGER PRIMARY KEY, Message_NormalizedSubject TEXT, Message_SenderList TEXT,
+            Message_SenderAddressList TEXT, Message_ToRecipientAddressList TEXT, Message_CCRecipientAddressList TEXT,
+            Message_Preview TEXT, Message_TimeReceived DATETIME, Message_TimeSent DATETIME,
+            Message_IsOutgoingMessage BOOLEAN, Conversation_ConversationID INTEGER);
+        INSERT INTO Mail VALUES
+            (1, 'POC results', 'Dominique Meurisse', 'dme@imperum.io', 'senad@imperum.io; altay@imperum.io', NULL,
+             'Numbers are in, the POC passed.', 1746900000, NULL, 0, 7),
+            (2, 'RE: POC results', 'Senad Aruc', 'Senad@imperum.io', 'dme@imperum.io', 'altay@imperum.io',
+             'Great, let us send it to the client.', 1746900100, 1746900090, 1, 7),
+            (3, 'Calendar', 'Bot', 'noreply@x.com', 'senad@imperum.io', NULL, '', 1746900200, NULL, 0, 8);
+        """)
+        return OutlookHistoryReader(profilesRoot: directory.appendingPathComponent("Profiles").path)
+    }
+
+    func test_outlookReadsPreviewsAsThreadsAndKnowsWhichMailIsMine() throws {
+        let reader = try outlookFixture()
+        XCTAssertEqual(reader.readiness(), .ready)
+        let page = try reader.read(after: nil, since: nil, limit: 10)
+        XCTAssertEqual(page.records.map(\.sourceMessageID), ["1", "2"], "a message without a preview carries nothing")
+        XCTAssertEqual(page.nextCursor, "3")
+        let (received, sent) = (page.records[0], page.records[1])
+        XCTAssertEqual(received.conversationID, sent.conversationID)
+        XCTAssertEqual(sent.conversationTitle, "POC results", "reply prefixes are dropped so the thread has one title")
+        XCTAssertFalse(received.isFromMe)
+        XCTAssertTrue(sent.isFromMe)
+        XCTAssertEqual(received.sender, "Dominique Meurisse")
+        XCTAssertEqual(received.participants, ["altay@imperum.io", "dme@imperum.io"], "the user's own address is never a participant")
+        XCTAssertEqual(try reader.read(after: "3", since: nil, limit: 10).records, [])
+    }
+
+    func test_outlookWithoutALocalDatabaseIsNotFound() {
+        let reader = OutlookHistoryReader(profilesRoot: directory.appendingPathComponent("none").path)
+        if case .notFound = reader.readiness() {} else { XCTFail("expected notFound") }
+    }
+
+    // MARK: - Teams staging
+
+    private func teamsFixture() throws -> TeamsCacheStager {
+        let root = directory.appendingPathComponent("EBWebView", isDirectory: true)
+        for profile in ["WV2Profile_tfw", "WV2Profile_tfl"] {
+            let base = root.appendingPathComponent("\(profile)/IndexedDB/\(TeamsCacheStager.originFolder)")
+            let leveldb = URL(fileURLWithPath: base.path + ".leveldb")
+            try FileManager.default.createDirectory(at: leveldb, withIntermediateDirectories: true)
+            try Data("MANIFEST-000001\n".utf8).write(to: leveldb.appendingPathComponent("CURRENT"))
+            try Data("table".utf8).write(to: leveldb.appendingPathComponent("000005.ldb"))
+        }
+        // Other origins and other storage in the profile are never copied.
+        let other = root.appendingPathComponent("WV2Profile_tfw/IndexedDB/https_example.com_0.indexeddb.leveldb")
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("WV2Profile_tfw/Local Storage"), withIntermediateDirectories: true)
+        return TeamsCacheStager(webViewRoot: root.path)
+    }
+
+    func test_teamsStagingCopiesOnlyTheTeamsIndexedDBOfEachProfileIntoAPrivateFolder() throws {
+        let stager = try teamsFixture()
+        XCTAssertEqual(stager.readiness(), .ready)
+        let staging = directory.appendingPathComponent("staging", isDirectory: true)
+        let copy = try stager.stage(into: staging)
+        XCTAssertEqual(copy.deletingLastPathComponent().standardizedFileURL, staging.standardizedFileURL)
+        let copied = try FileManager.default.subpathsOfDirectory(atPath: copy.path).sorted()
+        XCTAssertEqual(copied.filter { $0.hasSuffix(".leveldb") }, [
+            "WV2Profile_tfl/\(TeamsCacheStager.originFolder).leveldb",
+            "WV2Profile_tfw/\(TeamsCacheStager.originFolder).leveldb"
+        ])
+        XCTAssertFalse(copied.contains { $0.contains("example.com") || $0.contains("Local Storage") })
+        let permissions = try FileManager.default.attributesOfItem(atPath: copy.path)[.posixPermissions] as? Int
+        XCTAssertEqual(permissions, 0o700)
+    }
+
+    func test_teamsSignatureChangesWhenTheCacheDoes() throws {
+        let stager = try teamsFixture()
+        let before = try XCTUnwrap(stager.signature())
+        XCTAssertEqual(stager.signature(), before)
+        let leveldb = directory.appendingPathComponent("EBWebView/WV2Profile_tfw/IndexedDB/\(TeamsCacheStager.originFolder).leveldb")
+        try Data("new log entry".utf8).write(to: leveldb.appendingPathComponent("000006.log"))
+        XCTAssertNotEqual(stager.signature(), before)
+    }
+
+    func test_teamsWithoutAContainerIsNotFound() {
+        let stager = TeamsCacheStager(webViewRoot: directory.appendingPathComponent("missing").path)
+        if case .notFound = stager.readiness() {} else { XCTFail("expected notFound") }
+        XCTAssertNil(stager.signature())
+    }
+
+    func test_importSummaryReadsTheJobResult() {
+        XCTAssertEqual(MemoryHistorySync.importSummary(["teams": ["stored": 12, "read": 40]], sourceID: "teams"), "Added 12 messages")
+        XCTAssertEqual(MemoryHistorySync.importSummary(["teams": ["stored": 0]], sourceID: "teams"), "Up to date")
+        XCTAssertEqual(MemoryHistorySync.importSummary(["teams": ["error": "No Teams cache was found."]], sourceID: "teams"),
+                       "No Teams cache was found.")
+        XCTAssertEqual(MemoryHistorySync.importSummary(nil, sourceID: "teams"), "Imported")
+    }
+
     // MARK: - Full Disk Access probe
 
     func test_fullDiskAccessProbeIsTrueForAnOpenableFileAndUnknownWhenNoneExist() throws {
