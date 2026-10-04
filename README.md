@@ -38,6 +38,66 @@
 
 ---
 
+## This fork: Cotabby Dev with memory and answers
+
+This is [@senadaruc](https://github.com/senadaruc)'s build of Cotabby. It adds features that are not
+(yet) in the official app. It runs as **Cotabby Dev** and can be installed next to the official
+Cotabby.
+
+**[Download the latest Cotabby Dev](https://github.com/senadaruc/cotabby/releases/latest)**: open the
+DMG and drag Cotabby Dev to Applications. The build is signed but not yet notarized, so the first
+time, macOS blocks it: open **System Settings → Privacy & Security** and click **Open Anyway**.
+After that it updates itself from this fork's releases. It never takes updates from the official
+feed, which would replace these features.
+
+### What it adds
+
+**Conversation memory**: suggestions and answers can draw on what was said before, in the same
+conversation and with the same people.
+- Reads WhatsApp, Apple Mail, Outlook (New Outlook and the classic database), Microsoft Teams'
+  local cache, your calendars, and a folder of notes you choose. Each source is opt-in.
+- Everything stays on your Mac:
+  - Messages are encrypted in Cotabby's folder.
+  - Embeddings are computed on-device with llama.cpp (Qwen3-Embedding-0.6B).
+  - Memory is never sent to a remote model endpoint.
+- Hybrid search (meaning plus exact words) with retention limits and per-person or
+  per-conversation exclusions.
+- Settings show what memory holds and how it performs: size, search latency, indexing speed. A
+  Playground lets you try a search.
+
+**Answer cards**: when a message asks you something and your reply is still empty, Cotabby drafts
+an answer from memory.
+- The draft appears on a card with the messages it is based on. **Tab** inserts it; **Esc**
+  dismisses it.
+- It only answers from facts it found. It abstains rather than guess, and treats the question as
+  untrusted text.
+- "Are you free Thursday?" is answered from your calendar, with busy and free times only, never
+  what or with whom.
+- It uses Apple Intelligence or the local model, never the remote endpoint.
+
+**Other additions** (also offered upstream as pull requests):
+- Translation of incoming messages, and of your replies.
+- Typing history that learns from what you write, with import from Cotypist.
+- Per-app settings, plus turning autocomplete and translation on or off per app or per window
+  from the field icon.
+- Double-tap the Accept Word key to accept the whole suggestion.
+- Turkish and Macedonian spelling dictionaries, and Apple Intelligence language-fallback settings.
+- Sign-in and verification fields are left alone.
+- No gray frame around the menu bar menu on macOS 27.
+
+### Building and releasing
+
+- **This version:** branch [`local/dev-build`](https://github.com/senadaruc/cotabby/tree/local/dev-build).
+- **A shareable DMG:** `scripts/build_share_dmg.sh` builds one.
+- **A release that installed copies update to:** `scripts/publish_fork_release.sh` publishes one.
+
+Everything in the official README below applies too.
+
+All credit for Cotabby itself goes to [Jacob Fu and the Cotabby team](https://github.com/FuJacob/cotabby).
+This fork follows their AGPL-3.0 license; its full source is this repository.
+
+---
+
 ## What It Does
 
 Cotabby adds AI autocomplete to almost any text field on your Mac. As you type, a gray suggestion appears inline next to your cursor. Press `Tab` to accept it a word at a time, or keep typing to ignore it.
