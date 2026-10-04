@@ -119,12 +119,33 @@ struct MemorySourcesSection: View {
                 .controlSize(.small)
                 .help("Add Cotabby to Full Disk Access so it can read \(source.title)'s local history.")
             }
+        case "calendar":
+            if historySync.readiness[source.id]?.isReady == false {
+                Button("Allow Calendar Access") { allowCalendarAccess() }
+                    .controlSize(.small)
+                    .help("Let Cotabby read your calendars. macOS asks once; after that, use System Settings.")
+            }
         default:
             if !requirement.detail.isEmpty {
                 Text("\(requirement.title): \(requirement.detail)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    /// Asks macOS for Calendar access the first time; after a refusal only System Settings can grant
+    /// it, so the button opens that pane instead. Readiness is re-checked either way.
+    private func allowCalendarAccess() {
+        guard EventKitCalendar.canAsk else {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars") {
+                NSWorkspace.shared.open(url)
+            }
+            return
+        }
+        Task {
+            _ = await EventKitCalendar.requestAccess()
+            historySync.refreshReadiness()
         }
     }
 

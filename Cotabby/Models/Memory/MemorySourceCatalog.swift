@@ -21,6 +21,11 @@ nonisolated struct MemorySourceDescriptor: Equatable, Sendable {
 }
 
 nonisolated enum MemorySourceCatalog {
+    private static let calendarAccess = MemorySource.Requirement(
+        kind: "calendar", title: "Calendar access",
+        detail: "Cotabby needs access to your calendars to remember events and check your availability."
+    )
+
     private static let fullDiskAccess = MemorySource.Requirement(
         kind: "full_disk_access", title: "Full Disk Access",
         detail: "Cotabby needs Full Disk Access to read this app's local history."
@@ -41,8 +46,8 @@ nonisolated enum MemorySourceCatalog {
         ),
         MemorySourceDescriptor(
             id: "outlook", title: "Outlook",
-            description: "Mail from Outlook for Mac's local database (subject, people and the first lines of each " +
-                "message). New Outlook stops updating it; add that account to Apple Mail for newer mail.",
+            description: "Mail from Outlook for Mac, read from its local files: New Outlook's store and the classic " +
+                "database. Mail Outlook keeps only online is not included.",
             appBundleIds: ["com.microsoft.Outlook"], requirements: [fullDiskAccess], optionsSchema: [:],
             answerSourceByDefault: true
         ),
@@ -51,6 +56,14 @@ nonisolated enum MemorySourceCatalog {
             description: "Chats, meeting chats and channels the Teams app has cached on this Mac (usually the recent " +
                 "months; older history stays in Microsoft 365).",
             appBundleIds: ["com.microsoft.teams2", "com.microsoft.teams"], requirements: [fullDiskAccess], optionsSchema: [:],
+            answerSourceByDefault: true
+        ),
+        MemorySourceDescriptor(
+            id: "calendar", title: "Calendar",
+            description: "Events from every calendar in the Calendar app, including work accounts added there: what, " +
+                "when, where and with whom, from the past year to three months ahead. Answers also check these " +
+                "calendars when someone asks when you are free.",
+            appBundleIds: ["com.apple.iCal"], requirements: [calendarAccess], optionsSchema: [:],
             answerSourceByDefault: true
         ),
         MemorySourceDescriptor(

@@ -40,7 +40,8 @@ final class MemoryHistorySync: ObservableObject {
 
     init(
         readers: [any MemoryHistoryReading] = [
-            WhatsAppHistoryReader(), AppleMailHistoryReader(), OutlookHistoryReader(), TeamsCacheReader()
+            WhatsAppHistoryReader(), AppleMailHistoryReader(), OutlookHistoryReader(), TeamsCacheReader(),
+            CalendarHistoryReader()
         ],
         engine: @escaping @MainActor () -> MemoryEngine?,
         isOnACPower: @escaping @MainActor () -> Bool
