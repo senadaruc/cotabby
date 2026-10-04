@@ -52,9 +52,13 @@ nonisolated enum HxStoreFile {
                     guard var message = HxStoreRecordParser.parse(record, now: now) else { return }
                     // The fullest version wins: one with a body over one with a preview, then the later one.
                     let rank = (message.bodyHTML?.utf8.count ?? 0) * 4 + (message.sent != nil ? 2 : 0) + (message.subject != nil ? 1 : 0)
-                    guard rank >= (best[message.messageID]?.rank ?? -1) else { return }
+                    // Versions are matched on id *and* sender. A record without its own id reads its
+                    // reply-to id instead; keyed on the id alone, a reply from anyone could replace
+                    // the message it answers.
+                    let key = versionKey(message)
+                    guard rank >= (best[key]?.rank ?? -1) else { return }
                     message.bodyHTML = nil
-                    best[message.messageID] = (message, rank, start..<(start + compressed), uncompressed)
+                    best[key] = (message, rank, start..<(start + compressed), uncompressed)
                 }
                 offset = start + compressed
             }
@@ -62,7 +66,9 @@ nonisolated enum HxStoreFile {
             // Pass 2: the winners' bodies, as text. Each conversion in its own autorelease pool, and
             // from the first part of the HTML only (enough for the kept text; a long thread's HTML
             // runs to megabytes).
-            return best.values.map { entry in
+            // A version that lost its sender is dropped when one with a sender exists for the id.
+            let sendersByID = Set(best.values.compactMap { $0.record.senderAddress == nil ? nil : $0.record.messageID })
+            return best.values.filter { $0.record.senderAddress != nil || !sendersByID.contains($0.record.messageID) }.map { entry in
                 var message = entry.record
                 guard entry.rank >= 4 else { return message }  // No body.
                 autoreleasepool {
@@ -73,6 +79,10 @@ nonisolated enum HxStoreFile {
                 return message
             }
         }
+    }
+
+    private static func versionKey(_ message: HxMailRecord) -> String {
+        message.messageID + "\u{1F}" + (message.senderAddress ?? "")
     }
 
     private static func readUInt32(_ buffer: UnsafeRawBufferPointer, _ offset: Int) -> UInt32 {

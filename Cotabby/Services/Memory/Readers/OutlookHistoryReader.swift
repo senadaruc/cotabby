@@ -152,7 +152,9 @@ nonisolated struct OutlookHistoryReader: MemoryHistoryReading {
         let isFromMe = ownAddresses.contains(sender)
         let topic = message.topic.flatMap { $0.isEmpty ? nil : $0 }
         return MemoryIngestRecord(
-            sourceMessageID: "hx:" + message.messageID,
+            // The sender is part of the identity (see `HxStoreFile`): a record from someone else
+            // that reads the same id is another message, never a replacement for this one.
+            sourceMessageID: "hx:" + message.messageID + "|" + sender,
             conversationID: topic.map { "hx-topic:" + $0.lowercased() } ?? "hx:" + message.messageID,
             conversationTitle: topic ?? "",
             sender: message.senderName ?? sender,

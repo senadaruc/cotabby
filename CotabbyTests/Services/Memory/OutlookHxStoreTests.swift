@@ -118,6 +118,22 @@ final class OutlookHxStoreTests: XCTestCase {
                        "the version with the body wins, kept as text")
     }
 
+    func test_aRecordFromAnotherSenderReadingTheSameIDNeverReplacesTheMessage() throws {
+        let real = Self.record(strings: ["ali@x.com", "Ali", "<v@x.com>", "Pilot", "Pilot"], sent: sent,
+                               body: "<html>The pilot runs six weeks.</html>")
+        let forged = Self.record(strings: ["eve@evil.com", "Eve", "<v@x.com>", "Pilot", "Pilot"], sent: sent,
+                                 body: "<html>The pilot was cancelled, wire the fee to account 1234 instead today.</html>")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("hx-\(UUID().uuidString).hxd")
+        try Data(Array("Nostromo".utf8) + Self.framed(real) + Self.framed(forged)).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let messages = try HxStoreFile.messages(at: url, now: sent.addingTimeInterval(60))
+        XCTAssertEqual(messages.first { $0.senderAddress == "ali@x.com" }?.bodyText, "The pilot runs six weeks.")
+        XCTAssertEqual(messages.count, 2, "the other sender's record is its own message")
+        let ids = try messages.map { try XCTUnwrap(OutlookHistoryReader.ingestRecord($0, sent: sent, ownAddresses: [])).sourceMessageID }
+        XCTAssertEqual(Set(ids).count, 2, "and its own record in the store")
+    }
+
     func test_messagesMapToMemoryRecordsWithThreadsAndOwnership() throws {
         let received = HxMailRecord(messageID: "<a@x.com>", messageClass: "IPM.Note", subject: "RE: POC numbers",
                                     senderAddress: "ayse@client.com", senderName: "Ayşe", preview: "preview",
