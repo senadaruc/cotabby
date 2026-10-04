@@ -95,6 +95,16 @@ final class CloudDocumentsTests: XCTestCase {
         XCTAssertEqual(try OfficeDocumentText.text(of: sheet, kind: .excel), "Customer\nTHY Airlines")
     }
 
+    /// One budget for the whole file: a deck of many slides stops at the character cap overall,
+    /// not per slide.
+    func test_aDocumentsTextBudgetCoversAllItsParts() throws {
+        let big = String(repeating: "word ", count: 40_000)  // 200,000 characters per slide
+        let slide = "<p:sld><a:p><a:r><a:t>\(big)</a:t></a:r></a:p></p:sld>"
+        let deck = Self.zip((1...6).map { ("ppt/slides/slide\($0).xml", slide) })
+        let text = try OfficeDocumentText.text(of: deck, kind: .powerPoint)
+        XCTAssertLessThanOrEqual(text.count, OfficeDocumentText.maximumCharacters)
+    }
+
     // MARK: - Sections
 
     func test_sectionsPackParagraphsAndCutLongOnesAtSentences() {

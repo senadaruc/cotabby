@@ -12,10 +12,13 @@ import Foundation
 ///   every text cell of the workbook once. Numbers are left out; they carry little meaning alone.
 ///
 /// One `XMLParser` pass per part collects the runs and starts a new line at each paragraph or item,
-/// so a slide's bullets and a document's paragraphs stay apart. The text is capped
-/// (`maximumCharacters`). Pure: bytes in, text out.
+/// so a slide's bullets and a document's paragraphs stay apart. One budget covers the whole file:
+/// the characters and line breaks kept across all its parts (`maximumCharacters`) and the bytes its
+/// parts expand to (`maximumExpandedBytes`). A crafted deck of thousands of large slides stops at the
+/// budget instead of being expanded whole. Pure: bytes in, text out.
 nonisolated enum OfficeDocumentText {
     static let maximumCharacters = 400_000
+    static let maximumExpandedBytes = 64 * 1024 * 1024
 
     enum Kind: String, CaseIterable, Sendable {
         case word = "docx"
@@ -25,24 +28,30 @@ nonisolated enum OfficeDocumentText {
 
     static func text(of data: Data, kind: Kind) throws -> String {
         let archive = try ZipArchiveReader(data: data)
-        var parts: [String] = []
+        let parts: [(name: String, text: String, breaks: Set<String>)]
         switch kind {
         case .word:
-            if let part = try archive.contents(of: "word/document.xml") {
-                parts.append(runs(in: part, text: "w:t", breaks: ["w:p", "w:br", "w:tab"]))
-            }
+            parts = [("word/document.xml", "w:t", ["w:p", "w:br", "w:tab"])]
         case .powerPoint:
-            for name in ordered(archive.names, folder: "ppt/slides/slide") + ordered(archive.names, folder: "ppt/notesSlides/notesSlide") {
-                if let part = try archive.contents(of: name) {
-                    parts.append(runs(in: part, text: "a:t", breaks: ["a:p", "a:br"]))
-                }
-            }
+            parts = (ordered(archive.names, folder: "ppt/slides/slide") + ordered(archive.names, folder: "ppt/notesSlides/notesSlide"))
+                .map { ($0, "a:t", ["a:p", "a:br"]) }
         case .excel:
-            if let part = try archive.contents(of: "xl/sharedStrings.xml") {
-                parts.append(runs(in: part, text: "t", breaks: ["si"]))
-            }
+            parts = [("xl/sharedStrings.xml", "t", ["si"])]
         }
-        let text = parts.filter { !$0.isEmpty }.joined(separator: "\n\n")
+        // One lookup table: a deck can list thousands of parts, and a search per part would be quadratic.
+        let entries = Dictionary(archive.entries.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+        var texts: [String] = []
+        var remaining = maximumCharacters
+        var expanded = 0
+        for part in parts where remaining > 0 {
+            guard let entry = entries[part.name] else { continue }
+            expanded += entry.uncompressedSize
+            guard expanded <= maximumExpandedBytes else { break }
+            let text = runs(in: try archive.contents(of: entry), text: part.text, breaks: part.breaks, limit: remaining)
+            remaining -= text.count + 2
+            if !text.isEmpty { texts.append(text) }
+        }
+        let text = texts.joined(separator: "\n\n")
         return text.count > maximumCharacters ? String(text.prefix(maximumCharacters)) : text
     }
 
@@ -56,8 +65,8 @@ nonisolated enum OfficeDocumentText {
     }
 
     /// The text of every `text` element, with a line break after each `breaks` element.
-    static func runs(in xml: Data, text: String, breaks: Set<String>) -> String {
-        let collector = RunCollector(textElement: text, breakElements: breaks)
+    static func runs(in xml: Data, text: String, breaks: Set<String>, limit: Int = maximumCharacters) -> String {
+        let collector = RunCollector(textElement: text, breakElements: breaks, limit: limit)
         let parser = XMLParser(data: xml)
         parser.shouldResolveExternalEntities = false  // Never fetch anything a document points at.
         parser.delegate = collector
@@ -70,11 +79,14 @@ nonisolated enum OfficeDocumentText {
         let breakElements: Set<String>
         private(set) var lines: [String] = [""]
         private var depth = 0
-        private var characters = 0
+        /// Characters and line breaks kept so far; parsing stops at `limit`.
+        private var used = 0
+        let limit: Int
 
-        init(textElement: String, breakElements: Set<String>) {
+        init(textElement: String, breakElements: Set<String>, limit: Int) {
             self.textElement = textElement
             self.breakElements = breakElements
+            self.limit = limit
         }
 
         func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?,
@@ -84,14 +96,19 @@ nonisolated enum OfficeDocumentText {
 
         func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
             if elementName == textElement { depth = max(0, depth - 1) }
-            if breakElements.contains(elementName) { lines.append("") }
+            // An empty line is not started twice: a run of breaks with no text costs nothing to keep.
+            if breakElements.contains(elementName), lines.last?.isEmpty == false {
+                lines.append("")
+                used += 1
+                if used > limit { parser.abortParsing() }
+            }
         }
 
         func parser(_ parser: XMLParser, foundCharacters string: String) {
             guard depth > 0 else { return }
             lines[lines.count - 1] += string
-            characters += string.count
-            if characters > OfficeDocumentText.maximumCharacters { parser.abortParsing() }
+            used += string.count
+            if used > limit { parser.abortParsing() }
         }
     }
 }
