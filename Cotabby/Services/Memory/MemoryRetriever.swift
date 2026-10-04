@@ -121,6 +121,9 @@ final class MemoryRetriever: SuggestionMemoryProviding {
             CotabbyLogger.suggestion.debug("Memory lookup", metadata: [
                 "stage": "memory",
                 "memory_ms": .stringConvertible(Int(Date().timeIntervalSince(started) * 1000)),
+                // The engine's own time; the rest of memory_ms is thread hops and waiting for the
+                // main actor.
+                "memory_engine_ms": .stringConvertible(Int(result?.elapsedMs ?? -1)),
                 "memory_hits": .stringConvertible(result?.hits.count ?? -1),
                 "memory_scope": .string(result?.scope ?? "failed")
             ])
