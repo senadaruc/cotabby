@@ -155,12 +155,7 @@ final class MemoryEngineController: ObservableObject {
                     Task.detached { engine.stop() }
                     return
                 }
-                engine.onStatusChange = { [weak self] status in
-                    Task { @MainActor in self?.status = status }
-                }
-                status = engine.status
-                self.engine = engine
-                state = .running
+                attach(engine)
             } catch MemoryVault.VaultError.keyMismatch {
                 state = .keyMismatch
             } catch {
@@ -169,18 +164,33 @@ final class MemoryEngineController: ObservableObject {
         }
     }
 
+    /// Makes a started engine the running one and mirrors its status for the pane.
+    private func attach(_ engine: MemoryEngine) {
+        // The engine reports from its own thread; the relay hops to the main actor without the
+        // callback holding the controller (a weak reference that crosses threads safely).
+        let relay = StatusRelay(controller: self)
+        engine.onStatusChange = { status in
+            Task { @MainActor in relay.controller?.status = status }
+        }
+        status = engine.status
+        self.engine = engine
+        state = .running
+    }
+
     /// What the indexing policy needs, read on the main actor (the power monitor lives there).
     private func conditionsProvider() -> @Sendable () async -> EmbeddingSchedulePolicy.Conditions {
-        { [weak self] in
+        let isOnACPower = isOnACPower
+        let isGenerating = isGenerating
+        return {
             await MainActor.run {
                 // kCGAnyInputEventType (~0): the time since any keyboard or mouse input.
                 let anyInput = CGEventType(rawValue: ~0) ?? .null
                 return EmbeddingSchedulePolicy.Conditions(
-                    isOnACPower: self?.isOnACPower() ?? false,
+                    isOnACPower: isOnACPower(),
                     isLowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
                     thermalState: ProcessInfo.processInfo.thermalState,
                     userIdleSeconds: CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInput),
-                    isGenerating: self?.isGenerating() ?? false,
+                    isGenerating: isGenerating(),
                     pendingPassages: 0
                 )
             }
@@ -196,5 +206,15 @@ final class MemoryEngineController: ObservableObject {
                 try? FileManager.default.removeItem(at: item)
             }
         }
+    }
+}
+
+/// Holds the controller weakly for the engine's status callback (see `attach`). Read only on the
+/// main actor, which is what makes the unchecked `Sendable` sound.
+private final class StatusRelay: @unchecked Sendable {
+    weak var controller: MemoryEngineController?
+
+    init(controller: MemoryEngineController) {
+        self.controller = controller
     }
 }

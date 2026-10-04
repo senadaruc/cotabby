@@ -422,6 +422,10 @@ nonisolated final class LlamaRuntimeCore: @unchecked Sendable {
                 stopReason = earlyStop.rawValue
                 break
             }
+            if !options.stopSequences.isEmpty, options.stopSequences.contains(where: { generatedText.contains($0) }) {
+                stopReason = "stop_sequence"
+                break
+            }
             if tokensGenerated >= options.maxPredictionTokens { break }
         }
 

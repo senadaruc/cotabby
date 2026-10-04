@@ -32,9 +32,9 @@ final class MemoryHistorySync: ObservableObject {
     private let isOnACPower: @MainActor () -> Bool
     private var periodicTask: Task<Void, Never>?
 
-    static let periodicInterval: UInt64 = 15 * 60
+    nonisolated static let periodicInterval: UInt64 = 15 * 60
     /// Records read per page.
-    static let pageSize = 400
+    nonisolated static let pageSize = 400
     /// Sources whose reader is not available in this version; already remembered messages stay.
     static let pausedSources: [String: String] = [
         "teams": "Sync paused while Teams reading moves into Cotabby; remembered Teams messages stay searchable.",

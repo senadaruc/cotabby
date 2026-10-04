@@ -121,6 +121,25 @@ struct FieldScopeMenuView: View {
                     ),
                     isAvailable: true
                 )
+
+                // Answers' app switch is this app's place in the answer settings' disabled list.
+                if let answers = memoryControl.configuration?.answers, answers.enabled {
+                    featureRow(
+                        title: "Answers",
+                        feature: .answers,
+                        appEnabled: Binding(
+                            get: { !answers.disabledApps.contains(target.bundleIdentifier) },
+                            set: { enabled in
+                                var updated = answers
+                                updated.disabledApps.removeAll { $0 == target.bundleIdentifier }
+                                if !enabled { updated.disabledApps.append(target.bundleIdentifier) }
+                                memoryControl.updateAnswers(updated)
+                                onChange(.answers)
+                            }
+                        ),
+                        isAvailable: true
+                    )
+                }
             }
 
             featureRow(

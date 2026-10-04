@@ -72,6 +72,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
     case memoryIndex
     case memoryPrivacy
     case memoryPlayground
+    case memoryAnswers
     // Engine & Model
     case engine
     case appleIntelligenceAvailability
@@ -175,6 +176,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .memoryIndex: return "Memory Index"
         case .memoryPrivacy: return "Memory Privacy"
         case .memoryPlayground: return "Memory Playground"
+        case .memoryAnswers: return "Answer Questions"
         case .contextLivePreview: return "Live Preview"
         case .engine: return "Engine"
         case .appleIntelligenceAvailability: return "Apple Intelligence Availability"
@@ -273,6 +275,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .memoryIndex: return "square.stack.3d.up"
         case .memoryPrivacy: return "hand.raised"
         case .memoryPlayground: return "magnifyingglass"
+        case .memoryAnswers: return "text.bubble"
         case .contextLivePreview: return "text.cursor"
         case .engine: return "cpu"
         case .appleIntelligenceAvailability: return "apple.logo"
@@ -336,7 +339,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
             return .writing
         case .extendedContext, .contextLivePreview, .typingHistory:
             return .context
-        case .memoryService, .memorySources, .memoryIndex, .memoryPrivacy, .memoryPlayground:
+        case .memoryService, .memorySources, .memoryIndex, .memoryPrivacy, .memoryPlayground, .memoryAnswers:
             return .memory
         case .translationEnabled, .translationApps, .translationLanguages:
             return .translation
@@ -418,6 +421,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .memoryIndex: return "LEANN index settings: embeddings, chunking, search."
         case .memoryPrivacy: return "Retention, exclusions, and deleting memory."
         case .memoryPlayground: return "Try what memory would retrieve for a conversation."
+        case .memoryAnswers: return "Draft answers to questions from your chat and mail history."
         case .contextLivePreview: return "A real field that exercises the full pipeline."
         case .engine: return "Apple Intelligence, bundled Open Source, or a local endpoint."
         case .appleIntelligenceAvailability: return "Whether this Mac can run Apple Intelligence."
@@ -605,11 +609,13 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .memorySources:
             return ["whatsapp", "mail", "outlook", "teams", "slack", "sources", "sync", "full disk access"]
         case .memoryIndex:
-            return ["index", "embedding", "leann", "hnsw", "diskann", "chunk", "vector", "rebuild"]
+            return ["index", "embedding", "rag", "vector", "passage", "re-index", "rebuild"]
         case .memoryPrivacy:
             return ["privacy", "retention", "exclude", "delete memory", "forget"]
         case .memoryPlayground:
             return ["playground", "search memory", "test retrieval", "rag"]
+        case .memoryAnswers:
+            return ["answer", "answers", "question", "reply", "draft", "smart reply", "respond"]
         case .extendedContext:
             return ["context", "glossary", "reference", "notes", "jargon", "instructions",
                     "memory", "background", "system prompt", "vocabulary"]

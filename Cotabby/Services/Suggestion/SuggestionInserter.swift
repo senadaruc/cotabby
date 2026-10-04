@@ -216,6 +216,15 @@ final class SuggestionInserter {
 
     private static let aKeyCode: CGKeyCode = 0x00
 
+    /// Pastes `text` at the caret, leaving everything else in the field where it is. Used by answer
+    /// drafting: in a mail reply the quoted original sits below the caret, so the answer must be
+    /// inserted, never replace the field (`replaceFieldText` would select and overwrite the quote).
+    /// Paste rather than keystrokes because an answer can be long or multi-line, and a typed line
+    /// break would send the message in a chat app. Restores the user's clipboard; never presses Return.
+    func pasteAtCaret(_ text: String) -> Bool {
+        insertViaPaste(text)
+    }
+
     /// Commits `text` by placing it on the pasteboard and synthesizing Cmd-V, then restoring the
     /// user's clipboard shortly after. Returns false (having already restored the clipboard) if any
     /// synthetic event could not be created, so the caller falls back to keystroke insertion. The

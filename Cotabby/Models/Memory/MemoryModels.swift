@@ -10,7 +10,7 @@ import Foundation
 /// what memory exposes one reviewable diff.
 
 /// How memory is searched (`config.index`).
-struct MemoryIndexSettings: Codable, Equatable, Sendable {
+nonisolated struct MemoryIndexSettings: Codable, Equatable, Sendable {
     /// Messages retrieved per lookup.
     var topK: Int = 4
     /// 1 = rank by meaning only, 0 = by shared words only.
@@ -31,7 +31,7 @@ struct MemoryIndexSettings: Codable, Equatable, Sendable {
 }
 
 /// One source's saved settings (`config.sources[id]`).
-struct MemorySourceSettings: Codable, Equatable, Sendable {
+nonisolated struct MemorySourceSettings: Codable, Equatable, Sendable {
     var enabled: Bool
     var options: [String: String]
     /// Whether answers to questions may use this source's facts; nil follows the source's default.
@@ -55,7 +55,7 @@ struct MemorySourceSettings: Codable, Equatable, Sendable {
 }
 
 /// `config.privacy`.
-struct MemoryPrivacySettings: Codable, Equatable, Sendable {
+nonisolated struct MemoryPrivacySettings: Codable, Equatable, Sendable {
     var excludedConversations: [String] = []
     var excludedParticipants: [String] = []
     /// Messages older than this many days are not stored (and are purged); 0 keeps everything.
@@ -72,10 +72,12 @@ struct MemoryPrivacySettings: Codable, Equatable, Sendable {
 }
 
 /// `config.answers`: drafting answers to questions from memory.
-struct MemoryAnswerSettings: Codable, Equatable, Sendable {
+nonisolated struct MemoryAnswerSettings: Codable, Equatable, Sendable {
     var enabled = false
     /// Similarity (0-1) the best fact must reach before a draft is offered.
     var minimumConfidence = 0.45
+    /// Apps where answers are never offered (the field icon's app switch).
+    var disabledApps: [String] = []
 
     init() {}
 
@@ -83,11 +85,12 @@ struct MemoryAnswerSettings: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
         minimumConfidence = min(max(try container.decodeIfPresent(Double.self, forKey: .minimumConfidence) ?? 0.45, 0), 1)
+        disabledApps = try container.decodeIfPresent([String].self, forKey: .disabledApps) ?? []
     }
 }
 
 /// Everything the user configures about memory.
-struct MemoryConfiguration: Codable, Equatable, Sendable {
+nonisolated struct MemoryConfiguration: Codable, Equatable, Sendable {
     var index = MemoryIndexSettings()
     var sources: [String: MemorySourceSettings] = [:]
     var privacy = MemoryPrivacySettings()
@@ -110,7 +113,7 @@ struct MemoryConfiguration: Codable, Equatable, Sendable {
 }
 
 /// One memory source as the pane shows it: what it is, its settings, and what is stored from it.
-struct MemorySource: Equatable, Identifiable, Sendable {
+nonisolated struct MemorySource: Equatable, Identifiable, Sendable {
     struct Requirement: Equatable, Sendable {
         let kind: String
         let title: String
@@ -143,7 +146,7 @@ struct MemorySource: Equatable, Identifiable, Sendable {
 }
 
 /// A conversation memory knows.
-struct MemoryConversation: Equatable, Hashable, Sendable {
+nonisolated struct MemoryConversation: Equatable, Hashable, Sendable {
     let source: String
     let conversationId: String
     let title: String
@@ -152,7 +155,7 @@ struct MemoryConversation: Equatable, Hashable, Sendable {
 }
 
 /// What memory returned for one query, and how widely it had to look.
-struct MemorySearchResult: Equatable, Sendable {
+nonisolated struct MemorySearchResult: Equatable, Sendable {
     struct Hit: Equatable, Identifiable, Sendable {
         let recordId: String
         let source: String
@@ -182,7 +185,7 @@ struct MemorySearchResult: Equatable, Sendable {
 }
 
 /// What the engine reports about its index and background work, for the pane.
-struct MemoryEngineStatus: Equatable, Sendable {
+nonisolated struct MemoryEngineStatus: Equatable, Sendable {
     /// Passages in the in-memory index.
     var passages = 0
     /// Messages stored but not yet searchable by meaning.
@@ -197,7 +200,7 @@ struct MemoryEngineStatus: Equatable, Sendable {
 }
 
 /// A JSON value of any type, for the free-form option values older settings files may hold.
-enum MemoryJSONValue: Decodable, Equatable, Sendable {
+nonisolated enum MemoryJSONValue: Decodable, Equatable, Sendable {
     case string(String)
     case number(Double)
     case bool(Bool)

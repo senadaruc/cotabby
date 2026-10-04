@@ -15,7 +15,7 @@ import Foundation
 ///
 /// `obsoleteItems` are what the earlier Python service left behind (its virtual environment, LEANN
 /// index folders, socket, logs); the engine controller deletes them once.
-struct MemoryServicePaths: Equatable, Sendable {
+nonisolated struct MemoryServicePaths: Equatable, Sendable {
     let root: URL
 
     init(root: URL) {

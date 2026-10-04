@@ -179,6 +179,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         suggestionCoordinator.start()
         inlineCommandCoordinator.start()
         environment.translationCoordinator.start()
+        environment.answerCoordinator.start()
         // Brings the memory service up only if the user switched Memory on; a no-op otherwise.
         environment.memoryController.startIfEnabled()
         welcomeCoordinator.presentIfNeeded()
@@ -269,6 +270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         environment.typingHistoryStore.flush()
         inlineCommandCoordinator.stop()
         environment.translationCoordinator.stop()
+        environment.answerCoordinator.stop()
         inputMonitor.stop()
         focusModel.stop()
 
@@ -362,6 +364,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             updateActivationIndicator(for: focusModel.snapshot)
         case .translation:
             environment.translationCoordinator.handleScopeChange()
+        case .answers:
+            environment.answerCoordinator.handleScopeChange()
         case .multiLine, .memory:
             // Generation inputs, not gates: the next request resolves the new choice, and the
             // suggestion already on screen stays until typing replaces it.

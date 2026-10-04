@@ -10,6 +10,9 @@ nonisolated enum ScopedFeature: String, Codable, CaseIterable, Sendable {
     /// Conversation memory: whether earlier messages of this conversation may inform suggestions.
     /// The app layer is whether the app's memory sources are on (Settings → Memory).
     case memory
+    /// Answers to questions drafted from memory. The app layer is the app's absence from the
+    /// answer settings' disabled list (Settings → Memory → Answer Questions).
+    case answers
 }
 
 /// File overview:

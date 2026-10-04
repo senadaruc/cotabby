@@ -210,6 +210,12 @@ struct LlamaGenerationOptions: Equatable, Sendable {
     /// is the strongest anti-rambling signal available per token, and the engine computes it while
     /// the logits row is hot, so honoring it costs nothing here.
     var stopAtArgmaxEOG: Bool = true
+
+    /// Decoding stops as soon as the generated text contains any of these strings; the text keeps
+    /// the match, which the caller trims. Used where a base model writes a turn of a transcript
+    /// (answer drafting) and must stop where the next speaker's label would begin. Empty for
+    /// autocomplete.
+    var stopSequences: [String] = []
 }
 
 /// One generation's text plus the confidence signals the caller needs for suppression accounting.

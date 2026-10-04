@@ -54,6 +54,8 @@ final class CotabbyAppEnvironment {
     let memoryRetriever: MemoryRetriever
     let translationPreferences: TranslationPreferencesStore
     let translationCoordinator: TranslationCoordinator
+    /// Drafts answers to questions from memory and offers them on a card in empty replies.
+    let answerCoordinator: AnswerCoordinator
     let settingsCoordinator: SettingsCoordinator
     let activationIndicatorController: ActivationIndicatorController
     /// Per-window Autocomplete/Translate choices made from the field icon.
@@ -337,6 +339,24 @@ final class CotabbyAppEnvironment {
         )
         let memoryControl = MemoryControlModel(controller: memoryController, historySync: memoryHistorySync)
         let memoryRetriever = MemoryRetriever(engine: { [weak memoryController] in memoryController?.engine })
+        let answerCoordinator = AnswerCoordinator(
+            focusModel: focusModel,
+            memory: memoryController,
+            resolver: IncomingMessageResolver(
+                engine: { [weak memoryController] in memoryController?.engine },
+                historySync: memoryHistorySync,
+                sourcesByBundle: { [weak memoryRetriever] in memoryRetriever?.sourcesByBundle ?? [:] }
+            ),
+            draftEngine: AnswerDraftEngine(
+                runtimeManager: runtimeManager,
+                hasLocalModel: { [weak runtimeModel] in runtimeModel?.selectedModelFilename != nil },
+                availability: foundationModelAvailabilityService
+            ),
+            card: AnswerCardController(),
+            keyTap: TemporaryKeyTap(suppressionController: suppressionController),
+            inserter: suggestionInserter,
+            windowOverrides: windowFeatureOverrides
+        )
 
 
         let settingsCoordinator = SettingsCoordinator(
@@ -469,6 +489,15 @@ final class CotabbyAppEnvironment {
             guard let performanceTuner, let suggestionSettings else { return true }
             return performanceTuner.tuning(for: suggestionSettings.snapshot).allowsMemoryRetrieval
         }
+        answerCoordinator.isAllowedByTuning = { [weak performanceTuner, weak suggestionSettings] in
+            guard let performanceTuner, let suggestionSettings else { return true }
+            let settings = suggestionSettings.snapshot
+            return performanceTuner.tuning(for: settings).allowsMemoryRetrieval
+                && settings.isGloballyEnabled && !settings.isTemporarilyPaused
+        }
+        answerCoordinator.isEnabledForApplication = { [weak memoryController] bundleIdentifier in
+            !(memoryController?.engine?.configuration.answers.disabledApps.contains(bundleIdentifier) ?? true)
+        }
         suggestionCoordinator.memoryProvider = memoryRetriever
         suggestionCoordinator.emojiInputObserver = { [weak inlineCommandCoordinator] event in
             inlineCommandCoordinator?.observe(event) ?? false
@@ -507,6 +536,7 @@ final class CotabbyAppEnvironment {
         self.performanceTuner = performanceTuner
         self.translationPreferences = translationPreferences
         self.translationCoordinator = translationCoordinator
+        self.answerCoordinator = answerCoordinator
         self.settingsCoordinator = settingsCoordinator
         self.activationIndicatorController = activationIndicatorController
         self.windowFeatureOverrides = windowFeatureOverrides

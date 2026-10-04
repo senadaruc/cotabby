@@ -27,6 +27,7 @@ struct MemoryPaneView: View {
             engineSection
             if controller.state == .running {
                 MemorySourcesSection(control: control, historySync: control.historySync)
+                MemoryAnswersSection(control: control)
                 MemoryIndexSection(control: control, controller: controller)
                 MemoryPlaygroundSection(control: control)
             }
