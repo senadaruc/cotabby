@@ -87,7 +87,7 @@ an answer from memory.
 
 ### Building and releasing
 
-- **This version:** branch [`local/dev-build`](https://github.com/senadaruc/cotabby/tree/local/dev-build).
+- **This version:** branch [`senad`](https://github.com/senadaruc/cotabby/tree/senad).
 - **A shareable DMG:** `scripts/build_share_dmg.sh` builds one.
 - **A release that installed copies update to:** `scripts/publish_fork_release.sh` publishes one.
 
