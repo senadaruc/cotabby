@@ -205,4 +205,24 @@ final class TeamsMessageMapperTests: XCTestCase {
         XCTAssertEqual(PythonText.strip("\u{1C}\u{A0} x \u{3000}\u{85}"), "x")
         XCTAssertEqual(PythonText.strip("\u{200B}x"), "\u{200B}x", "a zero-width space is not whitespace to Python")
     }
+
+    func test_impossibleArrivalTimesAreSkippedAndNeverBecomeTheCursor() {
+        let base: [String: Any] = ["conversationId": "19:a_b@unq.gbl.spaces", "creator": "8:orgid:b", "imDisplayName": "B",
+                                   "content": "hello there", "messageType": "Text"]
+        let now = Date().timeIntervalSince1970 * 1000
+        var messages: [[String: Any]] = []
+        for (index, time) in [Double.infinity, Double.nan, 1e300, 9.3e18, now + 30 * 86_400_000].enumerated() {
+            var message = base
+            message["id"] = "bad\(index)"
+            message["originalArrivalTime"] = time
+            messages.append(message)
+        }
+        var good = base
+        good["id"] = "good"
+        good["originalArrivalTime"] = now - 1000
+        messages.append(good)
+        let result = TeamsMessageMapper.map(conversations: [], messages: messages, profiles: [:], afterMilliseconds: 0)
+        XCTAssertEqual(result.messages.map(\.sourceMessageID), ["19:a_b@unq.gbl.spaces/good"])
+        XCTAssertEqual(result.newestMilliseconds, now - 1000, accuracy: 1)
+    }
 }

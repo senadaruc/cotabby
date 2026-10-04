@@ -100,7 +100,10 @@ nonisolated struct TeamsCacheReader: MemoryHistoryReading {
 
     func read(after cursor: String?, since: Date?, limit: Int) throws -> MemoryReadPage {
         // Cursors written by the Python service look like "1791034747629.0"; both forms parse.
-        let previous = cursor.flatMap(Double.init) ?? 0
+        // A stored cursor outside real Teams times (written by an older reader from a corrupt
+        // value) would hide every message; start over instead (the store's upsert is idempotent).
+        let stored = cursor.flatMap(Double.init) ?? 0
+        let previous = stored.isFinite && stored <= TeamsMessageMapper.latestAcceptedMilliseconds ? stored : 0
         let after = previous > 0 ? max(0, previous - Self.lookbackMilliseconds) : 0
         let result = try readCache(afterMilliseconds: after)
         let sinceMilliseconds = (since?.timeIntervalSince1970 ?? 0) * 1000

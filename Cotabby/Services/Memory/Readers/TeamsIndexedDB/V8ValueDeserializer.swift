@@ -406,13 +406,27 @@ nonisolated struct V8ValueDeserializer {
         let id = reserveID()
         let length = Int(try varint32())
         let pairs = try readProperties(until: UInt8(ascii: "@"))
-        // A sparse array can claim a huge length with few elements; only what is set is kept.
-        let highest = pairs.compactMap { Int($0.0) }.filter { $0 >= 0 && $0 < length }.max()
-        var elements = [V8Value](repeating: .undefined, count: highest.map { $0 + 1 } ?? 0)
-        Self.applyIndexedProperties(pairs, to: &elements)
+        // A sparse array can claim a huge length, and one element at index four billion would make
+        // a dense copy of it allocate gigabytes from a few input bytes. Holes are only expanded
+        // when the array is reasonably dense; otherwise its elements are kept in index order.
+        let indexed = pairs.compactMap { pair in Int(pair.0).map { ($0, pair.1) } }.filter { $0.0 >= 0 && $0.0 < length }
+        let highest = indexed.map(\.0).max()
+        var elements: [V8Value]
+        if let highest, highest >= Self.maximumSparseExpansion(elements: indexed.count) {
+            elements = indexed.sorted { $0.0 < $1.0 }.map(\.1)
+        } else {
+            elements = [V8Value](repeating: .undefined, count: highest.map { $0 + 1 } ?? 0)
+            Self.applyIndexedProperties(pairs, to: &elements)
+        }
         guard try varint32() == pairs.count else { throw DeserializeError.malformed("array property count") }
         _ = try varint32() // length again
         return complete(id, .array(elements))
+    }
+
+    /// The largest index a sparse array may be expanded to: generous for real arrays with a few
+    /// holes, bounded for crafted ones.
+    static func maximumSparseExpansion(elements: Int) -> Int {
+        max(4096, elements * 16)
     }
 
     /// Index properties fill their slot; named properties on an array have no place in the value.

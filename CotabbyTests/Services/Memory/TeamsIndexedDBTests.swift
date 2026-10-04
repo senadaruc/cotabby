@@ -656,4 +656,18 @@ final class TeamsIndexedDBTests: XCTestCase {
         let trailer: [UInt8] = blinkVersion >= 21 ? [0xFE] + [UInt8](repeating: 0, count: 12) : []
         return [1, 0xFF, blinkVersion] + trailer + v8(value)
     }
+
+    func test_aHugelySparseArrayIsNotExpandedToItsClaimedLength() throws {
+        // [0xFF 0x0F] version, 'a' sparse array of length 4,000,000,000 with one element at index
+        // 2,000,000,000 (int key, zigzag varint), then '@' with 1 property and the length again.
+        let length = Self.varint(4_000_000_000)
+        let bytes: [UInt8] = [0xFF, 0x0F, UInt8(ascii: "a")] + length
+            + [UInt8(ascii: "I")] + Self.varint(4_000_000_000) + [UInt8(ascii: "T")]
+            + [UInt8(ascii: "@"), 1] + length
+        let started = Date()
+        let value = try V8ValueDeserializer.deserialize(bytes[...])
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1)
+        guard case .array(let elements) = value else { return XCTFail("expected an array") }
+        XCTAssertEqual(elements, [.bool(true)])
+    }
 }

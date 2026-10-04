@@ -63,6 +63,9 @@ nonisolated enum TeamsMessageMapper {
     }
 
     /// Maps the cached rows to messages that arrived after `afterMilliseconds`, in input order.
+    /// Messages "arriving" later than a day from now are not trusted (clock skew allowance).
+    static var latestAcceptedMilliseconds: Double { Date().timeIntervalSince1970 * 1000 + 86_400_000 }
+
     static func map(
         conversations rawConversations: [[String: Any]],
         messages: [[String: Any]],
@@ -120,7 +123,10 @@ nonisolated enum TeamsMessageMapper {
                   !systemConversationPrefixes.contains(where: { conversationID.hasPrefix($0) }) else { continue }
             guard textTypes.contains(text(message["messageType"]).lowercased()),
                   !isTruthy(message["deletionInfo"]) else { continue }
-            guard let arrived = milliseconds(message["originalArrivalTime"]) ?? milliseconds(message["clientArrivalTime"]) else {
+            guard let arrived = milliseconds(message["originalArrivalTime"]) ?? milliseconds(message["clientArrivalTime"]),
+                  arrived <= latestAcceptedMilliseconds else {
+                // No time, or one from the future: a message from the future must never become
+                // the cursor, or every real message after it would be skipped.
                 continue
             }
             newest = max(newest, arrived)
@@ -223,16 +229,24 @@ nonisolated enum TeamsMessageMapper {
     }
 
     /// Epoch milliseconds from a number (seconds when below 1e11) or a numeric or ISO 8601 string.
+    /// Arrival times outside 2000-01-01 ... 2100-01-01 are not real Teams times. Rejecting them
+    /// keeps a corrupt or crafted cache value from trapping a conversion (infinity, NaN, beyond
+    /// Int64) or from moving the sync cursor somewhere real messages can never reach again.
+    static let earliestMilliseconds = 946_684_800_000.0
+    static let latestMilliseconds = 4_102_444_800_000.0
+
     static func milliseconds(_ value: Any?) -> Double? {
         if let number = number(value) {
-            guard number > 0 else { return nil }
-            return number > 1e11 ? number : number * 1000
+            guard number.isFinite, number > 0 else { return nil }
+            let milliseconds = number > 1e11 ? number : number * 1000
+            return (earliestMilliseconds...latestMilliseconds).contains(milliseconds) ? milliseconds : nil
         }
         guard let string = value as? String else { return nil }
         let stripped = PythonText.strip(string)
         guard !stripped.isEmpty else { return nil }
         if isDecimal(stripped), let number = Double(stripped) { return milliseconds(number) }
         return ISO8601Time.milliseconds(stripped.replacingOccurrences(of: "Z", with: "+00:00"))
+            .flatMap { (earliestMilliseconds...latestMilliseconds).contains($0) ? $0 : nil }
     }
 
     // MARK: - Python value semantics
