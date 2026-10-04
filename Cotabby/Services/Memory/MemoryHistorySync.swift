@@ -24,6 +24,8 @@ final class MemoryHistorySync: ObservableObject {
     @Published private(set) var syncing: Set<String> = []
     /// One line per source about the last sync, for the pane.
     @Published private(set) var lastOutcome: [String: String] = [:]
+    /// Whether Cotabby has Full Disk Access (nil until first checked). The protected sources need it.
+    @Published private(set) var hasFullDiskAccess: Bool?
 
     private let client: MemoryServiceClient
     private let readers: [String: any MemoryHistoryReading]
@@ -52,6 +54,28 @@ final class MemoryHistorySync: ObservableObject {
     var pushedSourceIDs: [String] { readers.keys.sorted() }
 
     // MARK: - Readiness
+
+    /// The file used to test for Full Disk Access: the system's privacy database, which exists on
+    /// every Mac and which macOS lets a process open only with Full Disk Access. It is opened
+    /// read-only and closed at once; nothing is read.
+    nonisolated static let fullDiskAccessProbePath =
+        NSHomeDirectory() + "/Library/Application Support/com.apple.TCC/TCC.db"
+
+    nonisolated static func probeFullDiskAccess(path: String = fullDiskAccessProbePath) -> Bool {
+        let descriptor = open(path, O_RDONLY)
+        guard descriptor >= 0 else { return false }
+        close(descriptor)
+        return true
+    }
+
+    /// Re-checks Full Disk Access, and the sources' readiness when it changed (granting it in System
+    /// Settings takes effect without restarting Cotabby).
+    func checkFullDiskAccess() {
+        let granted = Self.probeFullDiskAccess()
+        guard granted != hasFullDiskAccess else { return }
+        hasFullDiskAccess = granted
+        refreshReadiness()
+    }
 
     func refreshReadiness() {
         let readers = readers

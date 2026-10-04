@@ -26,7 +26,13 @@ struct MemoryPaneView: View {
         }
         .onAppear {
             control.beginObserving()
+            control.historySync.checkFullDiskAccess()
             control.historySync.refreshReadiness()
+        }
+        // Coming back from System Settings makes Cotabby active again: re-check right away so a
+        // fresh grant shows without restarting.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            control.historySync.checkFullDiskAccess()
         }
         .onDisappear { control.endObserving() }
     }
@@ -55,6 +61,7 @@ struct MemoryPaneView: View {
                         .multilineTextAlignment(.trailing)
                 }
                 serviceActions
+                fullDiskAccessRow
                 if let status = control.status, supervisor.state == .running {
                     detailRow("Versions", "cotabby-memory \(status.serviceVersion) · LEANN \(status.leannVersion ?? "?") · Python \(status.python)")
                     detailRow("Index", indexSummary(status.index))
@@ -121,6 +128,16 @@ struct MemoryPaneView: View {
         case .installing, .starting, .disabled:
             EmptyView()
         }
+    }
+
+    // MARK: - Full Disk Access
+
+    /// WhatsApp's and Mail's history is protected by Full Disk Access. macOS offers no prompt an
+    /// app can show for it (unlike Accessibility), so the row says where it stands and takes the
+    /// user straight to the list, and to this exact copy of Cotabby to add: with a development and
+    /// an installed copy side by side, adding the wrong one is the usual mistake.
+    private var fullDiskAccessRow: some View {
+        FullDiskAccessRow(historySync: control.historySync)
     }
 
     private func detailRow(_ label: String, _ value: String) -> some View {
