@@ -18,6 +18,9 @@ nonisolated struct MemorySourceDescriptor: Equatable, Sendable {
     /// Whether facts from this source may answer questions unless the user decides otherwise. Work
     /// sources yes; personal chats no, since an answer can put them in front of other people.
     let answerSourceByDefault: Bool
+    /// Documents, not messages: kept whatever their date. Retention ("keep messages for N days")
+    /// would otherwise drop a handbook or contract because the file was last edited long ago.
+    var keepsAllDates = false
 }
 
 nonisolated enum MemorySourceCatalog {
@@ -73,9 +76,25 @@ nonisolated enum MemorySourceCatalog {
             appBundleIds: [], requirements: [MemorySource.Requirement(kind: "folder", title: "Folder",
                                                                        detail: "The folder whose .txt and .md files are remembered.")],
             optionsSchema: ["folder": "Folder"],
-            answerSourceByDefault: true
+            answerSourceByDefault: true, keepsAllDates: true
         ),
-    ]
+    ] + [("icloud_drive", "iCloud Drive"), ("google_drive", "Google Drive"), ("onedrive", "OneDrive")].map { cloudDrive(id: $0.0, title: $0.1) }
+
+    /// A cloud drive's documents (read by `CloudDriveReader`, which uses the same ids).
+    private static func cloudDrive(id: String, title: String) -> MemorySourceDescriptor {
+        MemorySourceDescriptor(
+            id: id, title: title,
+            description: "Documents in \(title) on this Mac, every account: PDF, Word, PowerPoint, Excel, RTF, " +
+                "text and Markdown. Online-only files are downloaded by \(title) to be read, then given back. " +
+                "Google Docs, Sheets and Slides stay in the cloud and are not read.",
+            appBundleIds: [], requirements: [fullDiskAccess], optionsSchema: [:],
+            answerSourceByDefault: true, keepsAllDates: true
+        )
+    }
+
+    static var sourcesKeepingAllDates: Set<String> { Set(all.filter(\.keepsAllDates).map(\.id)) }
+
+    static func keepsAllDates(_ id: String) -> Bool { descriptor(id)?.keepsAllDates ?? false }
 
     static func descriptor(_ id: String) -> MemorySourceDescriptor? {
         all.first { $0.id == id }

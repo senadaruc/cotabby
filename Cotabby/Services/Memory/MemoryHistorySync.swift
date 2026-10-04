@@ -35,6 +35,8 @@ final class MemoryHistorySync: ObservableObject {
     nonisolated static let periodicInterval: UInt64 = 15 * 60
     /// Records read per page.
     nonisolated static let pageSize = 400
+    /// The longest one source reads per sync run before the next source's turn.
+    nonisolated static let runBudget: TimeInterval = 5 * 60
     /// Sources whose reader is not available in this version; already remembered messages stay.
     static let pausedSources: [String: String] = [:]
 
@@ -42,7 +44,7 @@ final class MemoryHistorySync: ObservableObject {
         readers: [any MemoryHistoryReading] = [
             WhatsAppHistoryReader(), AppleMailHistoryReader(), OutlookHistoryReader(), TeamsCacheReader(),
             CalendarHistoryReader()
-        ],
+        ] + CloudDriveReader.all.map { CloudDriveReader(drive: $0) },
         engine: @escaping @MainActor () -> MemoryEngine?,
         isOnACPower: @escaping @MainActor () -> Bool
     ) {
@@ -130,13 +132,22 @@ final class MemoryHistorySync: ObservableObject {
                 let since = retentionDays > 0 ? Date().addingTimeInterval(-Double(retentionDays) * 86_400) : nil
                 var stored = 0
                 var hasMore = true
-                while hasMore {
+                // One run reads for at most `runBudget`, then yields to the other sources; the next
+                // round resumes at the saved cursor. A first pass over a large drive takes hours
+                // (each online-only file is downloaded to be read) and must not hold up mail.
+                let deadline = Date().addingTimeInterval(Self.runBudget)
+                while hasMore, Date() < deadline {
                     let page = try reader.read(after: cursor, since: since, limit: Self.pageSize)
                     hasMore = page.hasMore
                     cursor = page.nextCursor ?? cursor
                     // The cursor is saved with the page it ends, so an interrupted sync resumes at a
                     // page boundary and never skips messages.
-                    stored += try engine.ingest(source: sourceID, records: page.records, cursor: page.nextCursor).stored
+                    stored += try engine.ingest(source: sourceID, records: page.records, cursor: page.nextCursor,
+                                                completeConversations: page.completeConversations).stored
+                }
+                // Read through to the end: what the source no longer has (deleted documents) goes too.
+                if !hasMore, let live = reader.liveConversationIDs() {
+                    try engine.forget(source: sourceID, conversationsNotIn: live)
                 }
                 return stored
             }.value

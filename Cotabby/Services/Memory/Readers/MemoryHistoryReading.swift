@@ -51,6 +51,9 @@ nonisolated struct MemoryReadPage: Sendable {
     let nextCursor: String?
     /// True when there may be more after this page.
     let hasMore: Bool
+    /// Conversations whose every record is in this page (a document read whole). Memory drops what
+    /// it held for them that the page no longer has, so a shortened file loses its old tail.
+    var completeConversations: Set<String> = []
 }
 
 nonisolated protocol MemoryHistoryReading: Sendable {
@@ -60,6 +63,14 @@ nonisolated protocol MemoryHistoryReading: Sendable {
     func readiness() -> MemorySourceReadiness
     /// Up to `limit` messages after `cursor` (or from `since` when there is no cursor).
     func read(after cursor: String?, since: Date?, limit: Int) throws -> MemoryReadPage
+    /// Every conversation the source still has, for sources whose items can disappear (deleted
+    /// documents): after a full sync, memory forgets the rest. Nil (the default) when the source
+    /// cannot tell, which never removes anything.
+    func liveConversationIDs() -> Set<String>?
+}
+
+extension MemoryHistoryReading {
+    func liveConversationIDs() -> Set<String>? { nil }
 }
 
 nonisolated enum MemorySourceReadiness: Equatable, Sendable {

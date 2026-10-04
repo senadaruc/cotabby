@@ -369,7 +369,9 @@ nonisolated final class MemoryStore: @unchecked Sendable {
 
     /// Deletes excluded and expired messages with their vectors and terms. Returns how many went.
     @discardableResult
-    func purge(excludedConversations: [String], excludedParticipants: [String], olderThan: Double?) throws -> Int {
+    func purge(
+        excludedConversations: [String], excludedParticipants: [String], olderThan: Double?, keepingAllOf retained: Set<String> = []
+    ) throws -> Int {
         lock.lock()
         defer { lock.unlock() }
         return try database.transaction {
@@ -390,7 +392,11 @@ nonisolated final class MemoryStore: @unchecked Sendable {
                 }
             }
             if let olderThan {
-                doomed += try database.rows("SELECT record_id FROM messages WHERE timestamp < ?", [.real(olderThan)])
+                // Retention is about messages; `retained` sources (documents) are kept whatever their age.
+                let exempt = retained.sorted().map { "'" + $0.replacingOccurrences(of: "'", with: "''") + "'" }.joined(separator: ",")
+                doomed += try database.rows(
+                    "SELECT record_id FROM messages WHERE timestamp < ? AND source NOT IN (\(exempt))", [.real(olderThan)]
+                )
             }
             let ids = Set(doomed.compactMap { $0["record_id"]?.string })
             for id in ids {
@@ -399,6 +405,50 @@ nonisolated final class MemoryStore: @unchecked Sendable {
             try removeIndexEntries(recordIDs: Array(ids))
             return ids.count
         }
+    }
+
+    /// For conversations read whole again (`MemoryReadPage.completeConversations`), deletes the
+    /// records they no longer have: the sections past the end of a shortened document. Returns the
+    /// deleted record ids, for the in-memory index.
+    func removeRecords(source: String, inConversations conversationIDs: Set<String>, notIn kept: Set<String>) throws -> [String] {
+        guard !conversationIDs.isEmpty else { return [] }
+        lock.lock()
+        defer { lock.unlock() }
+        return try database.transaction {
+            var doomed: [String] = []
+            for conversationID in conversationIDs {
+                let rows = try database.rows("SELECT record_id FROM messages WHERE source = ? AND conv_key = ?",
+                                             [.text(source), .text(conversationKey(source: source, conversationID: conversationID))])
+                doomed += rows.compactMap { $0["record_id"]?.string }.filter { !kept.contains($0) }
+            }
+            for id in doomed { try database.run("DELETE FROM messages WHERE record_id = ?", [.text(id)]) }
+            try removeIndexEntries(recordIDs: doomed)
+            return doomed
+        }
+    }
+
+    /// Deletes every conversation of `source` that is not in `live` (documents deleted from their
+    /// drive), with its messages, people, vectors and terms. Returns the deleted record ids.
+    func removeConversations(source: String, notIn live: Set<String>) throws -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        let liveKeys = Set(live.map { conversationKey(source: source, conversationID: $0) })
+        let removed: [String] = try database.transaction {
+            let gone = try database.rows("SELECT conv_key FROM conversations WHERE source = ?", [.text(source)])
+                .compactMap { $0["conv_key"]?.string }.filter { !liveKeys.contains($0) }
+            var doomed: [String] = []
+            for key in gone {
+                doomed += try database.rows("SELECT record_id FROM messages WHERE source = ? AND conv_key = ?", [.text(source), .text(key)])
+                    .compactMap { $0["record_id"]?.string }
+                for table in ["messages", "conversations", "participants"] {
+                    try database.run("DELETE FROM \(table) WHERE source = ? AND conv_key = ?", [.text(source), .text(key)])
+                }
+            }
+            try removeIndexEntries(recordIDs: doomed)
+            return doomed
+        }
+        if !removed.isEmpty { conversationNames.removeAll() }
+        return removed
     }
 
     func deleteEverything() throws {

@@ -243,7 +243,9 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
     /// scrubbing, then the encrypted store. `cursor` is saved after the records, so an interrupted
     /// sync resumes after the last batch stored.
     @discardableResult
-    func ingest(source: String, records: [MemoryIngestRecord], cursor: String?) throws -> IngestResult {
+    func ingest(
+        source: String, records: [MemoryIngestRecord], cursor: String?, completeConversations: Set<String> = []
+    ) throws -> IngestResult {
         let configuration = configuration
         guard configuration.sources[source]?.enabled == true else { return IngestResult(stored: 0, dropped: records.count) }
         let excludedConversations = Set(configuration.privacy.excludedConversations)
@@ -254,7 +256,7 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
         for record in records {
             let people = Set((record.participants + [record.sender]).map(ParticipantNormalizer.normalize))
             if excludedConversations.contains(record.conversationID) || !excludedPeople.isDisjoint(with: people)
-                || (cutoff.map { record.timestamp < $0 } ?? false) {
+                || (!MemorySourceCatalog.keepsAllDates(source) && (cutoff.map { record.timestamp < $0 } ?? false)) {
                 dropped += 1
                 continue
             }
@@ -277,6 +279,12 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
             index.remove(recordIDs: Set(result.replacedRecordIDs))
         }
         if let cursor { try store.setCursor(cursor, source: source) }
+        if !completeConversations.isEmpty {
+            // Read whole: what memory held for them beyond this page's records is gone from the source.
+            let kept = Set(kept.map { MemoryStore.recordID(source: source, sourceMessageID: $0.sourceMessageID) })
+            let removed = try store.removeRecords(source: source, inConversations: completeConversations, notIn: kept)
+            if !removed.isEmpty { index.remove(recordIDs: Set(removed)) }
+        }
         updateStatus { $0.databaseBytes = self.databaseBytes() }
         if stored > 0 { wakeIndexing() }
         return IngestResult(stored: stored, dropped: dropped)
@@ -287,11 +295,27 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
             ? Date().addingTimeInterval(-Double(configuration.privacy.retentionDays) * 86_400) : nil
     }
 
+    /// Forgets the conversations of `source` that it no longer has (`MemoryHistoryReading
+    /// .liveConversationIDs`: documents deleted from their drive). Returns how many records went.
+    @discardableResult
+    func forget(source: String, conversationsNotIn live: Set<String>) throws -> Int {
+        let removed = try store.removeConversations(source: source, notIn: live)
+        if !removed.isEmpty {
+            index.remove(recordIDs: Set(removed))
+            updateStatus { status in
+                status.passages = self.index.count
+                status.vectorBytes = self.index.byteSize
+            }
+        }
+        return removed.count
+    }
+
     private func purgeForPrivacy() throws {
         let privacy = configuration.privacy
         let removed = try store.purge(
             excludedConversations: privacy.excludedConversations, excludedParticipants: privacy.excludedParticipants,
-            olderThan: retentionCutoff(configuration)?.timeIntervalSince1970
+            olderThan: retentionCutoff(configuration)?.timeIntervalSince1970,
+            keepingAllOf: MemorySourceCatalog.sourcesKeepingAllDates
         )
         if removed > 0 { log("purged \(removed) messages for privacy settings") }
     }
