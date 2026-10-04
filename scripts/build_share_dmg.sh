@@ -19,6 +19,12 @@
 # Usage: bash scripts/build_share_dmg.sh [--no-notarize]
 #   COTABBY_SHARE_IDENTITY   signing identity (default: the first "Developer ID Application")
 #   COTABBY_NOTARY_PROFILE   notarytool keychain profile (default: cotabby-notary)
+#   COTABBY_SHARE_VERSION    version shown to users (default: last tag + commit)
+#   COTABBY_SHARE_BUILD      build number Sparkle compares (default: commit count)
+#   COTABBY_SHARE_FEED_URL, COTABBY_SHARE_PUBLIC_KEY
+#                            an update feed and its Sparkle public key, so the build updates itself
+#                            from there (publish_fork_release.sh sets them); none by default
+#   COTABBY_SHARE_DMG        where to write the DMG (default: build/share/Cotabby-Dev-<version>.dmg)
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -40,13 +46,20 @@ team_id="$(sed -n 's/.*(\([A-Z0-9]\{10\}\))$/\1/p' <<<"$identity")"
 note "signing as: $identity"
 
 version="$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')"
-version="${version:-0.0.0}-$(git rev-parse --short HEAD)"
+version="${COTABBY_SHARE_VERSION:-${version:-0.0.0}-$(git rev-parse --short HEAD)}"
+build="${COTABBY_SHARE_BUILD:-$(git rev-list --count HEAD)}"
 archive="$OUT_DIR/CotabbyDev.xcarchive"
-dmg="$OUT_DIR/Cotabby-Dev-$version.dmg"
+dmg="${COTABBY_SHARE_DMG:-$OUT_DIR/Cotabby-Dev-$version.dmg}"
+update_settings=()
+if [[ -n "${COTABBY_SHARE_FEED_URL:-}" ]]; then
+    update_settings=(COTABBY_DEV_UPDATE_FEED_URL="$COTABBY_SHARE_FEED_URL"
+                     COTABBY_DEV_UPDATE_PUBLIC_KEY="${COTABBY_SHARE_PUBLIC_KEY:?a feed needs its public key}")
+    note "updates from: $COTABBY_SHARE_FEED_URL"
+fi
 rm -rf "$archive" "$dmg" "$OUT_DIR/DerivedData"
 mkdir -p "$OUT_DIR"
 
-step "Building Cotabby Dev $version"
+step "Building Cotabby Dev $version (build $build)"
 "$REPO_ROOT/scripts/prepare_cotabby_workspace.sh"
 xcodebuild archive \
     -workspace "$REPO_ROOT/build/cotabby-dependencies/Cotabby.xcworkspace" \
@@ -57,7 +70,8 @@ xcodebuild archive \
     -destination 'generic/platform=macOS' \
     CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$identity" DEVELOPMENT_TEAM="$team_id" \
     OTHER_CODE_SIGN_FLAGS="--timestamp" \
-    MARKETING_VERSION="$version" \
+    MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$build" \
+    ${update_settings[@]+"${update_settings[@]}"} \
     -quiet
 app="$archive/Products/Applications/Cotabby Dev.app"
 

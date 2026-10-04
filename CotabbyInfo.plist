@@ -40,8 +40,8 @@
 	<key>SUScheduledCheckInterval</key>
 	<integer>86400</integer>
 	<key>SUFeedURL</key>
-	<string>https://updates.cotabby.app/appcast.xml</string>
+	<string>$(COTABBY_UPDATE_FEED_URL)</string>
     <key>SUPublicEDKey</key>
-    <string>efJeZNfUISOs6npbxI2MLLe7sBB5tT/sVnTk9t/qBSY=</string>
+    <string>$(COTABBY_UPDATE_PUBLIC_KEY)</string>
 </dict>
 </plist>

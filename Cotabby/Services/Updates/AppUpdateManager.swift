@@ -46,10 +46,10 @@ final class AppUpdateManager {
         guard Self.isUpdaterEnabledForThisBuild else {
             // Dev builds carry a distinct bundle identifier (`com.jacobfu.tabby.dev`) so they hold
             // their own Accessibility/TCC grant, independent of the released app. Sparkle must never
-            // run here: the prod appcast points at the Developer ID-signed release, and letting it
-            // install would swap that bundle in over the dev app, collapsing the separate identity
-            // this build exists to preserve.
-            log("Sparkle disabled for dev build.")
+            // follow the official feed here: it points at the Developer ID-signed release, and
+            // installing it would swap that bundle in over the dev app, collapsing the separate
+            // identity this build exists to preserve. A fork's own feed is allowed (see below).
+            log("Sparkle disabled for dev build (no feed of its own).")
             return
         }
 
@@ -96,13 +96,22 @@ final class AppUpdateManager {
     /// Whether Sparkle should run for this build. Compiled out to `false` in the dev configuration
     /// (the `COTABBY_DEV` flag), which ships under a distinct bundle identifier that the prod appcast
     /// must never replace. Released builds resolve to `true` and follow the normal update path.
+    ///
+    /// The one exception in dev: a build given its own feed (a fork publishing its builds as GitHub
+    /// releases, `scripts/publish_fork_release.sh`) updates from that feed. Those releases are dev
+    /// builds themselves, so the identity stays separate; the official feed is still refused.
     private static var isUpdaterEnabledForThisBuild: Bool {
         #if COTABBY_DEV
-        false
+        guard let feed = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String,
+              let host = URL(string: feed.trimmingCharacters(in: .whitespaces))?.host?.lowercased() else { return false }
+        return !host.isEmpty && host != officialFeedHost && !host.hasSuffix("." + officialFeedHost)
         #else
         true
         #endif
     }
+
+    /// The official appcast's domain; a dev build never updates from it.
+    private static let officialFeedHost = "cotabby.app"
 
     private var hasUsableConfiguration: Bool {
         guard let feedURLString = configuredString(forInfoDictionaryKey: "SUFeedURL"),

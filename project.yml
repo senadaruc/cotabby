@@ -146,6 +146,10 @@ targetTemplates:
         PRODUCT_NAME: $(TARGET_NAME)
         REGISTER_APP_GROUPS: YES
         SPARKLE_PUBLIC_ED_KEY: efJeZNfUISOs6npbxI2MLLe7sBB5tT/sVnTk9t/qBSY=
+        # Where Sparkle looks for updates and the key they must be signed with (Info.plist reads
+        # these). The release app follows the official feed; the dev target overrides both below.
+        COTABBY_UPDATE_FEED_URL: https://updates.cotabby.app/appcast.xml
+        COTABBY_UPDATE_PUBLIC_KEY: $(SPARKLE_PUBLIC_ED_KEY)
         STRING_CATALOG_GENERATE_SYMBOLS: YES
         SWIFT_APPROACHABLE_CONCURRENCY: YES
         SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
@@ -179,6 +183,12 @@ targets:
         # and replace itself with the released bundle, the exact identity collapse this target exists
         # to prevent.
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: COTABBY_DEV $(inherited)
+        # No update feed unless one is given: a fork that ships its own builds sets
+        # COTABBY_DEV_UPDATE_FEED_URL and COTABBY_DEV_UPDATE_PUBLIC_KEY (in Signing.local.xcconfig or on
+        # the xcodebuild command line, as scripts/publish_fork_release.sh does). AppUpdateManager
+        # refuses the official feed here whatever is set.
+        COTABBY_UPDATE_FEED_URL: "$(COTABBY_DEV_UPDATE_FEED_URL)"
+        COTABBY_UPDATE_PUBLIC_KEY: "$(COTABBY_DEV_UPDATE_PUBLIC_KEY)"
   CotabbyTests:
     type: bundle.unit-test
     platform: macOS
