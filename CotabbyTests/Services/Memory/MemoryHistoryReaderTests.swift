@@ -142,7 +142,8 @@ final class MemoryHistoryReaderTests: XCTestCase {
     }
 
     /// Only mail the user actually sent is theirs: a mail in the inbox that merely shows the user's
-    /// address as its sender (spoofed) is not, while a sent mail's inbox copy or Sent label is.
+    /// address as its sender (spoofed) is not, a Sent label is, and another copy of a sent message
+    /// is skipped rather than trusted by its reusable Message-ID. Junk is not read.
     func test_mailIsMineOnlyWhenItWasSent() throws {
         let root = directory.appendingPathComponent("V10")
         let mailData = root.appendingPathComponent("MailData")
@@ -157,7 +158,8 @@ final class MemoryHistoryReaderTests: XCTestCase {
         CREATE TABLE mailboxes (ROWID INTEGER PRIMARY KEY, url TEXT);
         CREATE TABLE summaries (ROWID INTEGER PRIMARY KEY, summary TEXT);
         INSERT INTO mailboxes VALUES (1, 'imap://ACCOUNT/INBOX'), (2, 'imap://ACCOUNT/Sent%20Messages'),
-            (3, 'imap://GMAIL/%5BGmail%5D/All%20Mail'), (4, 'imap://GMAIL/%5BGmail%5D/Sent%20Mail'), (5, 'imap://ACCOUNT/Junk');
+            (3, 'imap://GMAIL/%5BGmail%5D/All%20Mail'), (4, 'imap://GMAIL/%5BGmail%5D/Sent%20Mail'), (5, 'imap://ACCOUNT/Junk'),
+            (6, 'imap://ACCOUNT/Presentations'), (7, 'imap://sent.example.com/INBOX');
         INSERT INTO addresses VALUES (1, 'me@example.com', 'Senad');
         INSERT INTO subjects VALUES (1, 'Budget');
         INSERT INTO summaries VALUES (1, 'The budget for the pilot is approved and final now.');
@@ -166,13 +168,19 @@ final class MemoryHistoryReaderTests: XCTestCase {
             (2, 501, 1, 1, 1, 1790000000, 1, 0, 9),
             (3, 502, 1, 1, 1, 1790000100, 3, 0, 9),
             (4, 503, 1, 1, 1, 1790000200, 1, 0, 9),
-            (5, 504, 1, 1, 1, 1790000300, 5, 0, 9);
+            (5, 504, 1, 1, 1, 1790000300, 5, 0, 9),
+            (6, 505, 1, 1, 1, 1790000400, 6, 0, 9),
+            (7, 506, 1, 1, 1, 1790000500, 7, 0, 9);
         INSERT INTO labels VALUES (3, 4);
         """)
         let page = try AppleMailHistoryReader(mailRoot: root.path).read(after: nil, since: nil, limit: 50)
-        XCTAssertEqual(page.records.map(\.isFromMe), [true, true, true, false],
-                       "Sent mailbox, its inbox copy and a Sent label are mine; the same address in the inbox alone is not")
-        XCTAssertFalse(page.records.map(\.sourceMessageID).contains("5"), "junk is not read")
+        XCTAssertEqual(page.records.map(\.sourceMessageID), ["1", "3", "4", "6", "7"],
+                       "the inbox copy of a sent message (2) and junk (5) are skipped")
+        XCTAssertEqual(page.records.map(\.isFromMe), [true, true, false, false, false],
+                       "Sent mailbox and Sent label are mine; the address alone, or \"sent\" elsewhere in the URL, is not")
+        XCTAssertEqual(AppleMailHistoryReader.role(ofMailboxURL: "ews://X/G%C3%B6nderilmi%C5%9F%20%C3%96%C4%9Feler"), .sent)
+        XCTAssertEqual(AppleMailHistoryReader.role(ofMailboxURL: "imap://X/%C4%B0stenmeyen%20E-posta"), .junk)
+        XCTAssertEqual(AppleMailHistoryReader.role(ofMailboxURL: "imap://X/Consent%20forms"), .other)
     }
 
     func test_mailSubjectsLoseReplyPrefixes() {

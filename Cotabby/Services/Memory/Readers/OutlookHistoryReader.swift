@@ -23,8 +23,9 @@ import Foundation
 ///
 /// New Outlook: its mail lives in `HxStore.hxd` next to the profile's `Data` folder, an undocumented
 /// store read by `HxStoreFile`. It is read after the classic database, as one source: a thread is
-/// titled with its topic, from me when the sender is one of the user's own addresses (the classic
-/// database's outgoing senders and the accounts in macOS Internet Accounts), the body is the
+/// titled with its topic, never from me (the store shows no folder, and a From address can be
+/// spoofed), the user's own addresses (the classic database's outgoing senders and the accounts in
+/// macOS Internet Accounts) left out of the participants, the body is the
 /// message's HTML as text (else its preview). Its part of the cursor is the newest sent time read,
 /// re-read with a two-day look-back so edited and late-synced messages are picked up.
 nonisolated struct OutlookHistoryReader: MemoryHistoryReading {
@@ -149,7 +150,10 @@ nonisolated struct OutlookHistoryReader: MemoryHistoryReading {
         let body = (message.bodyText ?? message.bodyHTML.map(EmailBodyExtractor.htmlToText)).flatMap { $0.isEmpty ? nil : $0 }
         guard let text = body ?? message.preview, !text.isEmpty else { return nil }
         let sender = message.senderAddress ?? ""
-        let isFromMe = ownAddresses.contains(sender)
+        // Never marked as the user's: the store does not show which folder a message is in, and a
+        // From address can be spoofed, so a mail "from" the user could put words in their mouth when
+        // answers quote memory. The user's address is still left out of the participants.
+        let isOwnAddress = ownAddresses.contains(sender)
         let topic = message.topic.flatMap { $0.isEmpty ? nil : $0 }
         return MemoryIngestRecord(
             // The sender is part of the identity (see `HxStoreFile`): a record from someone else
@@ -158,10 +162,10 @@ nonisolated struct OutlookHistoryReader: MemoryHistoryReading {
             conversationID: topic.map { "hx-topic:" + $0.lowercased() } ?? "hx:" + message.messageID,
             conversationTitle: topic ?? "",
             sender: message.senderName ?? sender,
-            isFromMe: isFromMe,
+            isFromMe: false,
             timestamp: sent,
             text: text,
-            participants: isFromMe || sender.isEmpty ? [] : [sender],
+            participants: isOwnAddress || sender.isEmpty ? [] : [sender],
             subject: message.subject ?? topic ?? ""
         )
     }

@@ -12,10 +12,13 @@ import Foundation
 /// - Conversation: Mail's own thread (`conversation_id`), titled with the thread's subject without
 ///   its "Re:"/"Fwd:" prefix; the compose window's title is that subject, which is how Cotabby finds
 ///   the thread for the message being written.
-/// - From me: the message is filed in a Sent mailbox, carries a Sent label (Gmail), or has a copy
-///   with the same Message-ID there (Gmail shows a sent message in the inbox thread too). The From
+/// - From me: the message is filed in a Sent mailbox or carries a Sent label (Gmail). The From
 ///   address alone is not enough: anyone can write the user's address there, and a spoofed mail
 ///   marked as the user's own would put words in the user's mouth when answers quote memory.
+///   Another copy of a sent message (the inbox copy of mail sent to a list the user is on) is
+///   skipped as a duplicate rather than trusted by its Message-ID, which a sender can reuse.
+/// - Mailbox roles come from the mailbox's own name (the URL's last path component), never from
+///   anywhere in the URL, where an account or host name could contain "sent".
 /// - Participants: every other address on the message (sender and recipients), lowercased; the
 ///   user's own addresses are the senders of Sent mail.
 /// - Junk and spam mailboxes are skipped.
@@ -65,23 +68,27 @@ nonisolated struct AppleMailHistoryReader: MemoryHistoryReading {
         }
         let after = Int64(cursor ?? "") ?? 0
         let sinceSeconds = since?.timeIntervalSince1970 ?? 0
+        let roles = try Self.mailboxRoles(database)
+        let sent = roles.sent.map(String.init).joined(separator: ",")
+        let junk = roles.junk.map(String.init).joined(separator: ",")
         let rows = try database.rows(
             """
             SELECT m.ROWID AS rowid, m.conversation_id AS thread, m.date_received AS received,
                    s.subject AS subject, a.address AS sender, a.comment AS sender_name, sm.summary AS summary,
-                   \(try Self.sentExpression(database)) AS sent
+                   \(try Self.sentExpression(database, sent: sent)) AS sent
             FROM messages m
             LEFT JOIN subjects s ON s.ROWID = m.subject
             LEFT JOIN addresses a ON a.ROWID = m.sender
             LEFT JOIN summaries sm ON sm.ROWID = m.summary
-            WHERE m.ROWID > ? AND m.deleted = 0 AND m.date_received >= ? AND m.mailbox NOT IN (\(Self.junkMailboxes))
+            WHERE m.ROWID > ? AND m.deleted = 0 AND m.date_received >= ? AND m.mailbox NOT IN (\(junk))
+              AND NOT \(try Self.copyOfSentExpression(database, sent: sent))
             ORDER BY m.ROWID LIMIT ?
             """,
             [.integer(after), .real(sinceSeconds), .integer(Int64(limit))]
         )
         guard !rows.isEmpty else { return MemoryReadPage(records: [], nextCursor: nil, hasMore: false) }
 
-        let ownAddresses = try Self.ownAddresses(database)
+        let ownAddresses = try Self.ownAddresses(database, sent: sent)
         let recipients = try Self.recipients(of: rows.compactMap { $0["rowid"]?.int }, database: database)
         let needFiles = rows.contains { ($0["summary"]?.string?.count ?? 0) < 40 }
         let files = needFiles ? fileIndex.files(under: mailRoot, build: emlxFiles) : [:]
@@ -122,47 +129,84 @@ nonisolated struct AppleMailHistoryReader: MemoryHistoryReading {
 
     // MARK: - Helpers
 
-    /// The user's own addresses: senders of messages filed in Sent mailboxes. Folder names differ by
-    /// provider and language ("Sent Messages", "Sent Items", "Gönderilmiş Postalar"), so several
-    /// patterns are matched against the mailbox URL.
-    static func ownAddresses(_ database: ReadOnlySQLiteDatabase) throws -> Set<String> {
+    /// The user's own addresses: senders of messages filed in Sent mailboxes. Used to leave the
+    /// user out of participant lists, never to decide who wrote a message.
+    static func ownAddresses(_ database: ReadOnlySQLiteDatabase, sent: String) throws -> Set<String> {
         let rows = try database.rows(
             """
             SELECT DISTINCT lower(a.address) AS address FROM messages m
             JOIN addresses a ON a.ROWID = m.sender
-            WHERE m.mailbox IN (\(sentMailboxes))
+            WHERE m.mailbox IN (\(sent))
             """
         )
         return Set(rows.compactMap { $0["address"]?.string })
     }
 
-    /// The ROWIDs of Sent mailboxes, by URL (percent-encoded, so "Gönderilmiş" is matched encoded).
-    static let sentMailboxes = """
-        SELECT ROWID FROM mailboxes WHERE url LIKE '%Sent%' OR url LIKE '%G%C3%B6nderil%' OR url LIKE '%Gesendet%'
-           OR url LIKE '%Envoy%' OR url LIKE '%Enviad%'
-        """
+    enum MailboxRole: Equatable {
+        case sent
+        case junk
+        case other
+    }
 
-    /// Junk and spam mailboxes are never read: they hold the phishing and spoofed mail memory must
-    /// not learn from ("Gereksiz", "İstenmeyen" are the Turkish names, percent-encoded in the URL).
-    static let junkMailboxes = """
-        SELECT ROWID FROM mailboxes WHERE url LIKE '%Junk%' OR url LIKE '%Spam%' OR url LIKE '%Gereksiz%'
-           OR url LIKE '%%C4%B0stenmeyen%' OR url LIKE '%Istenmeyen%'
-        """
+    /// Sent and junk folder names across providers and the user's languages, compared without case
+    /// or accents ("Gönderilmiş Öğeler" matches "gonderilmis ogeler").
+    static let sentNames: Set<String> = [
+        "sent", "sent messages", "sent mail", "sent items", "gonderilmis ogeler", "gonderilmis postalar",
+        "gonderilenler", "gonderilen", "gesendet", "gesendete elemente", "gesendete objekte", "elements envoyes",
+        "envoyes", "messages envoyes", "enviados", "elementos enviados", "itens enviados", "posta inviata",
+        "verzonden items", "verzonden",
+    ]
+    static let junkNames: Set<String> = [
+        "junk", "junk email", "junk e-mail", "junk mail", "spam", "bulk mail", "gereksiz", "gereksiz e-posta",
+        "istenmeyen", "istenmeyen e-posta", "istenmeyen posta", "spam-e-mail", "courrier indesirable", "correo no deseado",
+    ]
 
-    /// SQL that is 1 when the message `m` was sent by the user. The label and Message-ID checks are
-    /// added only when this version of Mail has those columns.
-    static func sentExpression(_ database: ReadOnlySQLiteDatabase) throws -> String {
-        var checks = ["m.mailbox IN (\(sentMailboxes))"]
-        if try database.hasColumns(["message_id", "mailbox_id"], in: "labels") {
-            checks.append("EXISTS (SELECT 1 FROM labels l WHERE l.message_id = m.ROWID AND l.mailbox_id IN (\(sentMailboxes)))")
+    /// The role of a mailbox from its URL's last path component (percent-decoded).
+    static func role(ofMailboxURL url: String) -> MailboxRole {
+        guard let component = url.split(separator: "/").last, let name = String(component).removingPercentEncoding else {
+            return .other
         }
-        if try database.hasColumns(["message_id"], in: "messages") {
-            checks.append("""
-                (m.message_id <> 0 AND EXISTS (SELECT 1 FROM messages t WHERE t.message_id = m.message_id \
-                AND t.deleted = 0 AND t.mailbox IN (\(sentMailboxes))))
-                """)
+        let folded = name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .replacingOccurrences(of: "ı", with: "i")
+            .trimmingCharacters(in: .whitespaces)
+        if sentNames.contains(folded) { return .sent }
+        if junkNames.contains(folded) { return .junk }
+        return .other
+    }
+
+    /// The ROWIDs of the Sent and junk mailboxes.
+    static func mailboxRoles(_ database: ReadOnlySQLiteDatabase) throws -> (sent: [Int64], junk: [Int64]) {
+        var sent: [Int64] = [], junk: [Int64] = []
+        for row in try database.rows("SELECT ROWID AS id, url FROM mailboxes") {
+            guard let id = row["id"]?.int, let url = row["url"]?.string else { continue }
+            switch role(ofMailboxURL: url) {
+            case .sent: sent.append(id)
+            case .junk: junk.append(id)
+            case .other: break
+            }
+        }
+        return (sent, junk)
+    }
+
+    /// SQL that is 1 when the message `m` was sent by the user: filed in a Sent mailbox, or (Gmail,
+    /// when this version of Mail has labels) labelled with one.
+    static func sentExpression(_ database: ReadOnlySQLiteDatabase, sent: String) throws -> String {
+        var checks = ["m.mailbox IN (\(sent))"]
+        if try database.hasColumns(["message_id", "mailbox_id"], in: "labels") {
+            checks.append("EXISTS (SELECT 1 FROM labels l WHERE l.message_id = m.ROWID AND l.mailbox_id IN (\(sent)))")
         }
         return "(" + checks.joined(separator: " OR ") + ")"
+    }
+
+    /// SQL that is 1 when `m` is another copy of a message in a Sent mailbox (same Message-ID). Such
+    /// a copy is skipped: a genuine one duplicates the Sent copy, and a forged one reusing the id
+    /// must not be read at all.
+    static func copyOfSentExpression(_ database: ReadOnlySQLiteDatabase, sent: String) throws -> String {
+        guard try database.hasColumns(["message_id"], in: "messages") else { return "0" }
+        return """
+            (m.mailbox NOT IN (\(sent)) AND m.message_id <> 0 AND EXISTS (SELECT 1 FROM messages t \
+            WHERE t.message_id = m.message_id AND t.deleted = 0 AND t.mailbox IN (\(sent))))
+            """
     }
 
     static func recipients(of messages: [Int64], database: ReadOnlySQLiteDatabase) throws -> [Int64: [String]] {

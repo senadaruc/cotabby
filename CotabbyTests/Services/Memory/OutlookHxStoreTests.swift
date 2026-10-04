@@ -147,7 +147,8 @@ final class OutlookHxStoreTests: XCTestCase {
         XCTAssertEqual(a.text, "Numbers attached.")
         XCTAssertEqual(a.participants, ["ayse@client.com"])
         XCTAssertFalse(a.isFromMe)
-        XCTAssertTrue(b.isFromMe)
+        XCTAssertFalse(b.isFromMe, "the store cannot prove a mail was sent, and a From address can be spoofed")
+        XCTAssertEqual(b.participants, [], "the user's own address is not a participant")
         XCTAssertEqual(b.text, "Here they are", "no body: the preview")
     }
 
