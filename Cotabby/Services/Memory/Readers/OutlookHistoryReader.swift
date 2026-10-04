@@ -20,6 +20,13 @@ import Foundation
 /// Mapping to memory records, as for Apple Mail: the thread (`Conversation_ConversationID`) titled
 /// with the subject without reply prefixes; from me when Outlook marks the message outgoing; the
 /// participants every other address on it; the cursor the message's record id, which only grows.
+///
+/// New Outlook: its mail lives in `HxStore.hxd` next to the profile's `Data` folder, an undocumented
+/// store read by `HxStoreFile`. It is read after the classic database, as one source: a thread is
+/// titled with its topic, from me when the sender is one of the user's own addresses (the classic
+/// database's outgoing senders and the accounts in macOS Internet Accounts), the body is the
+/// message's HTML as text (else its preview). Its part of the cursor is the newest sent time read,
+/// re-read with a two-day look-back so edited and late-synced messages are picked up.
 nonisolated struct OutlookHistoryReader: MemoryHistoryReading {
     let sourceID = "outlook"
     let profilesRoot: String
@@ -38,7 +45,21 @@ nonisolated struct OutlookHistoryReader: MemoryHistoryReading {
             .first { FileManager.default.fileExists(atPath: $0) }
     }
 
+    /// New Outlook's store for the profile, when present.
+    var hxStorePath: String? {
+        let candidates = ["Main Profile"] + ((try? FileManager.default.contentsOfDirectory(atPath: profilesRoot)) ?? []).sorted()
+        return candidates.lazy.map { "\(profilesRoot)/\($0)/HxStore.hxd" }.first { FileManager.default.fileExists(atPath: $0) }
+    }
+
     func readiness() -> MemorySourceReadiness {
+        if let hxStorePath {
+            let descriptor = open(hxStorePath, O_RDONLY)
+            if descriptor >= 0 {
+                close(descriptor)
+                return .ready
+            }
+            if errno == EPERM || errno == EACCES { return .needsFullDiskAccess }
+        }
         guard let path = databasePath else {
             // The container itself exists only when Outlook is installed; inside it, macOS hides
             // nothing from a listing, so a missing database really means no local mail.
@@ -66,7 +87,99 @@ nonisolated struct OutlookHistoryReader: MemoryHistoryReading {
         )
     }
 
+    /// Where a sync resumes: the classic database's last record id and New Outlook's newest time.
+    struct Cursor: Equatable {
+        var legacy: String?
+        var newOutlookMilliseconds: Double?
+
+        /// "L<id>|H<ms>"; a bare number is a cursor written before New Outlook was read.
+        init(_ text: String?) {
+            guard let text, !text.isEmpty else { return }
+            guard text.contains("|") || text.hasPrefix("L") || text.hasPrefix("H") else {
+                legacy = text
+                return
+            }
+            for part in text.split(separator: "|") {
+                if part.hasPrefix("L") { legacy = String(part.dropFirst()).nilIfEmpty }
+                if part.hasPrefix("H") { newOutlookMilliseconds = Double(part.dropFirst()) }
+            }
+        }
+
+        init(legacy: String?, newOutlookMilliseconds: Double?) {
+            self.legacy = legacy
+            self.newOutlookMilliseconds = newOutlookMilliseconds
+        }
+
+        var text: String {
+            "L\(legacy ?? "")|H\(newOutlookMilliseconds.map { String(format: "%.0f", $0) } ?? "")"
+        }
+    }
+
+    static let newOutlookLookback: TimeInterval = 2 * 86_400
+
     func read(after cursor: String?, since: Date?, limit: Int) throws -> MemoryReadPage {
+        var position = Cursor(cursor)
+        if databasePath != nil {
+            let page = try readLegacy(after: position.legacy, since: since, limit: limit)
+            if !page.records.isEmpty || page.hasMore {
+                position.legacy = page.nextCursor ?? position.legacy
+                // More to come: New Outlook's store follows the classic database.
+                return MemoryReadPage(records: page.records, nextCursor: position.text, hasMore: true)
+            }
+        }
+        guard let hxStorePath else {
+            return MemoryReadPage(records: [], nextCursor: nil, hasMore: false)
+        }
+        let previous = position.newOutlookMilliseconds ?? 0
+        let after = Date(timeIntervalSince1970: max(0, previous / 1000 - Self.newOutlookLookback))
+        let own = ownAddresses()
+        var newest = previous
+        var records: [MemoryIngestRecord] = []
+        for message in try HxStoreFile.messages(at: URL(fileURLWithPath: hxStorePath)) {
+            guard let sent = message.sent, sent > after, sent >= (since ?? .distantPast) else { continue }
+            newest = max(newest, sent.timeIntervalSince1970 * 1000)
+            guard let record = Self.ingestRecord(message, sent: sent, ownAddresses: own) else { continue }
+            records.append(record)
+        }
+        position.newOutlookMilliseconds = newest
+        return MemoryReadPage(records: records, nextCursor: newest > previous ? position.text : nil, hasMore: false)
+    }
+
+    static func ingestRecord(_ message: HxMailRecord, sent: Date, ownAddresses: Set<String>) -> MemoryIngestRecord? {
+        let body = (message.bodyText ?? message.bodyHTML.map(EmailBodyExtractor.htmlToText)).flatMap { $0.isEmpty ? nil : $0 }
+        guard let text = body ?? message.preview, !text.isEmpty else { return nil }
+        let sender = message.senderAddress ?? ""
+        let isFromMe = ownAddresses.contains(sender)
+        let topic = message.topic.flatMap { $0.isEmpty ? nil : $0 }
+        return MemoryIngestRecord(
+            sourceMessageID: "hx:" + message.messageID,
+            conversationID: topic.map { "hx-topic:" + $0.lowercased() } ?? "hx:" + message.messageID,
+            conversationTitle: topic ?? "",
+            sender: message.senderName ?? sender,
+            isFromMe: isFromMe,
+            timestamp: sent,
+            text: text,
+            participants: isFromMe || sender.isEmpty ? [] : [sender],
+            subject: message.subject ?? topic ?? ""
+        )
+    }
+
+    /// The user's own addresses: the classic database's outgoing senders and the mail accounts in
+    /// macOS Internet Accounts.
+    func ownAddresses() -> Set<String> {
+        var own = Set<String>()
+        if let path = databasePath, let database = try? ReadOnlySQLiteDatabase(path: path) {
+            own.formUnion((try? Self.ownAddresses(database)) ?? [])
+        }
+        let accounts = NSHomeDirectory() + "/Library/Accounts/Accounts4.sqlite"
+        if let database = try? ReadOnlySQLiteDatabase(path: accounts),
+           let rows = try? database.rows("SELECT DISTINCT lower(ZUSERNAME) AS name FROM ZACCOUNT WHERE ZUSERNAME LIKE '%@%'") {
+            own.formUnion(rows.compactMap { $0["name"]?.string })
+        }
+        return own
+    }
+
+    private func readLegacy(after cursor: String?, since: Date?, limit: Int) throws -> MemoryReadPage {
         guard let path = databasePath else { throw ReadOnlySQLiteDatabase.DatabaseError.missing(profilesRoot) }
         let database = try ReadOnlySQLiteDatabase(path: path)
         guard try schemaMatches(database) else {
@@ -131,4 +244,8 @@ nonisolated struct OutlookHistoryReader: MemoryHistoryReading {
             .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
             .filter { $0.contains("@") }
     }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

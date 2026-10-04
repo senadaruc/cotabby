@@ -172,7 +172,8 @@ final class MemoryHistoryReaderTests: XCTestCase {
         XCTAssertEqual(reader.readiness(), .ready)
         let page = try reader.read(after: nil, since: nil, limit: 10)
         XCTAssertEqual(page.records.map(\.sourceMessageID), ["1", "2"], "a message without a preview carries nothing")
-        XCTAssertEqual(page.nextCursor, "3")
+        XCTAssertEqual(OutlookHistoryReader.Cursor(page.nextCursor).legacy, "3")
+        XCTAssertTrue(page.hasMore, "New Outlook's store is read after the classic database")
         let (received, sent) = (page.records[0], page.records[1])
         XCTAssertEqual(received.conversationID, sent.conversationID)
         XCTAssertEqual(sent.conversationTitle, "POC results", "reply prefixes are dropped so the thread has one title")
@@ -180,7 +181,7 @@ final class MemoryHistoryReaderTests: XCTestCase {
         XCTAssertTrue(sent.isFromMe)
         XCTAssertEqual(received.sender, "Dominique Meurisse")
         XCTAssertEqual(received.participants, ["altay@imperum.io", "dme@imperum.io"], "the user's own address is never a participant")
-        XCTAssertEqual(try reader.read(after: "3", since: nil, limit: 10).records, [])
+        XCTAssertEqual(try reader.read(after: page.nextCursor, since: nil, limit: 10).records, [], "no New Outlook store in the fixture")
     }
 
     func test_outlookWithoutALocalDatabaseIsNotFound() {
