@@ -989,6 +989,7 @@
 		CF2EADEEEF5AA63FB9B9EA8E /* SuggestionInserter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A3D1125B962CBE0269EEDDB /* SuggestionInserter.swift */; };
 		CF391BC4A3C80C41048D64D1 /* TypoCaseTransfer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B293615FC411551C3FC15528 /* TypoCaseTransfer.swift */; };
 		CFCBA5D14335960CF994F40D /* GhostFontSizeLimits.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAC61CA8FEFB45FB1CCA453A /* GhostFontSizeLimits.swift */; };
+		D013545F5BBD3C6C8CCCF18D /* llama-answer-cases.json in Resources */ = {isa = PBXBuildFile; fileRef = DB1D4748A5A98AC88EC0CC80 /* llama-answer-cases.json */; };
 		D0152B3DB7CF0A52A9A66DAB /* SOURCES.md in Resources */ = {isa = PBXBuildFile; fileRef = 054987E76CA9D1FA4F81EA8F /* SOURCES.md */; };
 		D01A732060A64634619980B1 /* DateMacroEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94A26D86030FC5FA67371C52 /* DateMacroEvaluator.swift */; };
 		D04231512E21EF1AE307970B /* ConversationHeaderPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7544290A99687F1D57CA343 /* ConversationHeaderPolicy.swift */; };
@@ -1068,6 +1069,7 @@
 		E0339FBB5EF566D5370427AA /* MemoryPlaygroundSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23F5592DAB0E3E0B8F88A52E /* MemoryPlaygroundSection.swift */; };
 		E04950B45EF6C6CE47EE5081 /* MacroController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A38CFCDC00DC4DB86D91BB2 /* MacroController.swift */; };
 		E055CD93E4CDD2EE426B798C /* MemoryVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8205687D4E042D494D996494 /* MemoryVault.swift */; };
+		E0CD8F5080D9BF8F1D4EE8A9 /* AnswerDraftEvalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A29FD01713F1A4F34D3DAC06 /* AnswerDraftEvalTests.swift */; };
 		E1A0C7827F48DA2B9412EF14 /* ReadOnlySQLiteDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CECBCCB7EF69B683AE957D2 /* ReadOnlySQLiteDatabase.swift */; };
 		E1A8EA5F00C6B2E228FC9ACB /* EmojiPopularityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C28F67F089B66EC18C24182 /* EmojiPopularityTests.swift */; };
 		E1F7D3FC1DC4F1E6201F8CDC /* TemporaryKeyTap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 449475C53A4B14F5B5A3C212 /* TemporaryKeyTap.swift */; };
@@ -1696,6 +1698,7 @@
 		A28B4A4368DB33C25E3AB5F3 /* EmojiPaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmojiPaneView.swift; sourceTree = "<group>"; };
 		A29DF1C68154C21E6943D38E /* InputModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputModels.swift; sourceTree = "<group>"; };
 		A29EA4138BBF767BA8D27223 /* Aria2Locator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Aria2Locator.swift; sourceTree = "<group>"; };
+		A29FD01713F1A4F34D3DAC06 /* AnswerDraftEvalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnswerDraftEvalTests.swift; sourceTree = "<group>"; };
 		A2E9AF341F8F7043D5344B20 /* SymSpell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SymSpell.swift; sourceTree = "<group>"; };
 		A306C7B2B0790A0B98D8F353 /* PerDomainDisableSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerDomainDisableSettingsTests.swift; sourceTree = "<group>"; };
 		A31C1DF8E6A12D87A0C12758 /* ConversationMemoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMemoryTests.swift; sourceTree = "<group>"; };
@@ -1879,6 +1882,7 @@
 		DAC4D7129517D678D95D0BC2 /* PromptPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptPolicyTests.swift; sourceTree = "<group>"; };
 		DADE6EEA8248DA6700E11844 /* MenuBarPopoverDismisser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarPopoverDismisser.swift; sourceTree = "<group>"; };
 		DB0CE9AB1286367BA2E82392 /* SettingsContainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsContainerView.swift; sourceTree = "<group>"; };
+		DB1D4748A5A98AC88EC0CC80 /* llama-answer-cases.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "llama-answer-cases.json"; sourceTree = "<group>"; };
 		DB1E28CF7847BCBA577C1A2D /* TypingSessionEvalScoringTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypingSessionEvalScoringTests.swift; sourceTree = "<group>"; };
 		DB235F0DEA53295DAF8B4FA0 /* PowerSourceMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PowerSourceMonitor.swift; sourceTree = "<group>"; };
 		DB6A4CC16A6970E3E7086B5C /* SettingsIconTile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsIconTile.swift; sourceTree = "<group>"; };
@@ -3523,6 +3527,7 @@
 		A3C1F7BD86257CF93639327C /* Fixtures */ = {
 			isa = PBXGroup;
 			children = (
+				DB1D4748A5A98AC88EC0CC80 /* llama-answer-cases.json */,
 				AB84C175EA5B59E118F58C49 /* llama-eval-cases.json */,
 				78721FCF04E4D6F0C7C5DDCF /* llama-recall-cases.json */,
 				225D56594DCCBEAE2BD25E8D /* phrase-prediction-1337.json */,
@@ -4222,6 +4227,7 @@
 		F3BC919F34D9998C293D16E2 /* Evals */ = {
 			isa = PBXGroup;
 			children = (
+				A29FD01713F1A4F34D3DAC06 /* AnswerDraftEvalTests.swift */,
 				2228A6C24CDE5F9D8DE33BF3 /* FoundationModelDriftEvalTests.swift */,
 				202086735E28B96BBCE55E6B /* LlamaEvalScoring.swift */,
 				3ED4E38B9FE65164C3ABEA12 /* LlamaEvalScoringTests.swift */,
@@ -4554,6 +4560,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D013545F5BBD3C6C8CCCF18D /* llama-answer-cases.json in Resources */,
 				8320BEF361D8EA55E5CC7D95 /* llama-eval-cases.json in Resources */,
 				B71D51572125A69F279B3D79 /* llama-recall-cases.json in Resources */,
 				C559712BC6669FCACF24D841 /* phrase-prediction-1337.json in Resources */,
@@ -5453,6 +5460,7 @@
 				CE218D30F69D215095E68456 /* AXHelperTests.swift in Sources */,
 				A468F55B53FCE7C34D3A7F22 /* AXTextGeometryResolverTests.swift in Sources */,
 				E47E04DE1CBB250BFAB81A44 /* ActivationIndicatorCaretTests.swift in Sources */,
+				E0CD8F5080D9BF8F1D4EE8A9 /* AnswerDraftEvalTests.swift in Sources */,
 				7F1413A5131F2F8A0CB5A219 /* AnswerRulesTests.swift in Sources */,
 				1C776D5BC2DECFAE133B9A57 /* AppSurfaceClassifierTests.swift in Sources */,
 				3368DFBAA36527B7BB09EA67 /* ApplicationBundleMetadataTests.swift in Sources */,

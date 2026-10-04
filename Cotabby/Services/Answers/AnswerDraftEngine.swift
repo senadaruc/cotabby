@@ -53,6 +53,15 @@ final class AnswerDraftEngine {
             return Draft(text: text, engine: "apple")
         }
         guard hasLocalModel() else { return nil }
+        return try await Self.draftLocally(runtimeManager: runtimeManager, question: question, asker: asker, facts: facts)
+            .map { Draft(text: $0, engine: "llama") }
+    }
+
+    /// The local model's draft: the base-model transcript prompt with answer-sized options. Static
+    /// so the answer eval measures exactly what the app runs.
+    static func draftLocally(
+        runtimeManager: LlamaRuntimeManager, question: String, asker: String?, facts: [AnswerPromptRenderer.Fact]
+    ) async throws -> String? {
         let prompt = AnswerPromptRenderer.basePrompt(question: question, asker: asker, facts: facts)
         var options = LlamaGenerationOptions(
             maxPredictionTokens: 120, temperature: 0.2, topK: 20, topP: 0.9, minP: 0.05,
@@ -63,7 +72,7 @@ final class AnswerDraftEngine {
         options.sentenceStopMinimumTokens = .max
         options.stopSequences = AnswerPromptRenderer.stopSequences(asker: asker)
         let output = try await runtimeManager.generate(prompt: prompt, options: options)
-        return AnswerPromptRenderer.cleanedAnswer(output.text, asker: asker).map { Draft(text: $0, engine: "llama") }
+        return AnswerPromptRenderer.cleanedAnswer(output.text, asker: asker)
     }
 
     private func draftWithApple(question: String, asker: String?, facts: [AnswerPromptRenderer.Fact]) async throws -> String? {

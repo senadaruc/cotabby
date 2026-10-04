@@ -29,9 +29,17 @@ struct AnswerCardView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     ForEach(offer.sources) { source in
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(source.byline)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                            HStack(spacing: 4) {
+                                if source.isFromAnotherConversation {
+                                    // The person being answered may not have seen this message.
+                                    Label("Other conversation", systemImage: "arrow.triangle.branch")
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.orange)
+                                }
+                                Text(source.byline)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
                             Text(source.excerpt)
                                 .font(.caption)
                                 .lineLimit(2)
@@ -54,6 +62,9 @@ nonisolated struct AnswerOffer: Equatable, Sendable {
         /// "Irem Dogru · THY – Imperum · 10 May · Outlook"
         let byline: String
         let excerpt: String
+        /// From a conversation other than the one being answered: shown with a warning, since its
+        /// people may differ from the one who will read the answer.
+        let isFromAnotherConversation: Bool
     }
 
     let draft: String

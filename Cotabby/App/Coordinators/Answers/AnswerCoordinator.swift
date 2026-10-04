@@ -173,13 +173,25 @@ final class AnswerCoordinator {
             log("skipped", ["reason": "model_abstained"])
             return
         }
-        let unsupported = AnswerGroundingPolicy.unsupportedSpecifics(in: draft.text, facts: facts.map(\.text), question: incoming.text)
+        // Grounded in what the model was shown: each fact's sender, chat and text.
+        let shownFacts = AnswerPromptRenderer.factLines(facts)
+        let unsupported = AnswerGroundingPolicy.unsupportedSpecifics(in: draft.text, facts: shownFacts, question: incoming.text)
         guard unsupported.isEmpty else {
             drafts[key] = .some(nil)
             log("skipped", ["reason": "ungrounded", "unsupported": "\(unsupported.count)", "engine": draft.engine])
             return
         }
-        let prepared = AnswerOffer(draft: draft.text, sources: Array(hits.prefix(3)).map(Self.source))
+        let isOtherConversation = { (hit: MemorySearchResult.Hit) in
+            hit.source != incoming.conversation?.source || hit.conversationId != incoming.conversation?.conversationId
+        }
+        // The question comes from someone else; it must not be able to make the draft reproduce
+        // another conversation's message wholesale.
+        if hits.contains(where: { isOtherConversation($0) && AnswerGroundingPolicy.copiesPassage(draft.text, from: $0.text) }) {
+            drafts[key] = .some(nil)
+            log("skipped", ["reason": "copies_other_conversation", "engine": draft.engine])
+            return
+        }
+        let prepared = AnswerOffer(draft: draft.text, sources: Array(hits.prefix(3)).map { Self.source($0, otherConversation: isOtherConversation($0)) })
         drafts[key] = prepared
         log("shown", [
             "engine": draft.engine, "hits": "\(hits.count)", "best_similarity": String(format: "%.2f", best),
@@ -188,7 +200,7 @@ final class AnswerCoordinator {
         if isStillCurrent(input) { offer(prepared, for: input, messageKey: key) }
     }
 
-    private static func source(_ hit: MemorySearchResult.Hit) -> AnswerOffer.Source {
+    private static func source(_ hit: MemorySearchResult.Hit, otherConversation: Bool) -> AnswerOffer.Source {
         let formatter = DateFormatter()
         formatter.dateFormat = "d MMM"
         let app = MemorySourceCatalog.descriptor(hit.source)?.title ?? hit.source
@@ -196,7 +208,8 @@ final class AnswerCoordinator {
         let byline = [who, hit.conversationTitle, formatter.string(from: Date(timeIntervalSince1970: hit.timestamp)), app]
             .filter { !$0.isEmpty }.joined(separator: " · ")
         let excerpt = hit.text.split(whereSeparator: \.isNewline).joined(separator: " ")
-        return AnswerOffer.Source(id: hit.recordId, byline: byline, excerpt: String(excerpt.prefix(160)))
+        return AnswerOffer.Source(id: hit.recordId, byline: byline, excerpt: String(excerpt.prefix(160)),
+                                  isFromAnotherConversation: otherConversation)
     }
 
     /// The same field is still focused and still empty.
