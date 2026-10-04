@@ -148,10 +148,11 @@ final class AnswerCoordinator {
         let questionText = incoming.text.lowercased()
         let hits = result.hits.filter { !questionText.contains($0.text.lowercased()) }
         let best = hits.map(\.similarity).max() ?? 0
+        let factTexts = hits.map { "\($0.sender) \($0.conversationTitle) \($0.text)" }
         guard AnswerGroundingPolicy.shouldDraft(
             bestSimilarity: best, minimumSimilarity: configuration.answers.minimumConfidence,
             hasKeywordMatch: hits.contains { $0.via != "vector" }
-        ) else {
+        ), AnswerGroundingPolicy.factsMentionWhatTheQuestionNames(question: question, facts: factTexts) else {
             drafts[key] = .some(nil)
             log("skipped", ["reason": "no_relevant_memory", "best_similarity": String(format: "%.2f", best), "hits": "\(hits.count)"])
             return
@@ -176,7 +177,8 @@ final class AnswerCoordinator {
         // Grounded in what the model was shown: each fact's sender, chat and text.
         let shownFacts = AnswerPromptRenderer.factLines(facts)
         let unsupported = AnswerGroundingPolicy.unsupportedSpecifics(in: draft.text, facts: shownFacts, question: incoming.text)
-        guard unsupported.isEmpty else {
+        guard unsupported.isEmpty, AnswerGroundingPolicy.usesFacts(draft.text, facts: shownFacts, question: incoming.text),
+              !AnswerGroundingPolicy.containsSecrets(draft.text) else {
             drafts[key] = .some(nil)
             log("skipped", ["reason": "ungrounded", "unsupported": "\(unsupported.count)", "engine": draft.engine])
             return

@@ -39,11 +39,19 @@ struct AnswerEvalCase: Decodable {
 
     /// Scores a draft the way the app decides what to show: nil (no card) passes an abstain case;
     /// a draft passes an answer case only if it is grounded and says what it must, not what it must not.
+    /// The pre-draft gate the app applies after retrieval (the similarity gate is not modelled:
+    /// eval facts are given, not retrieved). False means the app would not ask the model at all.
+    var passesPreDraftGate: Bool {
+        AnswerGroundingPolicy.factsMentionWhatTheQuestionNames(question: question, facts: AnswerPromptRenderer.factLines(renderedFacts))
+    }
+
     func passes(_ draft: String?) -> Bool {
+        let draft = passesPreDraftGate ? draft : nil
+        let shownFacts = AnswerPromptRenderer.factLines(renderedFacts)
         let shown = draft.flatMap { text in
-            AnswerGroundingPolicy.unsupportedSpecifics(
-                in: text, facts: AnswerPromptRenderer.factLines(renderedFacts), question: question
-            ).isEmpty ? text : nil
+            AnswerGroundingPolicy.unsupportedSpecifics(in: text, facts: shownFacts, question: question).isEmpty
+                && AnswerGroundingPolicy.usesFacts(text, facts: shownFacts, question: question)
+                && !AnswerGroundingPolicy.containsSecrets(text) ? text : nil
         }
         if abstain == true { return shown == nil }
         guard let shown else { return false }
