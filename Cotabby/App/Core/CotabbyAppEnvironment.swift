@@ -327,7 +327,15 @@ final class CotabbyAppEnvironment {
         // Conversation memory. Constructing the supervisor touches no process: it only reads paths
         // and the enabled flag. `AppDelegate` starts it after launch.
         let memorySupervisor = MemoryServiceSupervisor()
-        let memoryControl = MemoryControlModel(client: memorySupervisor.client, supervisor: memorySupervisor)
+        let memoryHistorySync = MemoryHistorySync(
+            client: memorySupervisor.client,
+            isServiceRunning: { [weak memorySupervisor] in memorySupervisor?.state == .running },
+            isOnACPower: { [weak powerSourceMonitor] in powerSourceMonitor?.isPluggedIn ?? false }
+        )
+        let memoryControl = MemoryControlModel(
+            client: memorySupervisor.client, supervisor: memorySupervisor, historySync: memoryHistorySync
+        )
+
 
         let settingsCoordinator = SettingsCoordinator(
             appUpdateManager: appUpdateManager,
@@ -532,6 +540,7 @@ final class CotabbyAppEnvironment {
             .store(in: &cancellables)
 
         observePowerSourceProfileSwitching()
+        observeMemoryService()
         observeOpenAICompatibleSelection()
     }
 
@@ -541,6 +550,25 @@ final class CotabbyAppEnvironment {
     /// appears). The apply step is idempotent (`selectEngine`/`selectModel` no-op when already
     /// current), so the redundant values `@Published` replays on subscription are harmless.
     /// Extracted from `init` to keep the initializer's complexity bounded.
+    /// Pushed memory sources (WhatsApp, Mail) sync once the service is ready and every 15 minutes
+    /// on AC after that; nothing runs while memory is off or the service is down.
+    private func observeMemoryService() {
+        memorySupervisor.$state
+            .map { $0 == .running }
+            .removeDuplicates()
+            .sink { [weak memoryControl] running in
+                guard let memoryControl else { return }
+                let historySync = memoryControl.historySync
+                if running {
+                    historySync.refreshReadiness()
+                    historySync.startPeriodicSync { await memoryControl.enabledPushedSources() }
+                } else {
+                    historySync.stopPeriodicSync()
+                }
+            }
+            .store(in: &cancellables)
+    }
+
     private func observePowerSourceProfileSwitching() {
         let triggers: [AnyPublisher<Void, Never>] = [
             powerSourceMonitor.$isPluggedIn.map { _ in () }.eraseToAnyPublisher(),

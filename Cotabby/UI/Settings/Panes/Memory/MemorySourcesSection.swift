@@ -10,6 +10,7 @@ import SwiftUI
 /// the Python side appears here without Swift changes beyond its requirement kinds.
 struct MemorySourcesSection: View {
     @ObservedObject var control: MemoryControlModel
+    @ObservedObject var historySync: MemoryHistorySync
 
     var body: some View {
         Section {
@@ -56,12 +57,16 @@ struct MemorySourcesSection: View {
             }
 
             HStack(spacing: 6) {
-                Image(systemName: source.check.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                    .foregroundStyle(source.check.ok ? .green : .orange)
-                Text(source.check.message)
+                let check = Self.check(for: source, historySync: historySync)
+                Image(systemName: check.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(check.ok ? .green : .orange)
+                Text(check.message)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+                if historySync.syncing.contains(source.id) {
+                    ProgressView().controlSize(.small)
+                }
             }
 
             ForEach(source.requirements, id: \.kind) { requirement in
@@ -75,7 +80,8 @@ struct MemorySourcesSection: View {
                         .foregroundStyle(.secondary)
                     Spacer()
                     Button("Sync Now") { Task { await control.sync(source.id) } }
-                        .disabled(!source.enabled || !source.check.ok)
+                        .disabled(!source.enabled || !Self.check(for: source, historySync: historySync).ok
+                                  || historySync.syncing.contains(source.id))
                     Button("Forget") { control.forget(source.id) }
                         .disabled(source.stats.messages == 0)
                         .help("Delete everything remembered from this source and rebuild the index without it.")
@@ -101,7 +107,7 @@ struct MemorySourcesSection: View {
                     .controlSize(.small)
             }
         case "full_disk_access":
-            if !source.check.ok {
+            if historySync.readiness[source.id] == .needsFullDiskAccess {
                 Button("Open Full Disk Access Settings") {
                     if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
                         NSWorkspace.shared.open(url)
@@ -127,6 +133,17 @@ struct MemorySourcesSection: View {
         panel.prompt = "Use Folder"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         control.setSourceOption(sourceID, key: "folder", value: url.path)
+    }
+
+    /// What to show as a source's readiness. For sources Cotabby reads itself, only Cotabby knows
+    /// whether macOS lets it read them, so its own readiness replaces the service's placeholder.
+    static func check(for source: MemorySource, historySync: MemoryHistorySync) -> (ok: Bool, message: String) {
+        guard source.pushed else { return (source.check.ok, source.check.message) }
+        guard let readiness = historySync.readiness[source.id] else { return (true, "Checking access…") }
+        if readiness.isReady, let outcome = historySync.lastOutcome[source.id] {
+            return (true, "Ready · \(outcome)")
+        }
+        return (readiness.isReady, readiness.message)
     }
 
     static func statsLabel(_ stats: MemorySource.Stats) -> String {

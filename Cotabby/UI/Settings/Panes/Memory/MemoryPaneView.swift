@@ -19,12 +19,15 @@ struct MemoryPaneView: View {
         SettingsPaneScaffold {
             serviceSection
             if supervisor.state == .running {
-                MemorySourcesSection(control: control)
+                MemorySourcesSection(control: control, historySync: control.historySync)
                 MemoryIndexSection(control: control)
                 MemoryPlaygroundSection(control: control, supervisor: supervisor)
             }
         }
-        .onAppear { control.beginObserving() }
+        .onAppear {
+            control.beginObserving()
+            control.historySync.refreshReadiness()
+        }
         .onDisappear { control.endObserving() }
     }
 

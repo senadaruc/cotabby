@@ -115,13 +115,15 @@ struct MemorySource: Decodable, Equatable, Identifiable, Sendable {
     let appBundleIds: [String]
     let requirements: [Requirement]
     let optionsSchema: [String: String]
+    /// True for sources Cotabby reads itself and pushes (`MemoryHistorySync`).
+    let pushed: Bool
     let enabled: Bool
     let options: [String: String]
     let check: Check
     let stats: Stats
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, description, kind, appBundleIds, requirements, optionsSchema, enabled, options, check, stats
+        case id, title, description, kind, appBundleIds, requirements, optionsSchema, pushed, enabled, options, check, stats
     }
 
     init(from decoder: Decoder) throws {
@@ -133,6 +135,7 @@ struct MemorySource: Decodable, Equatable, Identifiable, Sendable {
         appBundleIds = try container.decode([String].self, forKey: .appBundleIds)
         requirements = try container.decode([Requirement].self, forKey: .requirements)
         optionsSchema = try container.decode([String: String].self, forKey: .optionsSchema)
+        pushed = try container.decodeIfPresent(Bool.self, forKey: .pushed) ?? false
         enabled = try container.decode(Bool.self, forKey: .enabled)
         options = try container.decode([String: MemoryJSONValue].self, forKey: .options).mapValues(\.text)
         check = try container.decode(Check.self, forKey: .check)

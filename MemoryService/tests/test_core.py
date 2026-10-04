@@ -103,8 +103,9 @@ def test_strip_mail_quotes_keeps_only_the_new_text():
 # MARK: - Store
 
 
-def test_titles_match_without_badges_case_or_direction_marks():
-    assert title_key("(3) ‎Ayşe  Yılmaz") == title_key("ayşe yılmaz")
+def test_titles_match_without_badges_case_direction_marks_or_reply_prefixes():
+    assert title_key("(3) \u200eAyşe  Yılmaz") == title_key("ayşe yılmaz")
+    assert title_key("Re: Fwd: POC results") == title_key("POC results") == title_key("YNT: POC results")
 
 
 def test_participants_never_include_the_user(tmp_path: Path):

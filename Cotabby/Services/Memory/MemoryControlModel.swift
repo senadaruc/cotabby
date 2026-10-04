@@ -25,12 +25,31 @@ final class MemoryControlModel: ObservableObject {
 
     private let client: MemoryServiceClient
     private let supervisor: MemoryServiceSupervisor
+    /// Reads and pushes the sources only Cotabby may read; the pane observes it directly too.
+    let historySync: MemoryHistorySync
     private var observers = 0
     private var pollTask: Task<Void, Never>?
 
-    init(client: MemoryServiceClient, supervisor: MemoryServiceSupervisor) {
+    init(client: MemoryServiceClient, supervisor: MemoryServiceSupervisor, historySync: MemoryHistorySync) {
         self.client = client
         self.supervisor = supervisor
+        self.historySync = historySync
+    }
+
+    private var retentionDays: Int { configuration?.privacy.retentionDays ?? 365 }
+
+    private func isPushed(_ id: String) -> Bool {
+        sources.first { $0.id == id }?.pushed ?? historySync.pushedSourceIDs.contains(id)
+    }
+
+    /// The pushed sources the user switched on, and the retention window, as the periodic sync
+    /// needs them (read fresh from the service, since the pane may be closed).
+    func enabledPushedSources() async -> (sources: [String], retentionDays: Int) {
+        guard let config = try? await client.call("config.get", as: MemoryConfiguration.self) else {
+            return ([], 365)
+        }
+        let enabled = historySync.pushedSourceIDs.filter { config.sources[$0]?.enabled == true }
+        return (enabled, config.privacy.retentionDays)
     }
 
     // MARK: - Observation
@@ -89,7 +108,10 @@ final class MemoryControlModel: ObservableObject {
 
     func setSourceEnabled(_ id: String, enabled: Bool) {
         perform("sources.configure", ["id": id, "enabled": enabled]) {
-            if enabled { await self.sync(id) }
+            if enabled {
+                self.historySync.refreshReadiness()
+                await self.sync(id)
+            }
         }
     }
 
@@ -97,8 +119,23 @@ final class MemoryControlModel: ObservableObject {
         perform("sources.configure", ["id": id, "options": [key: value]])
     }
 
+    /// Syncs one source, or every enabled one. Sources Cotabby reads itself go through
+    /// `MemoryHistorySync`; the rest are synced by the service.
     func sync(_ id: String? = nil) async {
-        await run("sources.sync", id.map { ["id": $0] } ?? [:])
+        if let id {
+            if isPushed(id) {
+                await historySync.sync(id, retentionDays: retentionDays)
+                await refresh()
+            } else {
+                await run("sources.sync", ["id": id])
+            }
+            return
+        }
+        await run("sources.sync", [:])
+        for source in sources where source.pushed && source.enabled {
+            await historySync.sync(source.id, retentionDays: retentionDays)
+        }
+        await refresh()
     }
 
     func forget(_ id: String) {

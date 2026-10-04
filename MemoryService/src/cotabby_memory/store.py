@@ -114,10 +114,16 @@ class Conversation:
 
 
 def title_key(title: str) -> str:
-    """Titles are matched case- and space-insensitively, without direction marks or a leading
-    unread badge ("(3) "), the same normalization Cotabby applies to window titles."""
-    cleaned = re.sub(r"[‎‏‪-‮⁦-⁩]", "", title)
+    """Titles are matched case- and space-insensitively, without direction marks, a leading unread
+    badge ("(3) ") or mail reply prefixes, the same normalization Cotabby applies to window titles."""
+    cleaned = re.sub("[\u200e\u200f\u202a-\u202e\u2066-\u2069]", "", title)
     cleaned = re.sub(r"^\(\d+\+?\)\s*", "", cleaned.strip())
+    # A mail thread is stored under its bare subject, while a reply's compose window is titled
+    # "Re: subject"; reply and forward prefixes (English, German, Nordic, Turkish) are dropped.
+    previous = None
+    while previous != cleaned:
+        previous = cleaned
+        cleaned = re.sub(r"^(re|fw|fwd|aw|wg|sv|ynt|ilt|tr)\s*(\[\d+\])?\s*:\s*", "", cleaned, flags=re.IGNORECASE)
     return " ".join(cleaned.lower().split())
 
 

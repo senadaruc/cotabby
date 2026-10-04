@@ -1,0 +1,267 @@
+import Foundation
+
+/// File overview:
+/// Pulls the readable body text out of a raw email (RFC 822 / MIME), for conversation memory.
+///
+/// Why a hand-written parser: macOS ships no public MIME API, and memory needs only one thing from
+/// a message, the text a person wrote. This handles what real mail uses for that: header folding,
+/// multipart nesting, `base64` and `quoted-printable` transfer encodings, and charsets by IANA name
+/// (UTF-8, ISO-8859-x, Windows-125x including Turkish 1254). `text/plain` is preferred; an
+/// HTML-only message is reduced to text. Attachments are skipped. Pure value logic, so every rule
+/// is unit-tested without Mail.
+nonisolated enum EmailBodyExtractor {
+    /// The maximum characters of body kept. Memory only needs the gist of a message, and quoted
+    /// history (stripped by the service) makes long tails mostly repetition.
+    static let maximumCharacters = 6000
+
+    /// Mail's `.emlx` files start with the message's byte length on its own line, followed by the
+    /// raw message and an XML property list. Returns the body text, or nil when there is none.
+    static func bodyFromEmlx(_ data: Data) -> String? {
+        guard let newline = data.firstIndex(of: 0x0A),
+              let length = Int(String(decoding: data[data.startIndex..<newline], as: UTF8.self)
+                .trimmingCharacters(in: .whitespaces)) else {
+            return body(fromMessage: data)
+        }
+        let start = data.index(after: newline)
+        let end = min(data.endIndex, start + length)
+        return body(fromMessage: data[start..<end])
+    }
+
+    static func body(fromMessage message: Data) -> String? {
+        let part = MIMEPart(message)
+        guard let text = bestText(in: part) else { return nil }
+        let cleaned = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\u{00A0}", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return nil }
+        return cleaned.count > maximumCharacters ? String(cleaned.prefix(maximumCharacters)) : cleaned
+    }
+
+    // MARK: - Choosing the text part
+
+    private static func bestText(in part: MIMEPart) -> String? {
+        if part.isAttachment { return nil }
+        if part.mediaType.hasPrefix("multipart/") {
+            let children = part.children()
+            if part.mediaType == "multipart/alternative" {
+                // Alternatives are ordered plainest first; prefer plain text, then HTML.
+                if let plain = children.first(where: { $0.mediaType == "text/plain" && !$0.isAttachment }) {
+                    return plain.decodedText()
+                }
+            }
+            for child in children {
+                if let text = bestText(in: child) { return text }
+            }
+            return nil
+        }
+        switch part.mediaType {
+        case "text/plain", "": return part.decodedText()
+        case "text/html": return part.decodedText().map(htmlToText)
+        default: return nil
+        }
+    }
+
+    // MARK: - HTML
+
+    static func htmlToText(_ html: String) -> String {
+        var text = html
+        for block in ["style", "script", "head"] {
+            text = text.replacingOccurrences(
+                of: "<\(block)[^>]*>.*?</\(block)>", with: " ", options: [.regularExpression, .caseInsensitive]
+            )
+        }
+        text = text.replacingOccurrences(of: "<br\\s*/?>", with: "\n", options: [.regularExpression, .caseInsensitive])
+        text = text.replacingOccurrences(of: "</(p|div|tr|li|h[1-6])>", with: "\n", options: [.regularExpression, .caseInsensitive])
+        // A quoted reply in HTML mail is a blockquote; mark its lines like plain-text quoting so the
+        // service's quote stripping removes them too.
+        text = text.replacingOccurrences(of: "<blockquote[^>]*>", with: "\n> ", options: [.regularExpression, .caseInsensitive])
+        text = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+        text = decodeEntities(text)
+        text = text.replacingOccurrences(of: "[ \t]+", with: " ", options: .regularExpression)
+        text = text.replacingOccurrences(of: "\n\\s*\n\\s*\n+", with: "\n\n", options: .regularExpression)
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func decodeEntities(_ text: String) -> String {
+        let named = ["&nbsp;": " ", "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": "\"", "&#39;": "'", "&apos;": "'"]
+        var result = text
+        for (entity, value) in named {
+            result = result.replacingOccurrences(of: entity, with: value)
+        }
+        // Numeric entities: &#246; and &#xF6;
+        guard let regex = try? NSRegularExpression(pattern: "&#(x?)([0-9a-fA-F]+);") else { return result }
+        let source = result as NSString
+        var output = ""
+        var last = 0
+        for match in regex.matches(in: result, range: NSRange(location: 0, length: source.length)) {
+            output += source.substring(with: NSRange(location: last, length: match.range.location - last))
+            let isHex = source.substring(with: match.range(at: 1)) == "x"
+            let digits = source.substring(with: match.range(at: 2))
+            if let value = UInt32(digits, radix: isHex ? 16 : 10), let scalar = Unicode.Scalar(value) {
+                output.unicodeScalars.append(scalar)
+            }
+            last = match.range.location + match.range.length
+        }
+        output += source.substring(from: last)
+        return output
+    }
+}
+
+/// One MIME entity: its headers and its raw body bytes.
+private nonisolated struct MIMEPart {
+    let headers: [String: String]
+    let body: Data
+
+    init(_ data: Data) {
+        let (headerData, bodyData) = Self.split(data)
+        headers = Self.parseHeaders(headerData)
+        body = bodyData
+    }
+
+    /// Splits at the first blank line (CRLF or LF).
+    private static func split(_ data: Data) -> (Data, Data) {
+        let bytes = [UInt8](data)
+        var index = 0
+        while index < bytes.count {
+            if bytes[index] == 0x0A {
+                if index + 1 < bytes.count, bytes[index + 1] == 0x0A {
+                    return (Data(bytes[0..<index]), Data(bytes[(index + 2)...]))
+                }
+                if index + 2 < bytes.count, bytes[index + 1] == 0x0D, bytes[index + 2] == 0x0A {
+                    return (Data(bytes[0..<index]), Data(bytes[(index + 3)...]))
+                }
+            }
+            index += 1
+        }
+        return (data, Data())
+    }
+
+    private static func parseHeaders(_ data: Data) -> [String: String] {
+        // Headers are ASCII (RFC 2047 encoded words aside, which memory does not need here).
+        // Carriage returns are dropped entirely: with CRLF line endings a header value would
+        // otherwise keep a trailing "\r" (not in `.whitespaces`), and "base64\r" or "text/plain\r"
+        // would match nothing.
+        let text = String(decoding: data, as: UTF8.self).replacingOccurrences(of: "\r", with: "")
+        var headers: [String: String] = [:]
+        var currentName: String?
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            if let first = line.first, first == " " || first == "\t", let name = currentName {
+                headers[name, default: ""] += " " + line.trimmingCharacters(in: .whitespaces)  // Folded line.
+                continue
+            }
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            let name = line[..<colon].trimmingCharacters(in: .whitespaces).lowercased()
+            headers[name] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            currentName = name
+        }
+        return headers
+    }
+
+    /// `type/subtype`, lowercased; empty when absent (which RFC 2045 says means text/plain).
+    var mediaType: String {
+        guard let value = headers["content-type"] else { return "" }
+        return value.split(separator: ";").first.map { $0.trimmingCharacters(in: .whitespaces).lowercased() } ?? ""
+    }
+
+    func parameter(_ name: String, of header: String) -> String? {
+        guard let value = headers[header] else { return nil }
+        for piece in value.split(separator: ";").dropFirst() {
+            let pair = piece.split(separator: "=", maxSplits: 1)
+            guard pair.count == 2, pair[0].trimmingCharacters(in: .whitespaces).lowercased() == name else { continue }
+            return pair[1].trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+        }
+        return nil
+    }
+
+    var isAttachment: Bool {
+        (headers["content-disposition"]?.lowercased().hasPrefix("attachment")) == true
+    }
+
+    /// The parts of a multipart body, split on the boundary as raw bytes. Splitting decoded text
+    /// instead would mangle a part in a legacy charset (Windows-1254, ISO-8859-9) before its own
+    /// charset is applied.
+    func children() -> [MIMEPart] {
+        guard let boundary = parameter("boundary", of: "content-type"), !boundary.isEmpty else { return [] }
+        let delimiter = Data(("--" + boundary).utf8)
+        var parts: [MIMEPart] = []
+        var searchStart = body.startIndex
+        var partStart: Data.Index?
+        while let found = body.range(of: delimiter, in: searchStart..<body.endIndex) {
+            if let start = partStart {
+                var end = found.lowerBound
+                // The line break before a delimiter belongs to the delimiter, not the part.
+                if end > start, body[body.index(before: end)] == 0x0A { end = body.index(before: end) }
+                if end > start, body[body.index(before: end)] == 0x0D { end = body.index(before: end) }
+                parts.append(MIMEPart(body[start..<max(start, end)]))
+            }
+            var next = found.upperBound
+            // "--boundary--" closes the multipart.
+            if next + 1 < body.endIndex, body[next] == 0x2D, body[next + 1] == 0x2D { break }
+            // Skip the rest of the delimiter line.
+            while next < body.endIndex, body[next] != 0x0A { next += 1 }
+            partStart = next < body.endIndex ? body.index(after: next) : body.endIndex
+            searchStart = partStart ?? body.endIndex
+        }
+        return parts
+    }
+
+    func decodedText() -> String? {
+        let encoding = headers["content-transfer-encoding"]?.lowercased() ?? ""
+        let raw: Data
+        switch encoding {
+        case "base64":
+            let compact = String(decoding: body, as: UTF8.self).filter { !$0.isWhitespace }
+            guard let decoded = Data(base64Encoded: compact, options: .ignoreUnknownCharacters) else { return nil }
+            raw = decoded
+        case "quoted-printable":
+            raw = Self.decodeQuotedPrintable(body)
+        default:
+            raw = body
+        }
+        return Self.string(from: raw, charset: parameter("charset", of: "content-type"))
+    }
+
+    static func decodeQuotedPrintable(_ data: Data) -> Data {
+        let bytes = [UInt8](data)
+        var output = [UInt8]()
+        output.reserveCapacity(bytes.count)
+        var index = 0
+        func hex(_ byte: UInt8) -> UInt8? {
+            switch byte {
+            case 0x30...0x39: return byte - 0x30
+            case 0x41...0x46: return byte - 0x37
+            case 0x61...0x66: return byte - 0x57
+            default: return nil
+            }
+        }
+        while index < bytes.count {
+            let byte = bytes[index]
+            if byte == 0x3D {  // "="
+                if index + 1 < bytes.count, bytes[index + 1] == 0x0A { index += 2; continue }  // Soft break.
+                if index + 2 < bytes.count, bytes[index + 1] == 0x0D, bytes[index + 2] == 0x0A { index += 3; continue }
+                if index + 2 < bytes.count, let high = hex(bytes[index + 1]), let low = hex(bytes[index + 2]) {
+                    output.append(high << 4 | low)
+                    index += 3
+                    continue
+                }
+            }
+            output.append(byte)
+            index += 1
+        }
+        return Data(output)
+    }
+
+    /// Decodes with the declared charset, falling back to UTF-8 and then Latin-1 (which accepts any
+    /// byte sequence), so a mislabeled message still yields text.
+    static func string(from data: Data, charset: String?) -> String? {
+        if let charset {
+            let cfEncoding = CFStringConvertIANACharSetNameToEncoding(charset as CFString)
+            if cfEncoding != kCFStringEncodingInvalidId {
+                let encoding = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(cfEncoding))
+                if let decoded = String(data: data, encoding: encoding) { return decoded }
+            }
+        }
+        return String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1)
+    }
+}
