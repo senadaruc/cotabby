@@ -181,6 +181,10 @@ final class MemoryHistoryReaderTests: XCTestCase {
         XCTAssertEqual(AppleMailHistoryReader.role(ofMailboxURL: "ews://X/G%C3%B6nderilmi%C5%9F%20%C3%96%C4%9Feler"), .sent)
         XCTAssertEqual(AppleMailHistoryReader.role(ofMailboxURL: "imap://X/%C4%B0stenmeyen%20E-posta"), .junk)
         XCTAssertEqual(AppleMailHistoryReader.role(ofMailboxURL: "imap://X/Consent%20forms"), .other)
+        XCTAssertEqual(AppleMailHistoryReader.role(ofMailboxURL: "imap://X/Junk/Phishing"), .junk, "anything under junk")
+        XCTAssertEqual(AppleMailHistoryReader.role(ofMailboxURL: "imap://X/Bulk%20Mail"), .junk)
+        XCTAssertEqual(AppleMailHistoryReader.role(ofMailboxURL: "imap://spam-filter.example.com/Sent"), .sent, "the host is not a folder")
+        XCTAssertEqual(AppleMailHistoryReader.role(ofMailboxURL: "local:///Sent%20Messages"), .sent)
     }
 
     func test_mailSubjectsLoseReplyPrefixes() {

@@ -17,8 +17,10 @@ import Foundation
 ///   marked as the user's own would put words in the user's mouth when answers quote memory.
 ///   Another copy of a sent message (the inbox copy of mail sent to a list the user is on) is
 ///   skipped as a duplicate rather than trusted by its Message-ID, which a sender can reuse.
-/// - Mailbox roles come from the mailbox's own name (the URL's last path component), never from
-///   anywhere in the URL, where an account or host name could contain "sent".
+/// - Mailbox roles come from the mailbox path, never the account or host part of the URL, where a
+///   name could contain "sent". Sent must be the mailbox's exact name (mistaking a folder for Sent
+///   would make its mail the user's); junk is any folder on the path with a junk word in its name
+///   (reading less is the safe mistake there).
 /// - Participants: every other address on the message (sender and recipients), lowercased; the
 ///   user's own addresses are the senders of Sent mail.
 /// - Junk and spam mailboxes are skipped.
@@ -156,21 +158,21 @@ nonisolated struct AppleMailHistoryReader: MemoryHistoryReading {
         "envoyes", "messages envoyes", "enviados", "elementos enviados", "itens enviados", "posta inviata",
         "verzonden items", "verzonden",
     ]
-    static let junkNames: Set<String> = [
-        "junk", "junk email", "junk e-mail", "junk mail", "spam", "bulk mail", "gereksiz", "gereksiz e-posta",
-        "istenmeyen", "istenmeyen e-posta", "istenmeyen posta", "spam-e-mail", "courrier indesirable", "correo no deseado",
-    ]
+    static let junkWords = ["junk", "spam", "bulk", "gereksiz", "istenmeyen", "indesirable", "no deseado"]
 
-    /// The role of a mailbox from its URL's last path component (percent-decoded).
+    /// The role of a mailbox from the folders on its URL's path (percent-decoded), after the scheme
+    /// and the account or host (`imap://ACCOUNT/Folder/Sub`).
     static func role(ofMailboxURL url: String) -> MailboxRole {
-        guard let component = url.split(separator: "/").last, let name = String(component).removingPercentEncoding else {
-            return .other
+        // URLComponents separates the host from the path, including an empty host (`local:///Sent`).
+        let path = URLComponents(string: url)?.percentEncodedPath ?? url
+        let folders = path.split(separator: "/").map { part -> String in
+            (String(part).removingPercentEncoding ?? String(part))
+                .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+                .replacingOccurrences(of: "ı", with: "i")
+                .trimmingCharacters(in: .whitespaces)
         }
-        let folded = name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
-            .replacingOccurrences(of: "ı", with: "i")
-            .trimmingCharacters(in: .whitespaces)
-        if sentNames.contains(folded) { return .sent }
-        if junkNames.contains(folded) { return .junk }
+        if folders.contains(where: { folder in junkWords.contains { folder.contains($0) } }) { return .junk }
+        if let name = folders.last, sentNames.contains(name) { return .sent }
         return .other
     }
 
