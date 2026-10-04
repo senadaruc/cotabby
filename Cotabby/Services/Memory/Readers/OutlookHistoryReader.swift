@@ -148,7 +148,10 @@ nonisolated struct OutlookHistoryReader: MemoryHistoryReading {
 
     static func ingestRecord(_ message: HxMailRecord, sent: Date, ownAddresses: Set<String>) -> MemoryIngestRecord? {
         let body = (message.bodyText ?? message.bodyHTML.map(EmailBodyExtractor.htmlToText)).flatMap { $0.isEmpty ? nil : $0 }
-        guard let text = body ?? message.preview, !text.isEmpty else { return nil }
+        guard var text = body ?? message.preview, !text.isEmpty else { return nil }
+        // An invitation's body ends in the join-a-call block (links, dial-in, passcode): keep the agenda.
+        if message.messageClass.hasPrefix("IPM.Schedule") { text = CalendarEventText.cleanedNotes(text) }
+        guard !text.isEmpty else { return nil }
         let sender = message.senderAddress ?? ""
         // Never marked as the user's: the store does not show which folder a message is in, and a
         // From address can be spoofed, so a mail "from" the user could put words in their mouth when

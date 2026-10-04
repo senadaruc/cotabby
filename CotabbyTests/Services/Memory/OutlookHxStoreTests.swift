@@ -89,6 +89,13 @@ final class OutlookHxStoreTests: XCTestCase {
         XCTAssertEqual(message.senderAddress, "dme@imperum.io")
     }
 
+    func test_meetingInvitationsAreRememberedAndRepliesAreNot() {
+        XCTAssertTrue(HxStoreRecordParser.isRemembered("IPM.Schedule.Meeting.Request"))
+        XCTAssertTrue(HxStoreRecordParser.isRemembered("IPM.Schedule.Meeting.Canceled"))
+        XCTAssertFalse(HxStoreRecordParser.isRemembered("IPM.Schedule.Meeting.Resp.Pos"))
+        XCTAssertFalse(HxStoreRecordParser.isRemembered("IPM.Appointment"))
+    }
+
     func test_nonMailAndFutureDatedRecordsAreNotMessages() {
         XCTAssertNil(HxStoreRecordParser.parse(Self.record(strings: ["IPM.Appointment", "<x@y.z>", "Lunch"], sent: sent)))
         XCTAssertNil(HxStoreRecordParser.parse([UInt8](repeating: 7, count: 300)))

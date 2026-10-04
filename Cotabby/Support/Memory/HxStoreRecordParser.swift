@@ -62,7 +62,7 @@ nonisolated enum HxStoreRecordParser {
         }
         let strings = segments.flatMap(orderedStrings)
 
-        guard let messageClass = strings.first(where: { $0.hasPrefix("IPM.") }), messageClass.hasPrefix("IPM.Note"),
+        guard let messageClass = strings.first(where: { $0.hasPrefix("IPM.") }), isRemembered(messageClass),
               let messageID = strings.first(where: isMessageID) else { return nil }
         let senderIndex = strings.firstIndex(where: isAddress)
         let senderAddress = senderIndex.map { strings[$0].lowercased() }
@@ -148,6 +148,13 @@ nonisolated enum HxStoreRecordParser {
     // checks rather than regular expressions (which go through NSString and dominate the scan).
 
     /// `local@domain.tld`: one @, an allowed local part, a dotted domain with a letters-only TLD.
+    /// Mail, and meeting invitations and cancellations (their text carries the agenda). Replies to
+    /// invitations ("Accepted: …") say nothing else and are left out, as are other item classes.
+    static func isRemembered(_ messageClass: String) -> Bool {
+        messageClass.hasPrefix("IPM.Note") || messageClass.hasPrefix("IPM.Schedule.Meeting.Request")
+            || messageClass.hasPrefix("IPM.Schedule.Meeting.Canceled")
+    }
+
     static func isAddress(_ text: String) -> Bool {
         let parts = text.split(separator: "@", omittingEmptySubsequences: false)
         guard parts.count == 2, !parts[0].isEmpty, parts[1].count >= 4 else { return false }
