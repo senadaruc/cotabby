@@ -36,12 +36,12 @@ final class MemoryHistorySync: ObservableObject {
     /// Records read per page.
     nonisolated static let pageSize = 400
     /// Sources whose reader is not available in this version; already remembered messages stay.
-    static let pausedSources: [String: String] = [
-        "teams": "Sync paused while Teams reading moves into Cotabby; remembered Teams messages stay searchable.",
-    ]
+    static let pausedSources: [String: String] = [:]
 
     init(
-        readers: [any MemoryHistoryReading] = [WhatsAppHistoryReader(), AppleMailHistoryReader(), OutlookHistoryReader()],
+        readers: [any MemoryHistoryReading] = [
+            WhatsAppHistoryReader(), AppleMailHistoryReader(), OutlookHistoryReader(), TeamsCacheReader()
+        ],
         engine: @escaping @MainActor () -> MemoryEngine?,
         isOnACPower: @escaping @MainActor () -> Bool
     ) {
