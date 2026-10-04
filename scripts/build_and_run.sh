@@ -48,6 +48,12 @@ if [[ -d "$INSTALLED_APP" ]]; then
   fi
 fi
 
+# Numbered like published builds (last tag, "-s", commit count), so an app that updates itself from
+# a feed never treats a newer local build as older than a release, and the menu shows which build it is.
+BUILD_NUMBER="$(git -C "$ROOT_DIR" rev-list --count HEAD 2>/dev/null || echo 1)"
+MARKETING="$(git -C "$ROOT_DIR" describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-s[0-9]*' 2>/dev/null | sed 's/^v//')"
+MARKETING="${MARKETING:-0.0.0}-s$BUILD_NUMBER"
+
 "$ROOT_DIR/scripts/prepare_cotabby_workspace.sh"
 # Materialize binary package artifacts before building from a cleared DerivedData tree.
 xcodebuild -resolvePackageDependencies \
@@ -61,6 +67,7 @@ xcodebuild \
   -destination "platform=macOS" \
   -derivedDataPath "$DERIVED_DATA" \
   CODE_SIGNING_ALLOWED=NO \
+  CURRENT_PROJECT_VERSION="$BUILD_NUMBER" MARKETING_VERSION="$MARKETING" \
   build
 
 # Honor the contributor override from Signing.local.xcconfig after Xcode resolves it.

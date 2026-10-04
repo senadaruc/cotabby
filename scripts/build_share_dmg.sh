@@ -24,6 +24,7 @@
 #   COTABBY_SHARE_FEED_URL, COTABBY_SHARE_PUBLIC_KEY
 #                            an update feed and its Sparkle public key, so the build updates itself
 #                            from there (publish_fork_release.sh sets them); none by default
+#   COTABBY_SHARE_PROJECT_URL the repository the app's GitHub links open (default: upstream)
 #   COTABBY_SHARE_DMG        where to write the DMG (default: build/share/Cotabby-Dev-<version>.dmg)
 set -euo pipefail
 
@@ -56,6 +57,7 @@ if [[ -n "${COTABBY_SHARE_FEED_URL:-}" ]]; then
                      COTABBY_DEV_UPDATE_PUBLIC_KEY="${COTABBY_SHARE_PUBLIC_KEY:?a feed needs its public key}")
     note "updates from: $COTABBY_SHARE_FEED_URL"
 fi
+[[ -n "${COTABBY_SHARE_PROJECT_URL:-}" ]] && update_settings+=(COTABBY_DEV_PROJECT_URL="$COTABBY_SHARE_PROJECT_URL")
 rm -rf "$archive" "$dmg" "$OUT_DIR/DerivedData"
 mkdir -p "$OUT_DIR"
 

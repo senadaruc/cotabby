@@ -24,6 +24,8 @@
 	<true/>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>Cotabby remembers your meetings so answers it drafts can say when and with whom, and checks your calendar when a message asks about your availability. Events stay on this Mac.</string>
+	<key>CotabbyProjectURL</key>
+	<string>$(COTABBY_PROJECT_URL)</string>
 	<key>NSAccessibilityUsageDescription</key>
 	<string>Cotabby needs Accessibility access to read and insert text in other apps.</string>
 	<key>NSAppTransportSecurity</key>

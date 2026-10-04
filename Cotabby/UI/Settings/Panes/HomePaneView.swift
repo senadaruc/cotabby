@@ -385,9 +385,7 @@ struct HomePaneView: View {
         HStack(spacing: 6) {
             Text("Free & open source")
             footerDot
-            if let repoURL = URL(string: "https://github.com/FuJacob/cotabby") {
-                Link("GitHub", destination: repoURL)
-            }
+            Link("GitHub", destination: ProjectLinks.repository)
             footerDot
             if let supportURL = URL(string: "https://github.com/FuJacob/cotabby/issues") {
                 Link(destination: supportURL) {

@@ -84,6 +84,7 @@ gh release view "$tag" --repo "$repo" >/dev/null 2>&1 && fail "release $tag alre
 
 step "Building $version"
 COTABBY_SHARE_VERSION="$version" COTABBY_SHARE_BUILD="$build" COTABBY_SHARE_DMG="$dmg" \
+    COTABBY_SHARE_PROJECT_URL="https://github.com/$repo" \
     COTABBY_SHARE_FEED_URL="$feed" COTABBY_SHARE_PUBLIC_KEY="$public_key" \
     bash "$REPO_ROOT/scripts/build_share_dmg.sh"
 

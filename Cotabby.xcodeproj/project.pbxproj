@@ -264,6 +264,7 @@
 		310C533E572BC2C5FF12CF69 /* EmojiTriggerStateMachineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D3B0DE3EF3F31AE1E01828 /* EmojiTriggerStateMachineTests.swift */; };
 		311A4FDEFFEB67B337FEE47A /* EmojiCatalogMatcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E8BE4574F1770808AA848FE /* EmojiCatalogMatcherTests.swift */; };
 		3124AD2340D4B58AF48A22F3 /* KeyboardInputSourceMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 534F1297DEF3547D0DE56FB2 /* KeyboardInputSourceMonitor.swift */; };
+		31978D86070CED9D8B0E6361 /* ProjectLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28C95F65737AC43E734605FD /* ProjectLinks.swift */; };
 		31C32EACD8D491295C3A9B7D /* AnswerCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDFE9AB6980C839A5EA634FC /* AnswerCoordinator.swift */; };
 		31FE2E49FD1491E90B32B956 /* HardwareCapabilityProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F63A5EF992329FB9F6C4C26 /* HardwareCapabilityProbe.swift */; };
 		3265346744616CFE2583CB41 /* TranslationScrollFollow.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC52496C194423DFD7758242 /* TranslationScrollFollow.swift */; };
@@ -664,6 +665,7 @@
 		825B6D2B1C9089F8CB9C5F2B /* MemoryEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DFF3971D5064E96D119B72F /* MemoryEngine.swift */; };
 		82AE1426097F86C73537D6CF /* SuggestionResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8543EBA09E11A5066880CC91 /* SuggestionResult.swift */; };
 		82BEAFC0C5DCE607D45335D3 /* TokenHealingPlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEDD364CC7C995916BD1E4B0 /* TokenHealingPlanTests.swift */; };
+		82C72742D9D3F730A1E3A2F1 /* ProjectLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28C95F65737AC43E734605FD /* ProjectLinks.swift */; };
 		830E59C6940485511EE3FA39 /* SuggestionCoordinator+Input.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FFA31F5FA8D164CB6C30D06 /* SuggestionCoordinator+Input.swift */; };
 		8320BEF361D8EA55E5CC7D95 /* llama-eval-cases.json in Resources */ = {isa = PBXBuildFile; fileRef = AB84C175EA5B59E118F58C49 /* llama-eval-cases.json */; };
 		832ACFA7639BA6F769CFA4E1 /* SuggestionConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E3BA84BBFD8B2501767516C /* SuggestionConfiguration.swift */; };
@@ -1407,6 +1409,7 @@
 		266C8BF167118855C56FC7F4 /* BrowserAppDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserAppDetector.swift; sourceTree = "<group>"; };
 		272052CDEFA45031BE0507CE /* AppSettingsDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettingsDetailView.swift; sourceTree = "<group>"; };
 		27B03589D82D0ADCF41B9CD0 /* SurfaceContextComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceContextComposer.swift; sourceTree = "<group>"; };
+		28C95F65737AC43E734605FD /* ProjectLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectLinks.swift; sourceTree = "<group>"; };
 		29163A3D0BB0F11EEAC2985A /* GhostTextPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhostTextPanelView.swift; sourceTree = "<group>"; };
 		2953826B814C4B3E589A5E38 /* EmailBodyExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmailBodyExtractor.swift; sourceTree = "<group>"; };
 		2B23950F38B1B3C8A5CC5BE5 /* OpenAICompatibleCredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAICompatibleCredentialStore.swift; sourceTree = "<group>"; };
@@ -3604,6 +3607,7 @@
 			isa = PBXGroup;
 			children = (
 				1A951C04DF783B1F1EFDD1E5 /* BundleVersion.swift */,
+				28C95F65737AC43E734605FD /* ProjectLinks.swift */,
 				14E22DCC1852B8E4B235D256 /* WordCountFormatter.swift */,
 			);
 			path = Utilities;
@@ -5043,6 +5047,7 @@
 				D0BA4677F47C6943310B8A28 /* PopupChrome.swift in Sources */,
 				14816A290847D599769532E3 /* PostExhaustionAcceptanceState.swift in Sources */,
 				C607A624A0FB697486C56B8E /* PowerSourceMonitor.swift in Sources */,
+				82C72742D9D3F730A1E3A2F1 /* ProjectLinks.swift in Sources */,
 				37BAD9C6AFAAF99E818D734D /* PromptContextSanitizer.swift in Sources */,
 				9FB9E31E17A569CF8DA58D31 /* PromptPrefaceEchoFilter.swift in Sources */,
 				47EFFC4AEBA2848C933BB77C /* PromptSectionBudget.swift in Sources */,
@@ -5486,6 +5491,7 @@
 				986C1339A8FBA3569FC129D6 /* PopupChrome.swift in Sources */,
 				05CFA72F4FF44A0CDBEFED3C /* PostExhaustionAcceptanceState.swift in Sources */,
 				50E1247BE6A952AB1B12C444 /* PowerSourceMonitor.swift in Sources */,
+				31978D86070CED9D8B0E6361 /* ProjectLinks.swift in Sources */,
 				32A5095C89B598C9A959F435 /* PromptContextSanitizer.swift in Sources */,
 				570077D98B9474DB763606AA /* PromptPrefaceEchoFilter.swift in Sources */,
 				21187878C7390AD639717B8F /* PromptSectionBudget.swift in Sources */,
@@ -5973,6 +5979,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				COTABBY_PROJECT_URL = "$(COTABBY_DEV_PROJECT_URL)";
 				COTABBY_UPDATE_FEED_URL = "$(COTABBY_DEV_UPDATE_FEED_URL)";
 				COTABBY_UPDATE_PUBLIC_KEY = "$(COTABBY_DEV_UPDATE_PUBLIC_KEY)";
 				CURRENT_PROJECT_VERSION = 1;
@@ -6015,6 +6022,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				COTABBY_PROJECT_URL = "https://github.com/FuJacob/cotabby";
 				COTABBY_UPDATE_FEED_URL = "https://updates.cotabby.app/appcast.xml";
 				COTABBY_UPDATE_PUBLIC_KEY = "$(SPARKLE_PUBLIC_ED_KEY)";
 				CURRENT_PROJECT_VERSION = 1;
@@ -6056,6 +6064,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				COTABBY_PROJECT_URL = "$(COTABBY_DEV_PROJECT_URL)";
 				COTABBY_UPDATE_FEED_URL = "$(COTABBY_DEV_UPDATE_FEED_URL)";
 				COTABBY_UPDATE_PUBLIC_KEY = "$(COTABBY_DEV_UPDATE_PUBLIC_KEY)";
 				CURRENT_PROJECT_VERSION = 1;
@@ -6248,6 +6257,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				COTABBY_PROJECT_URL = "https://github.com/FuJacob/cotabby";
 				COTABBY_UPDATE_FEED_URL = "https://updates.cotabby.app/appcast.xml";
 				COTABBY_UPDATE_PUBLIC_KEY = "$(SPARKLE_PUBLIC_ED_KEY)";
 				CURRENT_PROJECT_VERSION = 1;

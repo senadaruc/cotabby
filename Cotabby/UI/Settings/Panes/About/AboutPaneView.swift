@@ -90,12 +90,10 @@ struct AboutPaneView: View {
     /// search can scroll to and pulse individually.
     @ViewBuilder
     private var resourceRows: some View {
-        if let repoURL = URL(string: "https://github.com/FuJacob/Cotabby") {
-            Link(destination: repoURL) {
-                Label("GitHub Repository", systemImage: "chevron.left.forwardslash.chevron.right")
-            }
-            .settingsItem(.githubRepository)
+        Link(destination: ProjectLinks.repository) {
+            Label("GitHub Repository", systemImage: "chevron.left.forwardslash.chevron.right")
         }
+        .settingsItem(.githubRepository)
         if let wikiURL = URL(string: "https://github.com/FuJacob/Cotabby/wiki") {
             Link(destination: wikiURL) {
                 Label("Wiki & Contributor Guide", systemImage: "book")

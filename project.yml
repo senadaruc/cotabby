@@ -150,6 +150,8 @@ targetTemplates:
         # these). The release app follows the official feed; the dev target overrides both below.
         COTABBY_UPDATE_FEED_URL: https://updates.cotabby.app/appcast.xml
         COTABBY_UPDATE_PUBLIC_KEY: $(SPARKLE_PUBLIC_ED_KEY)
+        # The repository the menu's GitHub link opens (ProjectLinks).
+        COTABBY_PROJECT_URL: https://github.com/FuJacob/cotabby
         STRING_CATALOG_GENERATE_SYMBOLS: YES
         SWIFT_APPROACHABLE_CONCURRENCY: YES
         SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
@@ -189,6 +191,7 @@ targets:
         # refuses the official feed here whatever is set.
         COTABBY_UPDATE_FEED_URL: "$(COTABBY_DEV_UPDATE_FEED_URL)"
         COTABBY_UPDATE_PUBLIC_KEY: "$(COTABBY_DEV_UPDATE_PUBLIC_KEY)"
+        COTABBY_PROJECT_URL: "$(COTABBY_DEV_PROJECT_URL)"
   CotabbyTests:
     type: bundle.unit-test
     platform: macOS

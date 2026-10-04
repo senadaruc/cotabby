@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Logging
 import Sparkle
@@ -16,6 +17,8 @@ final class AppUpdateManager {
     private let updaterController: SPUStandardUpdaterController
 
     private var isStarted = false
+    /// Why the updater did not start, for the manual check to show instead of doing nothing.
+    private var disabledReason = "The updater has not started yet."
 
     /// Sparkle persists this setting in user defaults, which take precedence over the value in
     /// `CotabbyInfo.plist`. Reapplying the product policy repairs older installs that may have saved
@@ -50,11 +53,15 @@ final class AppUpdateManager {
             // installing it would swap that bundle in over the dev app, collapsing the separate
             // identity this build exists to preserve. A fork's own feed is allowed (see below).
             log("Sparkle disabled for dev build (no feed of its own).")
+            disabledReason = "This is a development build without an update feed, so it does not update itself. "
+                + "Builds published as releases of a fork (scripts/publish_fork_release.sh) or built with "
+                + "COTABBY_DEV_UPDATE_FEED_URL set update from that fork."
             return
         }
 
         guard hasUsableConfiguration else {
             log("Sparkle not started because updater configuration is incomplete.")
+            disabledReason = "This build's update feed or signing key is missing, so it cannot check for updates."
             return
         }
 
@@ -86,7 +93,17 @@ final class AppUpdateManager {
     /// directly. That keeps the rest of the codebase decoupled from Sparkle APIs.
     func checkForUpdates() {
         guard isStarted else {
-            log("Ignoring manual update check because the updater has not started.")
+            // Say why, rather than a menu item that silently does nothing.
+            log("Manual update check while the updater is off.")
+            let alert = NSAlert()
+            alert.messageText = "Updates are off in this build"
+            alert.informativeText = disabledReason
+            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: "Open Releases")
+            NSApp.activate(ignoringOtherApps: true)
+            if alert.runModal() == .alertSecondButtonReturn {
+                NSWorkspace.shared.open(ProjectLinks.repository.appendingPathComponent("releases"))
+            }
             return
         }
 
