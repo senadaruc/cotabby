@@ -17,8 +17,9 @@ import Logging
 ///    replied in, never the question itself (`MemoryEngine.answerSearch`), and only when the best
 ///    one is relevant enough (`AnswerGroundingPolicy.shouldDraft`). A question about the user's time
 ///    ("are you free Thursday?", `SchedulingQuestion`) also gets the calendar for the days it names,
-///    read live from EventKit and turned into free/busy facts (`AvailabilityFacts`), when the
-///    Calendar source is on and an answer source; those facts alone are enough to draft.
+///    read live from EventKit and turned into free/busy facts (`AvailabilityFacts`), whenever the
+///    Calendar source is on (busy and free only, so this needs no "use for answers"); those facts
+///    alone are enough to draft.
 /// 4. A draft (`AnswerDraftEngine`), kept only if every number and name in it is in the facts or
 ///    the question (`AnswerGroundingPolicy.unsupportedSpecifics`).
 /// 5. A card under the field with the draft and its sources (`AnswerCardController`). While it is
@@ -161,7 +162,7 @@ final class AnswerCoordinator {
             bestSimilarity: best, minimumSimilarity: configuration.answers.minimumConfidence,
             hasKeywordMatch: found.contains { $0.via != "vector" }
         ) && AnswerGroundingPolicy.factsMentionWhatTheQuestionNames(question: question, facts: factTexts)
-        let calendarFacts = await availabilityFacts(question: question, asker: incoming.sender, configuration: configuration)
+        let calendarFacts = await availabilityFacts(question: question, configuration: configuration)
         guard memoryIsRelevant || !calendarFacts.isEmpty else {
             drafts[key] = .some(nil)
             log("skipped", ["reason": "no_relevant_memory", "best_similarity": String(format: "%.2f", best), "hits": "\(found.count)"])
@@ -217,18 +218,15 @@ final class AnswerCoordinator {
 
     /// Free/busy facts for the days a scheduling question names, from the calendar as it is now;
     /// empty when the question is not about the user's time or the calendar may not answer.
-    private func availabilityFacts(question: String, asker: String?, configuration: MemoryConfiguration) async -> [AnswerPromptRenderer.Fact] {
-        let id = CalendarHistoryReader.id
+    private func availabilityFacts(question: String, configuration: MemoryConfiguration) async -> [AnswerPromptRenderer.Fact] {
         let now = Date()
-        guard configuration.sources[id]?.enabled == true,
-              MemorySourceCatalog.isAnswerSource(id, settings: configuration.sources[id]),
-              EventKitCalendar.isAuthorized,
+        guard configuration.sources[CalendarHistoryReader.id]?.enabled == true, EventKitCalendar.isAuthorized,
               let days = SchedulingQuestion.days(in: question, now: now)?.prefix(Self.maximumCalendarDays),
               let first = days.first, let last = days.last,
               let end = Calendar.current.date(byAdding: .day, value: 1, to: last) else { return [] }
         // EventKit off the main actor: a store fetch can take a moment on a large calendar.
         let events = await Task.detached(priority: .userInitiated) { EventKitCalendar.events(from: first, to: end) }.value
-        return AvailabilityFacts.facts(days: Array(days), events: events, asker: asker,
+        return AvailabilityFacts.facts(days: Array(days), events: events,
                                        language: AvailabilityFacts.language(of: question), now: now)
     }
 

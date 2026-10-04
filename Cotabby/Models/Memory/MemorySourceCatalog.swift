@@ -61,10 +61,11 @@ nonisolated enum MemorySourceCatalog {
         MemorySourceDescriptor(
             id: "calendar", title: "Calendar",
             description: "Events from every calendar in the Calendar app, including work accounts added there: what, " +
-                "when, where and with whom, from the past year to three months ahead. Answers also check these " +
-                "calendars when someone asks when you are free.",
+                "when, where and with whom, from the past year to three months ahead. When someone asks when you " +
+                "are free, answers check these calendars for busy and free times only.",
             appBundleIds: ["com.apple.iCal"], requirements: [calendarAccess], optionsSchema: [:],
-            answerSourceByDefault: true
+            // Off: "all calendars" includes personal ones. Free/busy answers do not depend on this.
+            answerSourceByDefault: false
         ),
         MemorySourceDescriptor(
             id: "documents", title: "Documents Folder",

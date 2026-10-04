@@ -5,10 +5,10 @@ import NaturalLanguage
 /// Turns the user's calendar for the days a question asks about into facts an answer can be drafted
 /// from: per day, when the user is busy and when they are free within working hours.
 ///
-/// Privacy rule: an event's title and people are shown only when the person asking is in that event
-/// (organizer or attendee). Everything else reads as "busy": a colleague asking "are you free
-/// Thursday?" learns the time is taken, not that it is a doctor's appointment or another client's
-/// negotiation. Matching is by mail address, or by name when the question's sender is only a name.
+/// Privacy rule: only busy and free times, never what an event is or who is in it. Whoever asked
+/// learns the time is taken, not that it is a doctor's appointment or another client's negotiation.
+/// Revealing details to people who are in an event was considered and rejected: who is asking comes
+/// from the message (a display name, a quoted "On … X wrote:" line), which its sender controls.
 ///
 /// Facts are written in the question's language (English or Turkish), with day names in full, so
 /// a draft that says "Perşembe" or "Thursday" finds that word in its facts and passes grounding.
@@ -35,10 +35,9 @@ nonisolated enum AvailabilityFacts {
         return recognizer.dominantLanguage == .turkish ? .turkish : .english
     }
 
-    /// One fact per day, in order. `asker` is the question's sender (a name or an address).
+    /// One fact per day, in order.
     static func facts(
-        days: [Date], events: [CalendarEventSnapshot], asker: String?, language: Language,
-        now: Date, calendar: Calendar = .current
+        days: [Date], events: [CalendarEventSnapshot], language: Language, now: Date, calendar: Calendar = .current
     ) -> [AnswerPromptRenderer.Fact] {
         days.compactMap { day -> AnswerPromptRenderer.Fact? in
             guard let dayEnd = calendar.date(byAdding: .day, value: 1, to: day) else { return nil }
@@ -46,7 +45,7 @@ nonisolated enum AvailabilityFacts {
                 .filter { $0.showsAsBusy && !$0.isCancelled && $0.start < dayEnd && $0.end > day }
                 .sorted { $0.start < $1.start }
             let free = freeGaps(day: day, busy: busy, now: now, calendar: calendar)
-            let text = line(day: day, busy: busy, free: free, asker: asker, language: language, calendar: calendar)
+            let text = line(day: day, busy: busy, free: free, language: language, calendar: calendar)
             return AnswerPromptRenderer.Fact(sender: title, isFromMe: true, conversationTitle: title,
                                              timestamp: day, text: text)
         }
@@ -72,43 +71,26 @@ nonisolated enum AvailabilityFacts {
         return gaps.filter { $0.duration >= Double(minimumFreeMinutes * 60) }
     }
 
-    /// Whether the person asking is in the event, so its details may be shared with them.
-    static func isInvolved(_ asker: String?, in event: CalendarEventSnapshot) -> Bool {
-        guard let asker = asker?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !asker.isEmpty else { return false }
-        let people = [event.organizer].compactMap { $0 } + event.attendees
-        return people.contains { person in
-            if let email = person.email, !email.isEmpty, asker.contains(email) { return true }
-            let name = person.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            return name.count >= 3 && name == asker
-        }
-    }
-
     static func line(
-        day: Date, busy: [CalendarEventSnapshot], free: [DateInterval], asker: String?, language: Language, calendar: Calendar
+        day: Date, busy: [CalendarEventSnapshot], free: [DateInterval], language: Language, calendar: Calendar
     ) -> String {
         let dayName = formatter(language == .turkish ? "d MMMM yyyy EEEE" : "EEEE d MMMM yyyy", language, calendar).string(from: day)
         let time = formatter("HH:mm", language, calendar)
         let busyParts = busy.map { event -> String in
-            let span = event.isAllDay
+            event.isAllDay
                 ? (language == .turkish ? "tüm gün" : "all day")
                 : "\(time.string(from: max(event.start, day)))–\(time.string(from: event.end))"
-            guard isInvolved(asker, in: event) else { return span }
-            let others = ([event.organizer].compactMap { $0 } + event.attendees)
-                .filter { !$0.isCurrentUser }.map(CalendarEventText.displayName)
-            let with = others.isEmpty ? "" : (language == .turkish ? ", \(others.prefix(4).joined(separator: ", ")) ile"
-                                                                   : ", with \(others.prefix(4).joined(separator: ", "))")
-            return "\(span) (\(event.title)\(with))"
         }
         let freeParts = free.map { "\(time.string(from: $0.start))–\(time.string(from: $0.end))" }
         // Free time first: a prompt clips long facts, and the free slots are what the answer needs.
         switch language {
         case .english:
             let free = freeParts.isEmpty ? "no free time in working hours" : "free " + freeParts.joined(separator: ", ")
-            let busy = busyParts.isEmpty ? "no meetings" : "busy " + busyParts.joined(separator: "; ")
+            let busy = busyParts.isEmpty ? "no meetings" : "busy " + busyParts.joined(separator: ", ")
             return "\(dayName): \(free); \(busy)"
         case .turkish:
             let free = freeParts.isEmpty ? "mesai saatlerinde boş zaman yok" : "boş (müsait) " + freeParts.joined(separator: ", ")
-            let busy = busyParts.isEmpty ? "toplantı yok" : "dolu " + busyParts.joined(separator: "; ")
+            let busy = busyParts.isEmpty ? "toplantı yok" : "dolu " + busyParts.joined(separator: ", ")
             return "\(dayName): \(free); \(busy)"
         }
     }

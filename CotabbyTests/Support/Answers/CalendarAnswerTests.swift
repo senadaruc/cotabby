@@ -72,20 +72,17 @@ final class CalendarAnswerTests: XCTestCase {
                                                   now: now, calendar: calendar), [])
     }
 
-    func test_meetingDetailsAreSharedOnlyWithPeopleInThem() {
+    /// Only busy and free: who asks comes from the message, which its sender controls, so no event's
+    /// title or people are ever in an availability fact.
+    func test_availabilityFactsSayBusyAndFreeAndNothingElse() {
         let shared = event("THY review", date(8, 10), date(8, 11), attendees: [me, ayse])
         let private_ = event("Dentist", date(8, 14), date(8, 15))
         let free = event("Holiday", date(8), date(9), allDay: true, busy: false)
-        let toAyse = AvailabilityFacts.facts(days: [date(8)], events: [shared, private_, free], asker: "Ayşe Yılmaz",
-                                             language: .english, now: now, calendar: calendar)
-        XCTAssertEqual(toAyse.first?.text,
-                       "Thursday 8 October 2026: free 09:00–10:00, 11:00–14:00, 15:00–18:00; busy 10:00–11:00 (THY review, with Ayşe Yılmaz); 14:00–15:00")
-        let toSomeoneElse = AvailabilityFacts.facts(days: [date(8)], events: [shared, private_], asker: "can@other.com",
-                                                    language: .english, now: now, calendar: calendar)
-        XCTAssertFalse(toSomeoneElse.first?.text.contains("THY") ?? true)
-        XCTAssertFalse(toSomeoneElse.first?.text.contains("Dentist") ?? true)
-        let turkish = AvailabilityFacts.facts(days: [date(8)], events: [private_], asker: nil, language: .turkish,
-                                              now: now, calendar: calendar)
+        let facts = AvailabilityFacts.facts(days: [date(8)], events: [shared, private_, free], language: .english,
+                                            now: now, calendar: calendar)
+        XCTAssertEqual(facts.first?.text,
+                       "Thursday 8 October 2026: free 09:00–10:00, 11:00–14:00, 15:00–18:00; busy 10:00–11:00, 14:00–15:00")
+        let turkish = AvailabilityFacts.facts(days: [date(8)], events: [private_], language: .turkish, now: now, calendar: calendar)
         XCTAssertEqual(turkish.first?.text, "8 Ekim 2026 Perşembe: boş (müsait) 09:00–14:00, 15:00–18:00; dolu 14:00–15:00")
         XCTAssertEqual(AvailabilityFacts.language(of: "Perşembe öğleden sonra müsait misin?"), .turkish)
     }
