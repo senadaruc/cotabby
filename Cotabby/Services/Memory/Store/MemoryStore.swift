@@ -604,15 +604,57 @@ nonisolated final class MemoryStore: @unchecked Sendable {
         ).compactMap(stored)
     }
 
-    /// Keyword search restricted to the given conversations: decrypts their most recent messages
-    /// and ranks them with `KeywordScorer`. Filter-first, so it never returns a message from outside
-    /// the scope however relevant.
+    /// Keyword search restricted to the given conversations. Filter-first, so it never returns a
+    /// message from outside the scope however relevant. Ranks with the tagged term index (BM25 over
+    /// whole words, no decryption); when the index has nothing for the scope, falls back to
+    /// decrypting the conversations' recent messages, which also matches word prefixes.
     func keywordSearch(query: String, conversations: [(source: String, conversationKey: String)], limit: Int) throws -> [StoredMessage] {
+        let indexed = try taggedKeywordSearch(query: query, conversations: conversations, limit: limit)
+        if !indexed.isEmpty { return try indexed.compactMap { try message(recordID: $0) } }
         let candidates = try recentMessages(conversations: conversations, limit: Self.keywordCandidates)
         let ranked = KeywordScorer.rank(
             query: query, documents: candidates.map { $0.text + " " + ($0.subject ?? "") }, limit: limit
         )
         return ranked.map { candidates[$0] }
+    }
+
+    /// BM25 over the tagged terms of the given conversations' messages. Record ids, best first.
+    func taggedKeywordSearch(query: String, conversations: [(source: String, conversationKey: String)], limit: Int) throws -> [String] {
+        let terms = Array(Set(MemoryTerms.terms(query)))
+        guard !terms.isEmpty, !conversations.isEmpty else { return [] }
+        lock.lock()
+        defer { lock.unlock() }
+        let scope = conversations.map { _ in "(m.source = ? AND m.conv_key = ?)" }.joined(separator: " OR ")
+        let scopeValues = conversations.flatMap { [MemoryDatabase.Value.text($0.source), .text($0.conversationKey)] }
+        let totals = try database.rows(
+            "SELECT COUNT(*) AS n, AVG(d.length) AS average FROM term_documents d JOIN messages m ON m.record_id = d.record_id WHERE \(scope)",
+            scopeValues
+        ).first
+        let documents = Double(totals?["n"]?.int ?? 0)
+        let averageLength = max(totals?["average"]?.double ?? 1, 1)
+        guard documents > 0 else { return [] }
+        var scores: [String: Double] = [:]
+        for term in terms {
+            let rows = try database.rows(
+                """
+                SELECT t.record_id, t.tf, d.length FROM terms t
+                JOIN term_documents d ON d.record_id = t.record_id
+                JOIN messages m ON m.record_id = t.record_id
+                WHERE t.tag = ? AND (\(scope))
+                """,
+                [.text(termTag(term))] + scopeValues
+            )
+            guard !rows.isEmpty else { continue }
+            let df = Double(rows.count)
+            let idf = log(1 + (documents - df + 0.5) / (df + 0.5))
+            for row in rows {
+                guard let recordID = row["record_id"]?.string else { continue }
+                let tf = row["tf"]?.double ?? 0
+                let length = row["length"]?.double ?? averageLength
+                scores[recordID, default: 0] += idf * tf * 2.2 / (tf + 1.2 * (0.25 + 0.75 * length / averageLength))
+            }
+        }
+        return scores.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }.prefix(limit).map(\.key)
     }
 
     /// Keyword search across whole sources without decrypting them: BM25 over the HMAC-tagged

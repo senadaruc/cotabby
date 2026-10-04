@@ -7,8 +7,9 @@ import Foundation
 /// Why it exists as its own type: the C++ engine owns a model and a context that must never be used
 /// from two threads at once, and two kinds of callers want it. Background indexing embeds passages in
 /// batches for minutes; a suggestion's memory lookup needs one query vector *now*. The core
-/// serializes them with one lock and gives queries priority: background batches are small and check
-/// `waitingQueries` before taking the lock again, so a query waits for at most one batch (~0.2 s).
+/// serializes them with one lock and gives queries priority: an arriving query cancels the passage
+/// batch in progress (the native engine stops at its next decode, within tens of milliseconds) and
+/// takes the model; the batch is retried once no query is waiting.
 ///
 /// Like `LlamaRuntimeCore`, this is deliberately not a Swift actor: native calls block for their
 /// whole duration, and an actor would hold its executor (and every other caller) meanwhile. Callers
@@ -56,6 +57,7 @@ nonisolated final class EmbeddingCore: @unchecked Sendable {
     private let lock = NSLock()
     private let counterLock = NSLock()
     private var waitingQueries = 0
+    private var passageBatchRunning = false
     private(set) var dimensions = 0
     private(set) var modelPath: String?
 
@@ -89,7 +91,9 @@ nonisolated final class EmbeddingCore: @unchecked Sendable {
     func embedQuery(_ text: String, task: QueryTask) throws -> [Float] {
         counterLock.lock()
         waitingQueries += 1
+        let interrupt = passageBatchRunning
         counterLock.unlock()
+        if interrupt { engine.cancel() }
         defer {
             counterLock.lock()
             waitingQueries -= 1
@@ -102,8 +106,22 @@ nonisolated final class EmbeddingCore: @unchecked Sendable {
     /// Vectors for passages (no instruction), for background indexing. Yields to waiting queries
     /// before taking the model.
     func embedPassages(_ texts: [String]) throws -> [[Float]] {
-        while hasWaitingQueries { usleep(5_000) }
-        return try embedLocked(texts)
+        while true {
+            while hasWaitingQueries { usleep(5_000) }
+            setPassageBatchRunning(true)
+            defer { setPassageBatchRunning(false) }
+            do {
+                return try embedLocked(texts)
+            } catch EmbeddingError.cancelled where hasWaitingQueries || !Task.isCancelled {
+                continue  // A query took the model; embed this batch again after it.
+            }
+        }
+    }
+
+    private func setPassageBatchRunning(_ running: Bool) {
+        counterLock.lock()
+        passageBatchRunning = running
+        counterLock.unlock()
     }
 
     private var hasWaitingQueries: Bool {
