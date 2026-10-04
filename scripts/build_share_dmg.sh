@@ -24,7 +24,9 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 OUT_DIR="$REPO_ROOT/build/share"
-VENV_DIR="/tmp/Cotabby-dmg-venv"
+# dmgbuild's venv lives in the user's own cache, not /tmp: anyone on the Mac can create a path in
+# /tmp first, and this script runs the venv's python while it builds what it signs.
+VENV_DIR="$HOME/Library/Caches/Cotabby/dmg-venv"
 PROFILE="${COTABBY_NOTARY_PROFILE:-cotabby-notary}"
 notarize=true
 [[ "${1:-}" == "--no-notarize" ]] && notarize=false
@@ -77,6 +79,11 @@ codesign --force --options runtime --timestamp --sign "$identity" \
 codesign --verify --deep --strict "$app"
 
 step "Packaging"
+# Reuse a cached venv only if this user owns it and nobody else can write to it.
+if [[ -e "$VENV_DIR" ]] && { [[ ! -O "$VENV_DIR" || -L "$VENV_DIR" ]] || [[ -n "$(find "$VENV_DIR" -maxdepth 0 -perm -o+w -o -maxdepth 0 -perm -g+w)" ]]; }; then
+    rm -rf "$VENV_DIR"
+fi
+mkdir -p "$(dirname "$VENV_DIR")"
 [[ -x "$VENV_DIR/bin/python3" ]] || python3 -m venv "$VENV_DIR"
 "$VENV_DIR/bin/python3" -c "import dmgbuild" 2>/dev/null \
     || "$VENV_DIR/bin/python3" -m pip install --quiet "dmgbuild[badge_icons]>=1.6.0"
