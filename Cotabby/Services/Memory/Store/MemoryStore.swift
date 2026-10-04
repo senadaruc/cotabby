@@ -341,7 +341,7 @@ nonisolated final class MemoryStore: @unchecked Sendable {
     }
 
     /// Drops every vector not made by `model` (the embedding model changed) and marks their
-    /// messages for indexing again. Returns how many messages need it.
+    /// messages for indexing again. Returns how many vectors were dropped.
     @discardableResult
     func invalidateVectors(notMadeBy model: String) throws -> Int {
         lock.lock()
@@ -351,8 +351,7 @@ nonisolated final class MemoryStore: @unchecked Sendable {
                 "UPDATE messages SET indexed = 0 WHERE record_id IN (SELECT DISTINCT record_id FROM vectors WHERE model != ?)",
                 [.text(model)]
             )
-            try database.run("DELETE FROM vectors WHERE model != ?", [.text(model)])
-            return Int(try database.rows("SELECT COUNT(*) AS n FROM messages WHERE indexed = 0").first?["n"]?.int ?? 0)
+            return try database.run("DELETE FROM vectors WHERE model != ?", [.text(model)])
         }
     }
 
