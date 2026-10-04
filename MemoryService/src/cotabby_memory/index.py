@@ -9,8 +9,14 @@ How the index stays current:
 - A full rebuild happens when nothing has been built yet, when the build settings changed (a new
   embedding model or chunking), or when messages were deleted or edited (exclusions, retention,
   a source removed), because LEANN's HNSW backend cannot remove passages.
+- Rebuilds reuse embeddings (`EmbeddingCache`): every passage's vector is kept, keyed by an HMAC of
+  its id and text, so a rebuild embeds only passages it has not seen and then builds the graph
+  from precomputed vectors. Embedding is what takes the time (a mailbox is tens of minutes);
+  graph construction takes seconds. The cache is written as the embedding progresses, so a
+  rebuild interrupted by a restart resumes where it stopped.
 
-What LEANN keeps on disk: only embeddings and ids. (Embeddings are not encrypted, since LEANN
+What LEANN keeps on disk: only embeddings and ids. A rebuild hands LEANN the vectors and empty
+passage text, so no message text is written at all; (Embeddings are not encrypted, since LEANN
 memory-maps them; published inversion attacks can partially reconstruct text from embeddings, so
 the index folder is still protected by 0700 permissions and FileVault rather than relied on as
 ciphertext.) LEANN writes each passage's text into
@@ -60,6 +66,11 @@ class IndexManager:
     swap the searcher (a build writes to a temporary directory first)."""
 
     INDEX_NAME = "memory.leann"
+    # Passages embedded per call during a rebuild: small enough to report progress and save the
+    # cache often, large enough to keep the GPU busy.
+    EMBED_BATCH = 256
+    # Seconds between cache saves during a long rebuild.
+    CACHE_SAVE_INTERVAL = 60
     # LEANN post-filters, so a scoped vector search asks for this many neighbours before filtering.
     SCOPED_OVERFETCH = 300
     # An append embeds inside the lock that searches also take, so only small deltas are appended;
@@ -189,12 +200,20 @@ class IndexManager:
         target.mkdir(parents=True)
         passages = 0
         if messages:
-            report(0.05, f"Embedding {len(messages)} messages")
+            chunks = [chunk for message in messages for chunk in self._chunks(message, config)]
+            vectors = self._embed(chunks, config, report)
+            report(0.9, "Building the search graph")
             builder = self._builder(config)
-            for message in messages:
-                passages += self._add(builder, message, config)
-            builder.build_index(str(target / self.INDEX_NAME))
+            for _, _, metadata in chunks:
+                # No text: the vectors are already computed, so LEANN has nothing to embed and
+                # writes no message text into the build folder.
+                builder.add_text("", metadata=metadata)
+            builder.build_index_from_arrays(str(target / self.INDEX_NAME), [c[0] for c in chunks], vectors)
             redact_passages(target / self.INDEX_NAME)
+            passages = len(chunks)
+        else:
+            # Nothing left to index (every source forgotten or off): no vector may outlive it.
+            _remove_tree(self.root / EmbeddingCache.FOLDER)
         report(0.95, "Swapping in the new index")
         with self._lock:
             self._drop_searcher()
@@ -218,7 +237,7 @@ class IndexManager:
     def remove(self) -> None:
         with self._lock:
             self._drop_searcher()
-            for name in ("current", "building", "previous"):
+            for name in ("current", "building", "previous", EmbeddingCache.FOLDER):
                 _remove_tree(self.root / name)
             self._state_path.unlink(missing_ok=True)
 
@@ -235,13 +254,40 @@ class IndexManager:
             efConstruction=config.build_complexity,
         )
 
+    def _embed(self, chunks: list[tuple[str, str, dict]], config: IndexConfig, report: ProgressCallback):
+        """The vectors for `chunks`, in order: cached ones reused, the rest embedded in batches
+        with progress, the cache saved as it grows and pruned to these chunks at the end (so a
+        deleted message's vector does not outlive it)."""
+        import numpy as np
+        from leann.api import compute_embeddings
+
+        cache = EmbeddingCache(self.root, config, self.store.vault)
+        known = cache.load()
+        keys = [cache.key(passage_id, text) for passage_id, text, _ in chunks]
+        missing = [i for i, key in enumerate(keys) if key not in known]
+        reused = len(chunks) - len(missing)
+        report(0.05, f"Embedding {len(missing)} passages ({reused} reused)" if reused else f"Embedding {len(missing)} passages")
+        last_save = time.monotonic()
+        for start in range(0, len(missing), self.EMBED_BATCH):
+            group = missing[start : start + self.EMBED_BATCH]
+            vectors = compute_embeddings([chunks[i][1] for i in group], config.embedding_model,
+                                         config.embedding_mode, use_server=False, is_build=True)
+            for i, vector in zip(group, vectors):
+                known[keys[i]] = np.asarray(vector, dtype=np.float32)
+            done = start + len(group)
+            report(0.05 + 0.85 * done / len(missing), f"Embedded {done} of {len(missing)} passages")
+            if time.monotonic() - last_save > self.CACHE_SAVE_INTERVAL:
+                cache.save(known)
+                last_save = time.monotonic()
+        wanted = set(keys)
+        cache.save({key: vector for key, vector in known.items() if key in wanted})
+        return np.stack([known[key] for key in keys]).astype(np.float32)
+
     @staticmethod
-    def _add(builder, message: StoredMessage, config: IndexConfig) -> int:
-        """Adds one message as one or more passages (long mails are chunked by words with
-        overlap). Every chunk carries the message's metadata, so filters and the store lookup work
-        on any chunk."""
-        # The text is embedded in memory; only these ids and keys reach LEANN's files (the text is
-        # redacted after the build, see `redact_passages`).
+    def _chunks(message: StoredMessage, config: IndexConfig) -> list[tuple[str, str, dict]]:
+        """One message as (passage id, text, metadata) passages; long mails are chunked by words
+        with overlap. Every chunk carries the message's metadata, so filters and the store lookup
+        work on any chunk."""
         metadata = {
             "record_id": message.record_id,
             "source": message.source,
@@ -249,10 +295,19 @@ class IndexManager:
             "timestamp": message.timestamp,
         }
         chunks = chunk_words(message.as_record().passage_text(), config.chunk_size, config.chunk_overlap)
+        result = []
         for index, chunk in enumerate(chunks):
-            chunk_metadata = dict(metadata)
-            chunk_metadata["id"] = message.record_id if index == 0 else f"{message.record_id}#{index}"
-            builder.add_text(chunk, metadata=chunk_metadata)
+            passage_id = message.record_id if index == 0 else f"{message.record_id}#{index}"
+            result.append((passage_id, chunk, {**metadata, "id": passage_id}))
+        return result
+
+    @classmethod
+    def _add(cls, builder, message: StoredMessage, config: IndexConfig) -> int:
+        """Adds one message's passages to an append. LEANN embeds them in memory and writes their
+        text into the live index, which `redact_passages` blanks right after."""
+        chunks = cls._chunks(message, config)
+        for _, text, metadata in chunks:
+            builder.add_text(text, metadata=metadata)
         return len(chunks)
 
     # MARK: - Searching
@@ -396,6 +451,59 @@ def reciprocal_rank_fusion(vector: list[str], keyword: list[str], vector_weight:
     for rank, item in enumerate(keyword):
         scores[item] = scores.get(item, 0.0) + (1 - vector_weight) / (k + rank + 1)
     return sorted(scores.items(), key=lambda pair: pair[1], reverse=True)
+
+
+class EmbeddingCache:
+    """Every indexed passage's vector, so rebuilds embed only what is new.
+
+    Keys are HMAC tags of the passage id and its exact text (`Vault.tag`): an edited message gets
+    a new key, and the file holds no ids or text anyone could read. One cache per embedding model
+    and mode; a different model's vectors are never mixed in. Vectors are as private as LEANN's
+    own index (which stores the same vectors), so the cache lives beside it under `indexes/`, is
+    written with 0600 permissions, and is deleted with the index.
+    """
+
+    FOLDER = "embedding-cache"
+
+    def __init__(self, root: Path, config: IndexConfig, vault):
+        model = hashlib.sha1(json.dumps([config.embedding_mode, config.embedding_model]).encode()).hexdigest()[:16]
+        self.directory = root / self.FOLDER
+        self.vectors_path = self.directory / f"{model}.npy"
+        self.keys_path = self.directory / f"{model}.keys.json"
+        self._vault = vault
+
+    def key(self, passage_id: str, text: str) -> str:
+        return self._vault.tag(f"emb\x1f{passage_id}\x1f{text}")
+
+    def load(self) -> dict:
+        import numpy as np
+
+        try:
+            keys = json.loads(self.keys_path.read_text(encoding="utf-8"))
+            vectors = np.load(self.vectors_path)
+        except (FileNotFoundError, ValueError, OSError):
+            return {}
+        if len(keys) != len(vectors):
+            log.warning("embedding cache is inconsistent; ignoring it")
+            return {}
+        return dict(zip(keys, vectors))
+
+    def save(self, entries: dict) -> None:
+        """Atomic: both files are written beside the old ones and renamed into place, keys last,
+        so a reader never pairs new vectors with old keys (a mismatch is detected and ignored)."""
+        import numpy as np
+
+        self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        keys = list(entries)
+        vectors = np.stack([entries[k] for k in keys]).astype(np.float32) if keys else np.zeros((0, 0), np.float32)
+        vectors_tmp = self.vectors_path.with_name(self.vectors_path.name + ".tmp")
+        keys_tmp = self.keys_path.with_name(self.keys_path.name + ".tmp")
+        with open(os.open(vectors_tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb") as handle:
+            np.save(handle, vectors)
+        with open(os.open(keys_tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
+            json.dump(keys, handle)
+        os.replace(vectors_tmp, self.vectors_path)
+        os.replace(keys_tmp, self.keys_path)
 
 
 def _remove_tree(path: Path) -> None:
