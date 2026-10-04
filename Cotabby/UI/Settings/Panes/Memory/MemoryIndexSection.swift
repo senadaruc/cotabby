@@ -2,7 +2,7 @@ import SwiftUI
 
 /// File overview:
 /// The Memory pane's index and privacy settings: the index's state (passages, what is waiting,
-/// what background indexing is doing), how memory is searched, and what memory keeps (retention and
+/// what background indexing is doing, and the statistics in `MemoryIndexStatsView`), how memory is searched, and what memory keeps (retention and
 /// exclusions) with Delete All.
 ///
 /// Search settings take effect immediately; passage size changes re-embed every message, so those
@@ -105,6 +105,8 @@ struct MemoryIndexSection: View {
                     .progressViewStyle(.linear)
                     .controlSize(.small)
             }
+            MemoryIndexStatsView(status: status, sources: control.sources)
+                .padding(.top, 4)
         }
         .confirmationDialog("Embed every message again?", isPresented: $confirmingRebuild) {
             Button("Re-index") { control.rebuildIndex() }

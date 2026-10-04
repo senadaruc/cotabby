@@ -92,6 +92,8 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
                                                 attributes: [.posixPermissions: 0o700])
         store = try MemoryStore(path: paths.store, vault: MemoryVault(masterKey: masterKey))
         configurationValue = Self.loadConfiguration(paths.configuration)
+        statusValue.modelBytes = size
+        statusValue.modelName = modelURL.deletingPathExtension().lastPathComponent
     }
 
     deinit {
@@ -126,6 +128,16 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
         updateStatus { status in
             status.passages = self.index.count
             status.vectorBytes = self.index.byteSize
+            status.dimensions = self.index.dimensions
+            status.databaseBytes = self.databaseBytes()
+        }
+    }
+
+    /// The store's size on disk: the database and its write-ahead log (recent writes not yet folded
+    /// into the database live there, sometimes tens of megabytes).
+    private func databaseBytes() -> Int64 {
+        [paths.store.path, paths.store.path + "-wal"].reduce(Int64(0)) { total, path in
+            total + ((try? FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)?.int64Value ?? 0)
         }
     }
 
@@ -265,6 +277,7 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
             index.remove(recordIDs: Set(result.replacedRecordIDs))
         }
         if let cursor { try store.setCursor(cursor, source: source) }
+        updateStatus { $0.databaseBytes = self.databaseBytes() }
         if stored > 0 { wakeIndexing() }
         return IngestResult(stored: stored, dropped: dropped)
     }
@@ -337,6 +350,8 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
                     status.passages = self.index.count
                     status.vectorBytes = self.index.byteSize
                     status.passagesPerSecond = elapsed > 1 ? Double(embeddedThisRun) / elapsed : status.passagesPerSecond
+                    status.dimensions = self.index.dimensions
+                    status.databaseBytes = self.databaseBytes()
                     status.activity = remaining > 0 ? "Indexing: \(remaining) messages to go" : "Up to date"
                 }
                 await Task.yield()
@@ -512,7 +527,10 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
         let weight = configuration.index.vectorWeight
         var vectorRanked: [String] = []
         var similarity: [String: Float] = [:]
+        let embeddingStarted = Date()
         if weight > 0, index.count > 0, let queryVector = try? embedding.embedQuery(query, task: task) {
+            let milliseconds = Date().timeIntervalSince(embeddingStarted) * 1000
+            updateStatus { $0.queryEmbeddingLatency.record(milliseconds) }
             for (entry, score) in index.search(queryVector, limit: max(topK * 3, 12), where: vectorFilter) {
                 if similarity[entry.recordID] == nil { vectorRanked.append(entry.recordID) }
                 similarity[entry.recordID] = max(similarity[entry.recordID] ?? -1, score)
@@ -550,7 +568,9 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
     }
 
     private func result(_ scope: String, _ conversation: MemoryConversation?, _ hits: [MemorySearchResult.Hit], _ started: Date) -> MemorySearchResult {
-        MemorySearchResult(scope: scope, conversation: conversation, elapsedMs: Date().timeIntervalSince(started) * 1000, hits: hits)
+        let milliseconds = Date().timeIntervalSince(started) * 1000
+        updateStatus { $0.searchLatency.record(milliseconds) }
+        return MemorySearchResult(scope: scope, conversation: conversation, elapsedMs: milliseconds, hits: hits)
     }
 
     // MARK: - Status and logging

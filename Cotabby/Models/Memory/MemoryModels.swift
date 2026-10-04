@@ -197,6 +197,20 @@ nonisolated struct MemoryEngineStatus: Equatable, Sendable {
     var isIndexing = false
     /// Passages embedded per second during the last indexing run.
     var passagesPerSecond: Double?
+
+    // Figures for the pane's statistics.
+    /// How long recent searches took, end to end inside the engine (embedding the query, scanning
+    /// the vectors, keyword lookup, reading and decrypting the hits).
+    var searchLatency = MemoryLatencyStats()
+    /// The query-embedding part of those searches (the model's share).
+    var queryEmbeddingLatency = MemoryLatencyStats()
+    /// The encrypted store on disk, its write-ahead log included.
+    var databaseBytes: Int64 = 0
+    /// The embedding model file.
+    var modelBytes: Int64 = 0
+    var modelName = ""
+    /// Numbers per vector (the model's embedding width).
+    var dimensions = 0
 }
 
 /// A JSON value of any type, for the free-form option values older settings files may hold.
