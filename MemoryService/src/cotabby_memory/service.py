@@ -31,6 +31,7 @@ from .jobs import Job, JobManager
 from .records import MessageRecord, normalize_participant
 from .scrub import scrub
 from .store import Conversation, MessageStore
+from .vault import Vault
 
 log = logging.getLogger("cotabby_memory.service")
 
@@ -44,14 +45,16 @@ class RequestError(Exception):
 
 
 class MemoryService:
-    def __init__(self, data_dir: Path, connectors: dict[str, Connector] | None = None,
+    def __init__(self, data_dir: Path, key: bytes, connectors: dict[str, Connector] | None = None,
                  log_tail: Callable[[int], list[str]] | None = None):
+        """`key` is the 32-byte master key from Cotabby's Keychain. Raises `KeyMismatch` when the
+        existing store was encrypted with a different key."""
         self.data_dir = data_dir
         data_dir.mkdir(parents=True, exist_ok=True)
         data_dir.chmod(0o700)
         self.config_store = ConfigStore(data_dir)
         self.config: MemoryConfig = self.config_store.load()
-        self.store = MessageStore(data_dir / "messages.sqlite")
+        self.store = MessageStore(data_dir / "messages.sqlite", Vault(key))
         self.index = IndexManager(data_dir, self.store)
         self.jobs = JobManager()
         self.connectors = connectors if connectors is not None else all_connectors()
@@ -306,8 +309,7 @@ class MemoryService:
         def title_for(source: str, conversation_id: str) -> str:
             key = (source, conversation_id)
             if key not in titles:
-                found = self.store.conversation(source, conversation_id)
-                titles[key] = found.title if found else ""
+                titles[key] = self.store.conversation_title(source, conversation_id)
             return titles[key]
 
         return {

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import json
 import logging
 import logging.handlers
@@ -29,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from .service import MemoryService, RequestError
+from .vault import KeyMismatch
 
 MAX_REQUEST_BYTES = 1_000_000
 # getsockopt(SOL_LOCAL, LOCAL_PEERPID) from <sys/un.h>; Python's socket module does not name them.
@@ -227,7 +229,23 @@ def main(argv: list[str] | None = None) -> int:
     data_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(data_dir, 0o700)
     tail = configure_logging(data_dir, args.verbose)
-    service = MemoryService(data_dir, log_tail=lambda lines: list(tail.lines)[-lines:])
+    # LEANN appends every query (the user's typed text) to this file when the variable is set.
+    os.environ.pop("LEANN_QUERY_LOG", None)
+
+    # The encryption key arrives as the first stdin line, `{"key": "<base64 of 32 bytes>"}`. Not an
+    # argument or environment variable: other processes of the same user can read those (`ps`).
+    try:
+        key = base64.b64decode(json.loads(sys.stdin.readline())["key"])
+        if len(key) != 32:
+            raise ValueError("key must be 32 bytes")
+    except Exception as error:  # noqa: BLE001 - any malformed key is the same failure to the caller
+        print(json.dumps({"event": "error", "code": "no_key", "message": f"No valid key on stdin: {error}"}), flush=True)
+        return 2
+    try:
+        service = MemoryService(data_dir, key, log_tail=lambda lines: list(tail.lines)[-lines:])
+    except KeyMismatch as error:
+        print(json.dumps({"event": "error", "code": "key_mismatch", "message": str(error)}), flush=True)
+        return 3
     socket_path = (args.socket or data_dir / "memory.sock").expanduser()
     # Unix socket paths are limited to ~104 bytes on macOS; fail with a clear message.
     if len(str(socket_path).encode()) > 100:

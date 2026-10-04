@@ -55,11 +55,15 @@ enum IsolatedProcessSpawner {
 
     /// Starts `executable`. With `outputPath`, stdout and stderr are appended to that file (and
     /// `Child.stdout` reads nothing); otherwise stdout is a pipe and stderr goes to /dev/null.
+    /// `stdinPayload`, when given, is written to the child's stdin and the pipe closed: the way the
+    /// memory service receives its encryption key, which an argument or environment variable would
+    /// expose to other processes through `ps`.
     static func spawn(
         executable: String,
         arguments: [String],
         environment: [String: String],
-        outputPath: String? = nil
+        outputPath: String? = nil,
+        stdinPayload: Data? = nil
     ) throws -> Child {
         guard let setDisclaim else { throw SpawnError.isolationUnavailable }
 
@@ -80,7 +84,13 @@ enum IsolatedProcessSpawner {
         var actions: posix_spawn_file_actions_t?
         posix_spawn_file_actions_init(&actions)
         defer { posix_spawn_file_actions_destroy(&actions) }
-        posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
+        var stdinDescriptors: [Int32] = [-1, -1]
+        if stdinPayload != nil {
+            guard pipe(&stdinDescriptors) == 0 else { throw SpawnError.failed(errno) }
+            posix_spawn_file_actions_adddup2(&actions, stdinDescriptors[0], 0)
+        } else {
+            posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
+        }
         if let outputPath {
             posix_spawn_file_actions_addopen(&actions, 1, outputPath, O_WRONLY | O_APPEND | O_CREAT, 0o600)
             posix_spawn_file_actions_adddup2(&actions, 1, 2)
@@ -101,9 +111,24 @@ enum IsolatedProcessSpawner {
         var pid: pid_t = 0
         let status = posix_spawn(&pid, executable, &actions, &attributes, argv, envp)
         close(writeEnd)
+        if stdinPayload != nil { close(stdinDescriptors[0]) }
         guard status == 0 else {
             close(readEnd)
+            if stdinPayload != nil { close(stdinDescriptors[1]) }
             throw SpawnError.failed(status)
+        }
+        if let stdinPayload {
+            // The payload is a single short line (well under the pipe buffer), so this write never
+            // blocks on the child reading it.
+            stdinPayload.withUnsafeBytes { raw in
+                var offset = 0
+                while offset < raw.count {
+                    let written = write(stdinDescriptors[1], raw.baseAddress! + offset, raw.count - offset)
+                    if written <= 0 { break }
+                    offset += written
+                }
+            }
+            close(stdinDescriptors[1])
         }
         return Child(pid: pid, stdout: FileHandle(fileDescriptor: readEnd, closeOnDealloc: true))
     }

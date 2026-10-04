@@ -14,7 +14,7 @@ import pytest
 
 from cotabby_memory.service import MemoryService
 
-from .test_core import FakeConnector, record
+from .test_core import KEY, FakeConnector, record
 
 pytestmark = pytest.mark.skipif(os.environ.get("COTABBY_MEMORY_LEANN_TESTS") != "1",
                                 reason="set COTABBY_MEMORY_LEANN_TESTS=1 to build real LEANN indexes")
@@ -38,7 +38,7 @@ def test_vector_search_is_scoped_and_new_messages_are_appended(tmp_path: Path):
         record("can", "My invoice for September is still unpaid.", title="Can", sender="Can"),
     ]
     connector = FakeConnector(messages)
-    service = MemoryService(tmp_path / "data", connectors={"chat": connector})
+    service = MemoryService(tmp_path / "data", KEY, connectors={"chat": connector})
     service.config.apply({"index": {"embedding_model": "intfloat/multilingual-e5-small",
                                     "embedding_mode": "sentence-transformers", "vector_weight": 0.7},
                           "sources": {"chat": {"enabled": True}}})
@@ -57,6 +57,13 @@ def test_vector_search_is_scoped_and_new_messages_are_appended(tmp_path: Path):
     assert second["index"] == {"mode": "append", "added": 1}
     october = service.search({"query": "October invoice due", "scope": {"title": "Ayşe", "sources": ["chat"]}, "top_k": 1})
     assert "October" in october["hits"][0]["text"]
+
+    # LEANN's files hold embeddings and ids only: no message text, names or conversation ids.
+    for path in (tmp_path / "data" / "indexes").rglob("*"):
+        if path.is_file():
+            data = path.read_bytes()
+            for secret in (b"September invoice", b"October", "Ayşe".encode(), b"ayse"):
+                assert secret not in data, f"{secret!r} readable in {path.name}"
 
     wait(service, service.sources_forget({"id": "chat"}))
     assert service.index.status(service.config.index)["built"] is False

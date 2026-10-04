@@ -19,6 +19,9 @@ from cotabby_memory.records import MessageRecord, normalize_participant
 from cotabby_memory.scrub import scrub, strip_mail_quotes
 from cotabby_memory.service import MemoryService, RequestError
 from cotabby_memory.store import MessageStore, title_key
+from cotabby_memory.vault import KeyMismatch, Vault
+
+KEY = bytes(range(32))
 
 
 def record(conversation: str, text: str, *, sender: str = "Ayşe", me: bool = False, title: str | None = None,
@@ -105,7 +108,7 @@ def test_titles_match_without_badges_case_or_direction_marks():
 
 
 def test_participants_never_include_the_user(tmp_path: Path):
-    store = MessageStore(tmp_path / "m.sqlite")
+    store = MessageStore(tmp_path / "m.sqlite", Vault(KEY))
     store.upsert([record("c1", "hello there friend", sender="Me", me=True, participants=("Ayşe",)),
                   record("c1", "hi back to you", sender="Ayşe")])
     conversation = store.conversation("chat", "c1")
@@ -113,7 +116,7 @@ def test_participants_never_include_the_user(tmp_path: Path):
 
 
 def test_upsert_is_idempotent_and_reindexes_edits(tmp_path: Path):
-    store = MessageStore(tmp_path / "m.sqlite")
+    store = MessageStore(tmp_path / "m.sqlite", Vault(KEY))
     first = record("c1", "original text here", message_id="m1")
     assert store.upsert([first]) == 1
     store.mark_indexed([first.record_id])
@@ -124,14 +127,14 @@ def test_upsert_is_idempotent_and_reindexes_edits(tmp_path: Path):
 
 
 def test_keyword_search_never_leaves_the_given_conversations(tmp_path: Path):
-    store = MessageStore(tmp_path / "m.sqlite")
+    store = MessageStore(tmp_path / "m.sqlite", Vault(KEY))
     store.upsert([record("c1", "the invoice is paid"), record("c2", "the invoice is late", sender="Can")])
     hits = store.keyword_search("invoice", [("chat", "c1")], limit=10)
     assert [h.conversation_id for h in hits] == ["c1"]
 
 
 def test_purge_removes_excluded_people_and_expired_messages(tmp_path: Path):
-    store = MessageStore(tmp_path / "m.sqlite")
+    store = MessageStore(tmp_path / "m.sqlite", Vault(KEY))
     old = time.time() - 400 * 86400
     store.upsert([record("c1", "from the boss today", sender="Boss"), record("c2", "an old message here", ts=old),
                   record("c3", "a fresh message here")])
@@ -148,7 +151,7 @@ def test_normalize_participant_reads_mail_addresses():
 
 
 def make_service(tmp_path: Path, records: list[MessageRecord]) -> MemoryService:
-    service = MemoryService(tmp_path / "data", connectors={"chat": FakeConnector(records)})
+    service = MemoryService(tmp_path / "data", KEY, connectors={"chat": FakeConnector(records)})
     service.config.apply({"index": {"vector_weight": 0.0}, "sources": {"chat": {"enabled": True}}})
     return service
 
@@ -248,3 +251,34 @@ def test_documents_connector_reads_paragraphs_and_resumes_from_its_cursor(tmp_pa
                                                "Support is included for 30 days."]
     again = connector.fetch({"folder": str(folder)}, first.cursor, None, lambda *_: None)
     assert again.records == []
+
+
+# MARK: - Encryption at rest
+
+
+def test_nothing_personal_is_readable_from_the_data_folder(tmp_path: Path):
+    marker = "Zyxwvut-secret-plan"
+    service = make_service(tmp_path, [
+        record("whatsapp-ayse", f"the {marker} is ready", title="Ayşe Yılmaz", sender="Ayşe Yılmaz",
+               participants=("ayse@example.com",)),
+    ])
+    run_sync(service)
+    assert service.search({"query": marker, "scope": {"title": "Ayşe Yılmaz", "sources": ["chat"]}})["hits"]
+    service.close()
+    for path in (tmp_path / "data").rglob("*"):
+        if path.is_file():
+            data = path.read_bytes()
+            for secret in (marker, "Ayşe", "ayse@example.com", "whatsapp-ayse"):
+                assert secret.encode() not in data, f"{secret!r} readable in {path.name}"
+
+
+def test_a_store_opened_with_another_key_is_refused(tmp_path: Path):
+    MessageStore(tmp_path / "m.sqlite", Vault(KEY)).close()
+    with pytest.raises(KeyMismatch):
+        MessageStore(tmp_path / "m.sqlite", Vault(bytes(32)))
+
+
+def test_keyword_search_matches_word_prefixes(tmp_path: Path):
+    store = MessageStore(tmp_path / "m.sqlite", Vault(KEY))
+    store.upsert([record("c1", "the invoice is paid"), record("c1", "lunch tomorrow")])
+    assert [m.text for m in store.keyword_search("invo", [("chat", "c1")], limit=5)] == ["the invoice is paid"]

@@ -1,4 +1,5 @@
 import Combine
+import CryptoKit
 import Darwin
 import Foundation
 import Logging
@@ -33,6 +34,10 @@ final class MemoryServiceSupervisor: ObservableObject {
         case starting
         case running
         case failed(String)
+        /// The stored memory was encrypted with a key the Keychain no longer has (the item was
+        /// deleted or the data folder came from another Mac). It cannot be read; the only way
+        /// forward is deleting it and syncing again.
+        case keyMismatch
     }
 
     @Published private(set) var state: State = .disabled
@@ -44,6 +49,7 @@ final class MemoryServiceSupervisor: ObservableObject {
     let client: MemoryServiceClient
     private let bundled: MemoryServicePaths.BundledService?
     private let userDefaults: UserDefaults
+    private let keyStore: any TypingHistoryKeyStore
     private var child: IsolatedProcessSpawner.Child?
     private var exitSource: DispatchSourceProcess?
     private var stopping = false
@@ -58,11 +64,18 @@ final class MemoryServiceSupervisor: ObservableObject {
     init(
         paths: MemoryServicePaths = .standard(),
         bundled: MemoryServicePaths.BundledService? = MemoryServicePaths.bundledService(),
-        userDefaults: UserDefaults = .standard
+        userDefaults: UserDefaults = .standard,
+        keyStore: (any TypingHistoryKeyStore)? = nil
     ) {
         self.paths = paths
         self.bundled = bundled
         self.userDefaults = userDefaults
+        // The memory store's encryption key: its own Keychain item, per app identity, so the dev
+        // build and the released app never share (or overwrite) each other's key.
+        self.keyStore = keyStore ?? KeychainTypingHistoryKeyStore(
+            service: "\(Bundle.main.bundleIdentifier ?? "com.jacobfu.tabby").memory",
+            label: "Cotabby conversation memory key"
+        )
         client = MemoryServiceClient(socketPath: paths.socket.path)
         isEnabled = userDefaults.bool(forKey: Self.enabledDefaultsKey)
         uvPath = Self.findUV()
@@ -198,6 +211,10 @@ final class MemoryServiceSupervisor: ObservableObject {
         environment["TOKENIZERS_PARALLELISM"] = "false"
         let spawned: IsolatedProcessSpawner.Child
         do {
+            let key = try keyStore.existingKey() ?? keyStore.createKey()
+            let keyLine = try JSONSerialization.data(withJSONObject: [
+                "key": key.withUnsafeBytes { Data($0) }.base64EncodedString()
+            ]) + Data("\n".utf8)
             spawned = try IsolatedProcessSpawner.spawn(
                 executable: paths.python.path,
                 arguments: [
@@ -206,7 +223,8 @@ final class MemoryServiceSupervisor: ObservableObject {
                     "--socket", paths.socket.path,
                     "--parent-pid", String(getpid())
                 ],
-                environment: environment
+                environment: environment,
+                stdinPayload: keyLine
             )
         } catch {
             state = .failed(error.localizedDescription)
@@ -236,14 +254,19 @@ final class MemoryServiceSupervisor: ObservableObject {
         // The service prints one JSON line when its socket is listening. Read it off the main actor.
         let handle = spawned.stdout
         Task.detached { [weak self] in
-            let ready = Self.waitForReadyLine(handle, timeout: Self.readyTimeout)
+            let outcome = Self.waitForReadyLine(handle, timeout: Self.readyTimeout)
             await MainActor.run {
                 guard let self, self.child?.pid == spawned.pid else { return }
-                if ready {
+                switch outcome {
+                case .ready:
                     self.consecutiveFailures = 0
                     self.state = .running
                     CotabbyLogger.app.info("Memory service ready")
-                } else {
+                case .error(let code, let message):
+                    // A startup refusal is not a crash to retry: stop the restart loop and say why.
+                    self.stopping = true
+                    self.state = code == "key_mismatch" ? .keyMismatch : .failed(message)
+                case .noReply:
                     kill(spawned.pid, SIGTERM)
                     self.state = .failed("The memory service did not start in time.")
                 }
@@ -279,24 +302,47 @@ final class MemoryServiceSupervisor: ObservableObject {
         MemoryServicePaths.uvCandidates().first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
-    /// Reads stdout until the `{"event": "ready"}` line or the timeout. Blocking; background only.
-    nonisolated private static func waitForReadyLine(_ handle: FileHandle, timeout: TimeInterval) -> Bool {
+    enum StartupOutcome: Equatable {
+        case ready
+        /// The service refused to start (`{"event": "error", "code", "message"}`).
+        case error(code: String, message: String)
+        /// It exited or stayed silent without a ready line.
+        case noReply
+    }
+
+    /// Reads stdout until the service's first event line or the timeout. Blocking; background only.
+    nonisolated static func waitForReadyLine(_ handle: FileHandle, timeout: TimeInterval) -> StartupOutcome {
         let deadline = Date().addingTimeInterval(timeout)
         var buffer = Data()
         while Date() < deadline {
             let chunk = handle.availableData
-            if chunk.isEmpty { return false }  // EOF: the process exited before becoming ready.
+            if chunk.isEmpty { return .noReply }  // EOF: the process exited without an event.
             buffer.append(chunk)
             while let newline = buffer.firstIndex(of: 0x0A) {
                 let line = buffer.prefix(upTo: newline)
                 buffer.removeSubrange(...newline)
-                if let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-                   object["event"] as? String == "ready" {
-                    return true
+                guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
+                switch object["event"] as? String {
+                case "ready":
+                    return .ready
+                case "error":
+                    return .error(code: object["code"] as? String ?? "error",
+                                  message: object["message"] as? String ?? "The memory service could not start.")
+                default:
+                    continue
                 }
             }
         }
-        return false
+        return .noReply
+    }
+
+    /// Deletes every stored message and index (not the venv or settings' folder structure), for the
+    /// key-mismatch recovery. The Keychain key stays, so the next start creates a fresh store with it.
+    func deleteMemoryData() {
+        stop()
+        try? FileManager.default.removeItem(at: paths.dataDirectory)
+        consecutiveFailures = 0
+        start()
     }
 
     /// Runs a command to completion with responsibility disclaimed (installs execute package build

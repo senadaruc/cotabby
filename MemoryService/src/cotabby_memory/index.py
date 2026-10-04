@@ -10,6 +10,13 @@ How the index stays current:
   embedding model or chunking), or when messages were deleted or edited (exclusions, retention,
   a source removed), because LEANN's HNSW backend cannot remove passages.
 
+What LEANN keeps on disk: only embeddings and ids. LEANN writes each passage's text into
+`*.passages.jsonl` and a plaintext keyword index into `*.bm25.sqlite`; after every build and
+append, `redact_passages` blanks the text, rewrites the offset table, and deletes the keyword
+index (search uses vector similarity only at the LEANN level; keyword matching runs on the
+encrypted store). Passage metadata carries ids, the source and the conversation's HMAC key, never
+names or text, so the index directory holds nothing readable about the messages.
+
 How a scoped search works: LEANN applies metadata filters after picking its nearest neighbours,
 so a filter on one conversation can come back nearly empty. The search therefore over-fetches
 from LEANN and filters, and fuses that with the store's FTS5 keyword search, which filters first
@@ -22,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -139,6 +147,7 @@ class IndexManager:
         with self._lock:
             self._drop_searcher()
             builder.update_index(str(self.index_path))
+            redact_passages(self.index_path)
             state = self._state()
             state["passages"] = state.get("passages", 0) + added
             state["built_at"] = time.time()
@@ -161,6 +170,7 @@ class IndexManager:
             for message in messages:
                 passages += self._add(builder, message, config)
             builder.build_index(str(target / self.INDEX_NAME))
+            redact_passages(target / self.INDEX_NAME)
         report(0.95, "Swapping in the new index")
         with self._lock:
             self._drop_searcher()
@@ -206,14 +216,18 @@ class IndexManager:
         """Adds one message as one or more passages (long mails are chunked by words with
         overlap). Every chunk carries the message's metadata, so filters and the store lookup work
         on any chunk."""
-        record = message.as_record()
-        metadata = record.metadata()
-        metadata["id"] = message.record_id
-        chunks = chunk_words(record.passage_text(), config.chunk_size, config.chunk_overlap)
+        # The text is embedded in memory; only these ids and keys reach LEANN's files (the text is
+        # redacted after the build, see `redact_passages`).
+        metadata = {
+            "record_id": message.record_id,
+            "source": message.source,
+            "conversation_key": message.conversation_key,
+            "timestamp": message.timestamp,
+        }
+        chunks = chunk_words(message.as_record().passage_text(), config.chunk_size, config.chunk_overlap)
         for index, chunk in enumerate(chunks):
             chunk_metadata = dict(metadata)
             chunk_metadata["id"] = message.record_id if index == 0 else f"{message.record_id}#{index}"
-            chunk_metadata["record_id"] = message.record_id
             builder.add_text(chunk, metadata=chunk_metadata)
         return len(chunks)
 
@@ -259,10 +273,12 @@ class IndexManager:
             if searcher is not None and config.vector_weight > 0:
                 filters = None
                 fetch = top_k * 3
+                allowed_keys: set[tuple[str, str]] | None = None
                 if conversations is not None:
                     if not conversations:
                         return []
-                    filters = {"conversation_id": {"in": sorted({c for _, c in conversations})}}
+                    allowed_keys = {(s, self.store.conversation_key(s, c)) for s, c in conversations}
+                    filters = {"conversation_key": {"in": sorted({k for _, k in allowed_keys})}}
                     fetch = self.SCOPED_OVERFETCH
                 try:
                     results = searcher.search(
@@ -272,12 +288,11 @@ class IndexManager:
                 except Exception:  # noqa: BLE001 - a broken index must not break suggestions
                     log.exception("vector search failed")
                     results = []
-                allowed = set(conversations) if conversations is not None else None
                 seen: set[str] = set()
                 for result in results:
                     record_id = result.metadata.get("record_id") or result.metadata.get("id") or result.id
-                    pair = (result.metadata.get("source"), result.metadata.get("conversation_id"))
-                    if record_id in seen or (allowed is not None and pair not in allowed):
+                    pair = (result.metadata.get("source"), result.metadata.get("conversation_key"))
+                    if record_id in seen or (allowed_keys is not None and pair not in allowed_keys):
                         continue
                     seen.add(record_id)
                     vector_ranked.append(record_id)
@@ -304,6 +319,37 @@ class IndexManager:
             )
             hits.append(SearchHit(message, score, via))
         return hits
+
+
+def redact_passages(index_path: Path) -> None:
+    """Removes message text from LEANN's on-disk files for the index at `index_path`.
+
+    LEANN stores each passage as a JSON line `{"id", "text", "metadata"}` in `<name>.passages.jsonl`
+    with a pickled id -> byte-offset table in `<name>.passages.idx`, and a plaintext FTS5 keyword
+    index in `<name>.bm25.sqlite`. The text is rewritten as empty and the offsets recomputed (so
+    LEANN's own lookups and later appends keep working); the keyword index is deleted.
+    """
+    import json
+    import pickle
+
+    passages = index_path.with_name(index_path.name + ".passages.jsonl")
+    offsets_file = index_path.with_name(index_path.name + ".passages.idx")
+    if passages.exists():
+        redacted = passages.with_name(passages.name + ".redacting")
+        offsets: dict[str, int] = {}
+        with passages.open("r", encoding="utf-8") as source, redacted.open("w", encoding="utf-8") as target:
+            for line in source:
+                if not line.strip():
+                    continue
+                entry = json.loads(line)
+                entry["text"] = ""
+                offsets[entry["id"]] = target.tell()
+                target.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        os.replace(redacted, passages)
+        with offsets_file.open("wb") as handle:
+            pickle.dump(offsets, handle)
+    for keyword_index in index_path.parent.glob(index_path.name + ".bm25.sqlite*"):
+        keyword_index.unlink(missing_ok=True)
 
 
 def chunk_words(text: str, size: int, overlap: int) -> list[str]:

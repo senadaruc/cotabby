@@ -13,6 +13,7 @@ import SwiftUI
 struct MemoryPaneView: View {
     @ObservedObject var supervisor: MemoryServiceSupervisor
     @ObservedObject var control: MemoryControlModel
+    @State private var confirmingReset = false
 
     var body: some View {
         SettingsPaneScaffold {
@@ -101,6 +102,19 @@ struct MemoryPaneView: View {
                 Button("Restart") { supervisor.restart() }
                 Button("Open Memory Folder") { NSWorkspace.shared.open(supervisor.paths.root) }
             }
+        case .keyMismatch:
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Memory is encrypted with a key this Mac's Keychain no longer has, so it cannot be read. " +
+                     "Delete it and sync your sources again to rebuild it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Delete Memory and Start Over…", role: .destructive) { confirmingReset = true }
+            }
+            .confirmationDialog("Delete the unreadable memory?", isPresented: $confirmingReset) {
+                Button("Delete Memory", role: .destructive) { supervisor.deleteMemoryData() }
+            } message: {
+                Text("Your sources and settings stay; only the stored messages and the index are deleted.")
+            }
         case .installing, .starting, .disabled:
             EmptyView()
         }
@@ -126,12 +140,15 @@ struct MemoryPaneView: View {
         case .starting: return "Starting…"
         case .running: return control.status?.busy == true ? "Running · working in the background" : "Running"
         case .failed(let message): return message
+        case .keyMismatch: return "Memory cannot be read with this Mac's key"
         }
     }
 
     private var stateIsProblem: Bool {
-        if case .failed = supervisor.state { return true }
-        return false
+        switch supervisor.state {
+        case .failed, .keyMismatch: return true
+        default: return false
+        }
     }
 
     static func byteLabel(_ bytes: Int) -> String {

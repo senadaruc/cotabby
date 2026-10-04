@@ -10,19 +10,29 @@ import sys
 import tempfile
 from pathlib import Path
 
+import base64
+
 import pytest
+
+KEY_LINE = json.dumps({"key": base64.b64encode(bytes(range(32))).decode()}) + "\n"
+
+
+def start(data_dir: Path, parent_pid: int, key_line: str = KEY_LINE) -> subprocess.Popen:
+    process = subprocess.Popen(
+        [sys.executable, "-m", "cotabby_memory", "--data-dir", str(data_dir), "--parent-pid", str(parent_pid)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")},
+    )
+    process.stdin.write(key_line)
+    process.stdin.close()
+    return process
 
 
 @pytest.fixture()
 def server():
     # Socket paths are length-limited on macOS, so use a short temp dir instead of pytest's.
     data_dir = Path(tempfile.mkdtemp(prefix="cm-"))
-    process = subprocess.Popen(
-        [sys.executable, "-m", "cotabby_memory", "--data-dir", str(data_dir), "--parent-pid", str(os.getpid())],
-        stdout=subprocess.PIPE,
-        env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")},
-        text=True,
-    )
+    process = start(data_dir, os.getpid())
     ready = json.loads(process.stdout.readline())
     assert ready["event"] == "ready"
     yield data_dir, Path(ready["socket"])
@@ -83,11 +93,7 @@ def test_other_processes_are_refused(server):
 def test_the_service_exits_with_its_parent(tmp_path):
     data_dir = Path(tempfile.mkdtemp(prefix="cm-"))
     parent = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
-    process = subprocess.Popen(
-        [sys.executable, "-m", "cotabby_memory", "--data-dir", str(data_dir), "--parent-pid", str(parent.pid)],
-        stdout=subprocess.PIPE, text=True,
-        env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")},
-    )
+    process = start(data_dir, parent.pid)
     assert json.loads(process.stdout.readline())["event"] == "ready"
     parent.kill()
     parent.wait()
@@ -98,12 +104,9 @@ def test_a_stopping_service_leaves_a_newer_services_socket_alone():
     """A relaunched Cotabby starts a new service on the same socket path while the old one is
     still noticing its parent is gone; the old one's shutdown must not delete the new socket."""
     data_dir = Path(tempfile.mkdtemp(prefix="cm-"))
-    env = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
-    old = subprocess.Popen([sys.executable, "-m", "cotabby_memory", "--data-dir", str(data_dir),
-                            "--parent-pid", str(os.getpid())], stdout=subprocess.PIPE, text=True, env=env)
+    old = start(data_dir, os.getpid())
     sock_path = Path(json.loads(old.stdout.readline())["socket"])
-    new = subprocess.Popen([sys.executable, "-m", "cotabby_memory", "--data-dir", str(data_dir),
-                            "--parent-pid", str(os.getpid())], stdout=subprocess.PIPE, text=True, env=env)
+    new = start(data_dir, os.getpid())
     assert json.loads(new.stdout.readline())["event"] == "ready"
     old.terminate()
     old.wait(timeout=10)
@@ -111,3 +114,14 @@ def test_a_stopping_service_leaves_a_newer_services_socket_alone():
     assert call(sock_path, "status")["result"]["protocol_version"] == 1
     new.terminate()
     new.wait(timeout=10)
+
+
+def test_the_service_refuses_to_start_with_the_wrong_key():
+    data_dir = Path(tempfile.mkdtemp(prefix="cm-"))
+    first = start(data_dir, os.getpid())
+    assert json.loads(first.stdout.readline())["event"] == "ready"
+    first.terminate()
+    first.wait(timeout=10)
+    wrong = start(data_dir, os.getpid(), json.dumps({"key": base64.b64encode(bytes(32)).decode()}) + "\n")
+    assert json.loads(wrong.stdout.readline())["code"] == "key_mismatch"
+    assert wrong.wait(timeout=10) == 3
