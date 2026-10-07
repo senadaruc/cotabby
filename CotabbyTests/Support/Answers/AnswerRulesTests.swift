@@ -42,6 +42,42 @@ final class AnswerRulesTests: XCTestCase {
         XCTAssertFalse(ReplyFieldEmptiness.isEmpty(precedingText: "", trailingText: "a draft I started writing earlier"))
     }
 
+    /// Mail asks by request as often as by question: Arnaud's mail has no question mark.
+    func test_requestsInMailAreAnswerable() {
+        let arnaud = """
+        Hi Senad,
+
+        As discussed, I would like to be able to generate POC Licenses before the Scope being finalized. \
+        It will be really helpful for the Team so that they can set up the Instance in advance.
+
+        Thank ou in advance.
+        """
+        XCTAssertEqual(
+            QuestionDetector.question(in: arnaud),
+            "As discussed, I would like to be able to generate POC Licenses before the Scope being finalized."
+        )
+        XCTAssertNotNil(QuestionDetector.question(in: "Kindly share the report by Friday."))
+        XCTAssertNotNil(QuestionDetector.question(in: "Raporu lütfen cuma gününe kadar gönder."))
+    }
+
+    /// The salutation the user types first does not end the wait for the answer, as long as the
+    /// caret sits on a fresh line below it.
+    func test_aReplyHoldingOnlyItsSalutationStillAwaitsItsBody() {
+        let quote = "\n\nFrom: Arnaud Reichenauer <arnaud@imperum.io>\nDate: Wednesday\nSubject: POC license\n\nHi Senad,"
+        XCTAssertTrue(ReplyFieldEmptiness.isAwaitingBody(precedingText: "", trailingText: quote))
+        XCTAssertTrue(ReplyFieldEmptiness.isAwaitingBody(precedingText: "Dear Arnaud,\n\n", trailingText: quote))
+        XCTAssertTrue(ReplyFieldEmptiness.isAwaitingBody(precedingText: "Merhaba Ali Bey,\n", trailingText: quote))
+        XCTAssertFalse(ReplyFieldEmptiness.isAwaitingBody(precedingText: "Dear Arnaud,", trailingText: quote),
+                       "the caret is still on the salutation line")
+        XCTAssertFalse(ReplyFieldEmptiness.isAwaitingBody(precedingText: "Dear Arnaud,\n\nThanks for", trailingText: quote))
+        XCTAssertFalse(ReplyFieldEmptiness.isAwaitingBody(precedingText: "Hi team the release is out today\n", trailingText: quote))
+    }
+
+    func test_aTypedSalutationIsNotPastedTwice() {
+        XCTAssertEqual(ReplyFieldEmptiness.bodyAfterSalutation("Hi Arnaud,\n\nYes, we can do that."), "Yes, we can do that.")
+        XCTAssertEqual(ReplyFieldEmptiness.bodyAfterSalutation("Yes, we can do that."), "Yes, we can do that.")
+    }
+
     // MARK: - Quoted replies
 
     func test_englishAttributionGivesSenderAndOnlyTheLatestQuotedBody() throws {

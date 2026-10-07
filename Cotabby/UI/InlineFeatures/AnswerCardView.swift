@@ -7,9 +7,13 @@ import SwiftUI
 /// Why the sources are always shown: an answer can quote facts from a different conversation than
 /// the one being replied in (the user chose that for answers), so the card names each fact's sender,
 /// chat, date and app before anything is inserted. Presentation only; built by
-/// `AnswerCardController` from an `AnswerOffer`.
+/// `AnswerCardController` from an `AnswerOffer`. The whole card is the insert button: a click pastes
+/// the draft at the caret, where the user edits it.
 struct AnswerCardView: View {
     let offer: AnswerOffer
+    /// Whether Tab inserts too (an empty reply), or only a click (ghost text owns Tab there).
+    var tabInserts = true
+    var onInsert: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -17,7 +21,7 @@ struct AnswerCardView: View {
                 Image(systemName: "text.bubble")
                 Text("Answer from memory").font(.caption.weight(.semibold))
                 Spacer(minLength: 8)
-                Text("Tab to insert · Esc to dismiss")
+                Text(tabInserts ? "Click or Tab to insert · Esc to dismiss" : "Click to insert · Esc to dismiss")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -51,6 +55,8 @@ struct AnswerCardView: View {
         .padding(10)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.accentColor.opacity(0.5)))
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .onTapGesture(perform: onInsert)
         .padding(2)
     }
 }

@@ -8,7 +8,8 @@ import Logging
 /// Offers a drafted answer when the user opens an empty reply to a message that asks them something.
 ///
 /// The flow, each step owned elsewhere so this file only orchestrates:
-/// 1. A focused, non-secure, still-empty reply field (`ReplyFieldEmptiness`) in an app and window
+/// 1. A focused, non-secure reply field still waiting for its body, empty or holding only the
+///    salutation (`ReplyFieldEmptiness.isAwaitingBody`), in an app and window
 ///    where answers are on, with memory running, a local model able to draft, and the performance
 ///    tuner allowing memory work.
 /// 2. The latest incoming message there (`IncomingMessageResolver`) and the question in it
@@ -22,9 +23,11 @@ import Logging
 ///    alone are enough to draft.
 /// 4. A draft (`AnswerDraftEngine`), kept only if every number and name in it is in the facts or
 ///    the question (`AnswerGroundingPolicy.unsupportedSpecifics`).
-/// 5. A card under the field with the draft and its sources (`AnswerCardController`). While it is
-///    up, Tab pastes the draft at the caret and Esc dismisses it (`TemporaryKeyTap`); any other key
-///    dismisses it and reaches the app as usual. Nothing is ever inserted without that Tab.
+/// 5. A card under the caret line with the draft and its sources (`AnswerCardController`). A click
+///    on it pastes the draft at the caret, where the user edits it like their own text. In an empty
+///    reply Tab does the same; once a salutation is typed, ghost-text suggestions own Tab on that
+///    line, so only the click inserts. Esc dismisses (`TemporaryKeyTap`); any other key dismisses it
+///    and reaches the app as usual. Nothing is ever inserted without that click or Tab.
 ///
 /// Each question is drafted once (cached by message), a dismissed one is not offered again, and
 /// every async step re-checks that the same field is still focused and still empty before acting.
@@ -113,7 +116,7 @@ final class AnswerCoordinator {
               memory.state == .running, draftEngine.canDraft, isAllowedByTuning(),
               case .supported = snapshot.capability,
               let input = snapshot.context, !input.isSecure,
-              ReplyFieldEmptiness.isEmpty(precedingText: input.precedingText, trailingText: input.trailingText)
+              ReplyFieldEmptiness.isAwaitingBody(precedingText: input.precedingText, trailingText: input.trailingText)
         else { return nil }
         let windowKey = WindowFeatureScope.windowKey(bundleIdentifier: input.bundleIdentifier, windowTitle: input.featureScopeWindowTitle)
         guard WindowFeatureScope.resolve(
@@ -257,19 +260,25 @@ final class AnswerCoordinator {
     private func isStillCurrent(_ input: FocusedInputSnapshot) -> Bool {
         guard let now = focusModel.snapshot.context else { return false }
         return now.identity == input.identity
-            && ReplyFieldEmptiness.isEmpty(precedingText: now.precedingText, trailingText: now.trailingText)
+            && ReplyFieldEmptiness.isAwaitingBody(precedingText: now.precedingText, trailingText: now.trailingText)
     }
 
     // MARK: - The card
 
     private func offer(_ offer: AnswerOffer, for input: FocusedInputSnapshot, messageKey: String) {
         shown = (input.identity, offer, messageKey)
-        card.show(offer, near: input.elementFrameRect ?? input.inputFrameRect ?? input.caretRect)
+        // Tab is the card's only in an empty reply: after a salutation the suggestion overlay may be
+        // showing ghost text on the same line, and its Tab accept must keep working.
+        let tabInserts = input.precedingText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        card.show(
+            offer, caret: input.caretRect, field: input.elementFrameRect ?? input.inputFrameRect,
+            tabInserts: tabInserts, onInsert: { [weak self] in self?.insert() }
+        )
         keyTap.install { [weak self] keyCode, flags in
             guard let self else { return .pass }
             let plain = flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift]).isEmpty
             switch (keyCode, plain) {
-            case (Self.tabKeyCode, true):
+            case (Self.tabKeyCode, true) where tabInserts:
                 // Insert after the tap returns: the paste presses a menu item through Accessibility,
                 // which must never run inside the tap callback.
                 DispatchQueue.main.async { self.insert() }
@@ -287,11 +296,13 @@ final class AnswerCoordinator {
 
     private func insert() {
         guard let shown, let input = focusModel.snapshot.context, input.identity == shown.identity,
-              ReplyFieldEmptiness.isEmpty(precedingText: input.precedingText, trailingText: input.trailingText) else {
+              ReplyFieldEmptiness.isAwaitingBody(precedingText: input.precedingText, trailingText: input.trailingText) else {
             withdraw()
             return
         }
-        let text = shown.offer.draft
+        // The user already greeted: paste the body, not a second salutation.
+        let hasSalutation = !input.precedingText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let text = hasSalutation ? ReplyFieldEmptiness.bodyAfterSalutation(shown.offer.draft) : shown.offer.draft
         let key = shown.messageKey
         withdraw()
         dismissed.insert(key)  // Answered: never offered again.
