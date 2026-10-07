@@ -73,6 +73,12 @@ final class AnswerRulesTests: XCTestCase {
         XCTAssertFalse(ReplyFieldEmptiness.isAwaitingBody(precedingText: "Hi team the release is out today\n", trailingText: quote))
     }
 
+    func test_aPluralOfASupportedNameIsGrounded() {
+        XCTAssertEqual(AnswerGroundingPolicy.unsupportedSpecifics(
+            in: "We can send the NDAs today.", facts: ["Arnaud: we use SignNow for the NDA"], question: "Can you send it?"
+        ), [])
+    }
+
     func test_aTypedSalutationIsNotPastedTwice() {
         XCTAssertEqual(ReplyFieldEmptiness.bodyAfterSalutation("Hi Arnaud,\n\nYes, we can do that."), "Yes, we can do that.")
         XCTAssertEqual(ReplyFieldEmptiness.bodyAfterSalutation("Yes, we can do that."), "Yes, we can do that.")

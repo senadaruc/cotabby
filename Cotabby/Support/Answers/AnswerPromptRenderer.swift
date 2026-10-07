@@ -161,10 +161,21 @@ nonisolated enum AnswerGroundingPolicy {
         for number in numbers(in: draft) where !sourceDigits.contains(number) {
             unsupported.append(number)
         }
-        for name in properNames(in: draft) where !source.contains(normalized(name)) {
+        // A plural or possessive of a supported name ("NDAs", "Arnaud's") is the same name: only the
+        // base must appear in the sources, or a correct draft is dropped for its grammar.
+        for name in properNames(in: draft) where !nameVariants(name).contains(where: { source.contains(normalized($0)) }) {
             unsupported.append(name)
         }
         return unsupported
+    }
+
+    /// The name as written plus its base without an English plural or possessive ending.
+    static func nameVariants(_ name: String) -> [String] {
+        var variants = [name]
+        for suffix in ["'s", "’s", "es", "s"] where name.count > suffix.count + 1 && name.hasSuffix(suffix) {
+            variants.append(String(name.dropLast(suffix.count)))
+        }
+        return variants
     }
 
     /// Whether the facts are about what the question names. A question that names something (a
