@@ -79,6 +79,33 @@ nonisolated enum QuotedReplyParser {
         return QuotedMessage(sender: sender, body: String(cleaned.prefix(maximumBodyCharacters)))
     }
 
+    /// The subject named in the first Outlook-style quote block ("Subject: Re: AFAD Use Case 3"),
+    /// read from the block's own field lines only, so a "Subject:" line in the user's draft above
+    /// the quote is never taken for it. Nil for attribution quotes ("On …, X wrote:"), which name no
+    /// subject.
+    static func quotedSubject(in text: String) -> String? {
+        guard let header = headerRange(in: text) else { return nil }
+        var sawField = false
+        for line in text[header.lowerBound...].components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            // A blank line after the fields ends the block; the quoted message starts there.
+            if trimmed.isEmpty {
+                if sawField { return nil }
+                continue
+            }
+            guard let field = headerField(trimmed) else {
+                // The rule line opens the block; any other line ends it.
+                if originalMessageRule?.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) != nil {
+                    continue
+                }
+                return nil
+            }
+            sawField = true
+            if ["subject", "konu"].contains(field.name) { return field.value.isEmpty ? nil : field.value }
+        }
+        return nil
+    }
+
     /// "On Mon, 3 Oct 2026 at 10:15, Ayşe Yılmaz <ayse@x.com> wrote:" → "Ayşe Yılmaz";
     /// "3 Eki 2026 tarihinde Ayşe Yılmaz şunu yazdı:" → "Ayşe Yılmaz".
     static func senderName(fromAttribution line: String) -> String? {

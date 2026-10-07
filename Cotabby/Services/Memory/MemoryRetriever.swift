@@ -85,6 +85,7 @@ final class MemoryRetriever: SuggestionMemoryProviding {
               let scope = ConversationScopeResolver.scope(
                   bundleIdentifier: context.bundleIdentifier,
                   conversationTitle: context.featureScopeWindowTitle,
+                  trailingText: context.trailingText,
                   sourcesByBundle: sourcesByBundle
               ) else { return [] }
         let windowKey = WindowFeatureScope.windowKey(

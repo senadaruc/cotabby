@@ -16,14 +16,19 @@ nonisolated enum VisualContextExcerptSelector {
         lines: [OCRTextHygiene.OCRLine],
         fieldText: String,
         focusBounds: CGRect?,
-        maxCharacters: Int
+        maxCharacters: Int,
+        keepsOnlyFieldColumn: Bool = false
     ) -> String {
         guard maxCharacters > 0 else { return "" }
         var seen = Set<String>()
         let candidates = lines.enumerated().compactMap { index, line -> Candidate? in
-            if let bounds = line.boundingBox, let focus = focusBounds,
-               isFocusedFieldOrBelow(bounds, focus: focus) {
-                return nil
+            if let bounds = line.boundingBox, let focus = focusBounds {
+                if isFocusedFieldOrBelow(bounds, focus: focus) { return nil }
+                // A mail app's other columns are the folder list and the message list: previews of
+                // other mail, which a base model copies when one starts like the draft ("Dear M" →
+                // another thread's "Dear Massimo and Alberto"). The thread being answered reaches
+                // the prompt as the field's trailing text instead.
+                if keepsOnlyFieldColumn, !isInFieldColumn(bounds, focus: focus) { return nil }
             }
             let cleaned = OCRTextHygiene.clean(lines: [line], fieldText: fieldText, maxChars: maxCharacters)
             // Confidence/line hygiene has already removed corrupt recognition. The legacy
@@ -34,8 +39,7 @@ nonisolated enum VisualContextExcerptSelector {
             let score: Double
             if let bounds = line.boundingBox, let focus = focusBounds {
                 // A neighboring message in the editor's column outranks a equally close sidebar.
-                let sameColumn = bounds.maxX >= focus.minX && bounds.minX <= focus.maxX
-                score = abs(bounds.midY - focus.midY) + (sameColumn ? 0 : 1)
+                score = abs(bounds.midY - focus.midY) + (isInFieldColumn(bounds, focus: focus) ? 0 : 1)
             } else {
                 // OCR arrives in reading order. Without geometry, favor the latest visible lines
                 // rather than spending the entire budget on the top toolbar and oldest messages.
@@ -70,7 +74,11 @@ nonisolated enum VisualContextExcerptSelector {
     /// The field's text reaches the prompt through Accessibility, so nothing is lost; lines above
     /// the field (the conversation) and in other columns are kept.
     static func isFocusedFieldOrBelow(_ bounds: CGRect, focus: CGRect) -> Bool {
-        let sameColumn = bounds.maxX >= focus.minX && bounds.minX <= focus.maxX
-        return sameColumn && bounds.midY <= focus.maxY
+        isInFieldColumn(bounds, focus: focus) && bounds.midY <= focus.maxY
+    }
+
+    /// Whether an OCR line overlaps the focused field horizontally (both in normalized space).
+    static func isInFieldColumn(_ bounds: CGRect, focus: CGRect) -> Bool {
+        bounds.maxX >= focus.minX && bounds.minX <= focus.maxX
     }
 }

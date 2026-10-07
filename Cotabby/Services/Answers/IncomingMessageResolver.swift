@@ -54,7 +54,7 @@ final class IncomingMessageResolver {
     func latestIncoming(for context: FocusedInputSnapshot) async -> IncomingMessage? {
         let scope = ConversationScopeResolver.scope(
             bundleIdentifier: context.bundleIdentifier, conversationTitle: context.featureScopeWindowTitle,
-            sourcesByBundle: sourcesByBundle()
+            trailingText: context.trailingText, sourcesByBundle: sourcesByBundle()
         )
         if let quoted = QuotedReplyParser.quotedMessage(in: context.trailingText) {
             let conversation = scope.flatMap { scope in

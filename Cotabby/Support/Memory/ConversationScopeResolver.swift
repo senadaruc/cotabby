@@ -26,12 +26,24 @@ nonisolated enum ConversationScopeResolver {
     /// open chat's name in WhatsApp (read from its header), the window title elsewhere. In Mail a
     /// compose window's title is the message subject ("Re: POC results"), which memory matches
     /// to the thread with reply prefixes removed.
+    ///
+    /// A mail reply names its thread in the quoted header after the caret (`trailingText`), and
+    /// that wins over the window title: Outlook's inline reply sits in the main window, whose
+    /// title names a mailbox ("Inbox • All Accounts"), and such a title is never a conversation.
     static func scope(
         bundleIdentifier: String,
         conversationTitle: String?,
+        trailingText: String = "",
         sourcesByBundle: [String: [String]]
     ) -> ConversationScope? {
-        let raw = conversationTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var raw = conversationTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if MailReplyContext.isMail(bundleIdentifier: bundleIdentifier) {
+            if let subject = MailReplyContext.quotedSubject(in: trailingText) {
+                raw = subject
+            } else if MailReplyContext.isMailboxWindowTitle(raw, bundleIdentifier: bundleIdentifier) {
+                return nil
+            }
+        }
         let named = teamsBundleIdentifiers.contains(bundleIdentifier) ? teamsConversationTitle(raw) : raw
         guard let sources = sourcesByBundle[bundleIdentifier], !sources.isEmpty,
               let title = named, !title.isEmpty,

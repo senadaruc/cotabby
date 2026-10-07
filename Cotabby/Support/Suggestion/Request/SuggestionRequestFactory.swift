@@ -65,6 +65,16 @@ enum SuggestionRequestFactory {
             engine: settings.selectedEngine
         )
         let completionLengthInstruction = settings.effectiveWordRange.promptInstruction
+        // In a mail reply the text after the caret is the quoted thread being answered, the most
+        // relevant context there is, so mail apps carry more of it than other surfaces.
+        let maxSuffixCharacters = MailReplyContext.trailingBudget(
+            bundleIdentifier: context.bundleIdentifier, defaultBudget: configuration.maxSuffixCharacters
+        )
+        // The thread's subject names a reply better than its window: Outlook's inline reply sits in
+        // the main window, titled after the open folder ("Inbox • All Accounts").
+        let surfaceWindowTitle = MailReplyContext.isMail(bundleIdentifier: context.bundleIdentifier)
+            ? MailReplyContext.quotedSubject(in: context.trailingText) ?? context.windowTitle
+            : context.windowTitle
         let userName = activeUserName(settings: settings)
         // Custom rules are hidden from users (CustomRulesCatalog.isUserFacingEnabled == false): the
         // base-model OSS path cannot obey free-text instructions and the rule text leaks into output,
@@ -101,7 +111,7 @@ enum SuggestionRequestFactory {
                     isIntegratedTerminal: context.isIntegratedTerminal
                 ),
                 applicationName: context.applicationName,
-                windowTitle: context.windowTitle,
+                windowTitle: surfaceWindowTitle,
                 focusedURLString: context.focusedURLString,
                 fieldPlaceholder: context.fieldPlaceholder
             )
@@ -132,7 +142,7 @@ enum SuggestionRequestFactory {
             // network request needs its own disclosure and consent. Keep this new context local;
             // Apple's fallback request can use it because both eligible engines run on-device.
             trailingText: settings.selectedEngine == .openAICompatible ? "" : context.trailingText,
-            maxSuffixCharacters: configuration.maxSuffixCharacters,
+            maxSuffixCharacters: maxSuffixCharacters,
             customRules: customRules,
             extendedContext: activeExtendedContext,
             languageInstruction: languageInstruction,
@@ -162,7 +172,7 @@ enum SuggestionRequestFactory {
             minP: configuration.minP,
             repetitionPenalty: configuration.repetitionPenalty,
             randomSeed: configuration.randomSeed,
-            maxSuffixCharacters: configuration.maxSuffixCharacters,
+            maxSuffixCharacters: maxSuffixCharacters,
             completionLengthInstruction: completionLengthInstruction,
             userName: userName,
             customRules: customRules,
