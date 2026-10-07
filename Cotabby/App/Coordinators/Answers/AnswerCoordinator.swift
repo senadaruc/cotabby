@@ -50,6 +50,8 @@ final class AnswerCoordinator {
     private var cancellables: Set<AnyCancellable> = []
     private var task: Task<Void, Never>?
     private var pendingIdentity: FocusedInputIdentity?
+    /// The app of the field being drafted for or offered in, to tell a focus flicker from leaving it.
+    private var activeBundleIdentifier: String?
     /// The offer on screen, for which field.
     private var shown: (identity: FocusedInputIdentity, offer: AnswerOffer, messageKey: String)?
     /// Drafts per message key (nil: memory had no answer), and the messages the user dismissed.
@@ -95,7 +97,20 @@ final class AnswerCoordinator {
     // MARK: - Observing
 
     private func observe(_ snapshot: FocusSnapshot) {
+        // Outlook and other web-based composers drop their focused element for a moment while the
+        // user is still in the reply ("No focused Accessibility element", then the same field back).
+        // A draft takes seconds; ending it on that flicker meant it never finished. A snapshot with
+        // no field in the same app is that flicker; another app, or the field itself turning
+        // ineligible (the user started writing), still withdraws.
+        if snapshot.context == nil, task != nil || shown != nil, snapshot.bundleIdentifier == activeBundleIdentifier {
+            return
+        }
         guard let input = eligibleInput(snapshot) else {
+            if task != nil || shown != nil {
+                CotabbyLogger.app.debug("Answer withdrawn", metadata: [
+                    "category": "answers", "reason": .string(snapshot.context == nil ? "focus_left_app" : "field_not_awaiting_body")
+                ])
+            }
             withdraw()
             return
         }
@@ -103,6 +118,7 @@ final class AnswerCoordinator {
         if shown?.identity == input.identity || pendingIdentity == input.identity { return }
         withdraw()
         pendingIdentity = input.identity
+        activeBundleIdentifier = input.bundleIdentifier
         task = Task { [weak self] in
             try? await Task.sleep(nanoseconds: Self.debounceNanoseconds)
             guard let self, !Task.isCancelled else { return }
@@ -196,6 +212,10 @@ final class AnswerCoordinator {
               !AnswerGroundingPolicy.containsSecrets(draft.text) else {
             drafts[key] = .some(nil)
             log("skipped", ["reason": "ungrounded", "unsupported": "\(unsupported.count)", "engine": draft.engine])
+            // The words themselves only at debug level: they can be names from private mail.
+            CotabbyLogger.app.debug("Answer ungrounded terms", metadata: [
+                "category": "answers", "terms": .string(unsupported.joined(separator: ", "))
+            ])
             return
         }
         let isOtherConversation = { (hit: MemorySearchResult.Hit) in
