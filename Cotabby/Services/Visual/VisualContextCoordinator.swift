@@ -12,6 +12,7 @@ final class VisualContextCoordinator {
     var onStateChange: ((VisualContextStatus, String?) -> Void)?
     var onInjectedContextReady: ((FocusedInputIdentity) -> Void)?
     var refreshContextProvider: (() -> FocusedInputSnapshot?)?
+    var refreshPausedProvider: (() -> Bool)?
 
     private let screenshotContextGenerator: any ScreenshotContextGenerating
     private let screenRecordingPermissionProvider: @MainActor () -> Bool
@@ -23,6 +24,10 @@ final class VisualContextCoordinator {
     private var expiryTask: Task<Void, Never>?
     private var excerptCapturedAt: TimeInterval?
     private var activeSessionIdentity: FocusedInputSessionIdentity?
+    /// The text the last capture for this field read. Change detection compares against it rather
+    /// than the session's current excerpt, which expiry clears: an excerpt that aged out while the
+    /// refresh was paused is not evidence that the screen changed.
+    private var lastReadScreenText: String?
 
     private(set) var status: VisualContextStatus = .idle
     private(set) var latestExcerpt: String?
@@ -245,6 +250,12 @@ final class VisualContextCoordinator {
             do { try await Task.sleep(nanoseconds: delay) } catch { return }
             guard let self, !Task.isCancelled,
                   let session = self.activeAugmentationSession, session.sessionID == sessionID else { return }
+            // Screen text withheld for load: skip this capture and keep the session. The excerpt
+            // still expires on its own clock, so nothing stale reaches a request meanwhile.
+            if self.refreshPausedProvider?() == true {
+                self.scheduleRefresh(sessionID: sessionID)
+                return
+            }
             let liveContext = self.refreshContextProvider?()
             // Refreshing AX can synchronously publish a different field and start its session.
             // Never cancel that replacement on behalf of this old timer.
@@ -271,6 +282,7 @@ final class VisualContextCoordinator {
         expiryTask = nil
         excerptCapturedAt = nil
         activeSessionIdentity = nil
+        lastReadScreenText = nil
         refreshTask?.cancel()
         refreshTask = nil
         pendingStartTask?.cancel()
@@ -350,7 +362,8 @@ final class VisualContextCoordinator {
             return
         }
 
-        let changed = activeAugmentationSession?.excerpt?.text != excerpt.text
+        let changed = ScreenTextChangePolicy.isMeaningfulChange(from: lastReadScreenText, to: excerpt.text)
+        lastReadScreenText = excerpt.text
         activeAugmentationSession?.status = .ready
         activeAugmentationSession?.excerpt = excerpt
         status = .ready

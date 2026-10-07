@@ -315,6 +315,9 @@ protocol VisualContextCoordinating: AnyObject {
     var onInjectedContextReady: ((FocusedInputIdentity) -> Void)? { get set }
     /// Rechecks live eligibility and focus before each background capture, without owning AX.
     var refreshContextProvider: (() -> FocusedInputSnapshot?)? { get set }
+    /// True while screen text is withheld for the same field (load-based tuning, fast mode), so a
+    /// refresh waits instead of reading the withheld context as the field going away.
+    var refreshPausedProvider: (() -> Bool)? { get set }
 
     func startSessionIfNeeded(for snapshotContext: FocusedInputSnapshot, configuration: VisualContextConfiguration)
     func cancel(resetState: Bool)

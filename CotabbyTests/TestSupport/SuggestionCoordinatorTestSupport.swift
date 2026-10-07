@@ -245,6 +245,7 @@ final class RigVisualContextCoordinator: VisualContextCoordinating {
     var onStateChange: ((VisualContextStatus, String?) -> Void)?
     var onInjectedContextReady: ((FocusedInputIdentity) -> Void)?
     var refreshContextProvider: (() -> FocusedInputSnapshot?)?
+    var refreshPausedProvider: (() -> Bool)?
     private(set) var startedSessions: [FocusedInputSnapshot] = []
     private(set) var cancelCalls: [Bool] = []
     var excerptValue: String?

@@ -79,12 +79,28 @@ final class SuggestionConversationIsolationTests: XCTestCase {
         XCTAssertEqual(rig.interactionState.activeSession?.remainingText, " world")
     }
 
-    func test_expiringScreenContextRetiresConditionedPrediction() async {
+    /// Screen text that ages out on the same field is not navigation: the suggestion already on
+    /// screen stays acceptable, while work still conditioned on the old text is cancelled.
+    func test_expiringScreenContextKeepsTheVisibleSuggestionAndCancelsConditionedWork() async {
         let rig = makeCoordinatorRig()
         defer { rig.coordinator.stop() }
         rig.visualContext.onStateChange?(.ready, "Previous conversation")
         rig.coordinator.schedulePrediction()
         await waitUntil { rig.coordinator.overlayState.isVisible }
+        let workID = rig.coordinator.currentWorkID
+        rig.visualContext.onStateChange?(.unavailable("Expired"), nil)
+        XCTAssertTrue(rig.coordinator.overlayState.isVisible)
+        XCTAssertNotNil(rig.interactionState.activeSession)
+        XCTAssertNotEqual(rig.coordinator.currentWorkID, workID)
+        XCTAssertTrue(rig.coordinator.acceptCurrentSuggestion())
+    }
+
+    /// Without a suggestion on screen there is nothing to keep: lost screen text still retires
+    /// any session and in-flight work conditioned on it.
+    func test_expiringScreenContextWithNothingVisibleRetiresConditionedWork() async {
+        let rig = makeCoordinatorRig()
+        defer { rig.coordinator.stop() }
+        rig.visualContext.onStateChange?(.ready, "Previous conversation")
         let workID = rig.coordinator.currentWorkID
         rig.visualContext.onStateChange?(.unavailable("Expired"), nil)
         XCTAssertFalse(rig.coordinator.overlayState.isVisible)

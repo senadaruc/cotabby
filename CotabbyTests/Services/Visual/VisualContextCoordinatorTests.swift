@@ -267,6 +267,56 @@ final class VisualContextCoordinatorTests: XCTestCase {
         XCTAssertEqual(generator.configurations, [.local, .default])
     }
 
+    /// Load-based tuning withholds screen text, which the app's refresh provider reports as no
+    /// context. The refresh must wait that out on the same field: tearing the session down hid the
+    /// visible suggestion and kept screen text off for the rest of the draft.
+    func test_pausedRefreshKeepsTheSessionAndResumesWithoutANavigationSignal() async throws {
+        let generator = StubVisualContextGenerator()
+        let coordinator = VisualContextCoordinator(
+            screenshotContextGenerator: generator, screenRecordingPermissionProvider: { true },
+            refreshIntervalNanoseconds: 30_000_000, excerptLifetimeNanoseconds: 60_000_000
+        )
+        let snapshot = CotabbyTestFixtures.focusedInputSnapshot()
+        var paused = false
+        var notifications = 0
+        coordinator.refreshContextProvider = { paused ? nil : snapshot }
+        coordinator.refreshPausedProvider = { paused }
+        coordinator.onInjectedContextReady = { _ in notifications += 1 }
+        coordinator.startSessionIfNeeded(for: snapshot, configuration: .local)
+        defer { coordinator.cancel(resetState: true) }
+        try await waitUntil { coordinator.status == .ready }
+
+        paused = true
+        let capturesWhenPaused = generator.contexts.count
+        // The excerpt ages out on its own clock while paused, but the session survives.
+        try await waitUntil { coordinator.latestExcerpt == nil }
+        XCTAssertNotEqual(coordinator.status, .idle)
+        XCTAssertEqual(generator.contexts.count, capturesWhenPaused)
+
+        paused = false
+        try await waitUntil { coordinator.latestExcerpt == generator.text }
+        XCTAssertEqual(notifications, 1, "The same screen read again after a pause is not navigation")
+    }
+
+    func test_ocrJitterOnTheSameScreenIsNotANavigationSignal() async throws {
+        let generator = StubVisualContextGenerator()
+        generator.text = "Inbox Arnaud Re: Deployment status 18:30 Thanks, I will finish the rollout today "
+            + "Akram Customer POC 18:28 The connector is polling again since this morning Hello Arnaud, Can"
+        let coordinator = makeCoordinator(generator)
+        let snapshot = CotabbyTestFixtures.focusedInputSnapshot()
+        coordinator.refreshContextProvider = { snapshot }
+        var notifications = 0
+        coordinator.onInjectedContextReady = { _ in notifications += 1 }
+        coordinator.startSessionIfNeeded(for: snapshot, configuration: .local)
+        defer { coordinator.cancel(resetState: true) }
+        try await waitUntil { coordinator.status == .ready }
+
+        let reread = generator.text.replacingOccurrences(of: "18:28", with: "18.28") + " |"
+        generator.text = reread
+        try await waitUntil { coordinator.latestExcerpt == reread }
+        XCTAssertEqual(notifications, 1, "A re-read of the same window must not retire the visible suggestion")
+    }
+
     private func makeCoordinator(
         _ generator: StubVisualContextGenerator,
         permission: @escaping @MainActor () -> Bool = { true }

@@ -357,11 +357,18 @@ final class SuggestionCoordinator: ObservableObject {
             let lostContext = self.latestVisualContextText != nil && excerpt == nil
             self.visualContextStatus = status
             self.latestVisualContextText = excerpt
-            // Expired or invalidated screen text must not survive indirectly in a visible tail,
-            // cached completion, or late result. New requests can use the live draft immediately.
+            // Expired or invalidated screen text must not survive in a cached completion or a late
+            // result. New requests can use the live draft immediately.
             if lostContext {
                 self.suggestionAnchorCache = SuggestionAnchorCache()
                 self.cancelPredictionWork()
+                // A suggestion already on screen for the field still in focus stays. Screen text
+                // goes away there because it aged out, a capture failed, or load paused the
+                // refresh, and none of those is navigation: a new field retires the suggestion
+                // through the focus path, and new screen text through `onInjectedContextReady`.
+                // Hiding it here made suggestions vanish a few seconds after they appeared in
+                // Outlook and Mail, and a Tab pressed in that moment went to the host instead.
+                if self.isShowingSuggestionForFocusedField { return }
                 self.clearSuggestion()
                 self.hideOverlay(reason: "Overlay hidden because screen context was invalidated.")
                 if case .disabled = self.state { return }
@@ -393,6 +400,12 @@ final class SuggestionCoordinator: ObservableObject {
         visualContextCoordinator.refreshContextProvider = { [weak self] in
             self?.currentVisualRefreshContext()
         }
+        // Load-based tuning withholds screen text while the GPU is busy and gives it back once the
+        // GPU is free. The refresh waits that out on the same field instead of reading it as the
+        // field going away, which ended the session for the rest of the draft.
+        visualContextCoordinator.refreshPausedProvider = { [weak self] in
+            self?.isVisualContextHeldBack ?? false
+        }
 
         suggestionSettings.snapshotPublisher
             .dropFirst()
@@ -405,5 +418,12 @@ final class SuggestionCoordinator: ObservableObject {
     /// Exposes the latest cancellation token for the split extension files.
     var currentWorkID: UInt64 {
         workController.currentWorkID
+    }
+
+    /// True while a suggestion is on screen for the writing session that still has focus.
+    var isShowingSuggestionForFocusedField: Bool {
+        guard overlayState.isVisible, let session = interactionState.activeSession,
+              let focused = focusModel.snapshot.context else { return false }
+        return session.baseContext.sessionIdentity == focused.sessionIdentity
     }
 }
