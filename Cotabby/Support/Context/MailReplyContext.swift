@@ -30,6 +30,77 @@ nonisolated enum MailReplyContext {
         isMail(bundleIdentifier: bundleIdentifier) ? max(defaultBudget, trailingCharacters) : defaultBudget
     }
 
+    // MARK: - The thread, as the prompt reads it
+
+    /// Text after the caret as a mail prompt should carry it: the rest of the user's own draft, then
+    /// each quoted message as "Sender: what they wrote", newest first. Raw, a quoted thread is mostly
+    /// From/To/Cc lines with every address, signatures, phone numbers and footers; measured on a real
+    /// Outlook reply, the 1500 characters held two sentences of actual message. A base model reads
+    /// all of it as the passage it continues, so the noise displaced the words that matter and drew
+    /// the completion toward boilerplate. Text with no quote header comes back unchanged.
+    static func condensedThread(_ trailingText: String) -> String {
+        guard let first = QuotedReplyParser.headerRange(in: trailingText) else { return trailingText }
+        var parts: [String] = []
+        let ownText = cleanedLines(trailingText[..<first.lowerBound])
+        if !ownText.isEmpty { parts.append(ownText) }
+        var rest = String(trailingText[first.lowerBound...])
+        while parts.count <= maximumQuotedMessages, let header = QuotedReplyParser.headerRange(in: rest) {
+            guard let message = QuotedReplyParser.quotedMessage(in: String(rest[header.lowerBound...])) else { break }
+            let body = cleanedLines(Substring(message.body))
+            if !body.isEmpty { parts.append("\(message.sender ?? "They"): \(String(body.prefix(maximumMessageCharacters)))") }
+            // Continue after this header line; the next header found is the next, older message.
+            rest = String(rest[header.upperBound...])
+        }
+        return parts.joined(separator: "\n\n")
+    }
+
+    static let maximumQuotedMessages = 4
+    static let maximumMessageCharacters = 500
+
+    /// The message's own lines, ending where its signature starts: at a closing ("Best regards",
+    /// "Saygılarımla"), or, once the message has said something, at the first short line that is not
+    /// a sentence ("ALTAY", "CO-FOUNDER, COO", "Arnaud"). Lines that are only contact details (an
+    /// address, a link, a phone number) are dropped wherever they appear.
+    private static func cleanedLines(_ text: Substring) -> String {
+        var kept: [String] = []
+        for raw in text.split(whereSeparator: \.isNewline) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            // Blank lines and rules ("________") carry nothing.
+            guard line.contains(where: \.isLetter) else { continue }
+            let bare = line.lowercased().trimmingCharacters(in: CharacterSet.punctuationCharacters.union(.whitespaces))
+            if signOffs.contains(bare) { break }
+            if isContactDetail(line) { continue }
+            if kept.contains(where: isSentence), isSignatureLine(line) { break }
+            kept.append(line)
+        }
+        return kept.joined(separator: " ")
+    }
+
+    /// A line that ends like a sentence or a salutation, or is a list item: message content.
+    private static func isSentence(_ line: String) -> Bool {
+        guard let last = line.last else { return false }
+        return ".?!:,;؟".contains(last) || ["-", "•", "*"].contains(line.first.map(String.init) ?? "")
+    }
+
+    /// A name, a title or a label: a few words that do not form a sentence.
+    private static func isSignatureLine(_ line: String) -> Bool {
+        !isSentence(line) && line.split(whereSeparator: \.isWhitespace).count <= 4
+    }
+
+    private static func isContactDetail(_ line: String) -> Bool {
+        let lower = line.lowercased()
+        if lower.contains("@") || lower.contains("http") || lower.contains("www.") || lower.contains("linkedin") { return true }
+        let digits = line.filter(\.isNumber).count
+        return digits >= 7 && Double(digits) / Double(line.count) > 0.4
+    }
+
+    /// Closings after which a message's signature starts, in the user's mail languages.
+    private static let signOffs: Set<String> = [
+        "best regards", "kind regards", "warm regards", "regards", "best", "cheers", "thanks", "thank you",
+        "many thanks", "sincerely", "yours sincerely", "met vriendelijke groet", "groeten",
+        "saygılarımla", "saygılar", "iyi çalışmalar", "teşekkürler", "sevgiler",
+    ]
+
     /// The subject of the message being replied to, from the quoted header after the caret
     /// ("Subject: Re: AFAD Use Case 3"). Nil when the field holds no Outlook-style header (a new
     /// message, or Mail's "On …, X wrote:" quote, whose compose window title already is the subject).

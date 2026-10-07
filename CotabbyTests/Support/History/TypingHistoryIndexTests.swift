@@ -26,6 +26,22 @@ final class TypingHistoryIndexTests: XCTestCase {
         XCTAssertFalse(examples.contains { $0.contains("Dinner") })
     }
 
+    /// An email is written in email's register: text typed into a terminal (an assistant session,
+    /// commands) must not be shown to the model as how the user writes mail.
+    func test_anEmailTakesOnlyEarlierEmailAsItsExamples() {
+        let index = TypingHistoryIndex(records: [
+            record("The Imperum POC lookup in Outlook found nothing for the Sentinel connector inbox.", app: "com.mitchellh.ghostty"),
+            record("Hi Arnaud, the Imperum POC with Sentinel is ready; the connector inbox is configured.")
+        ])
+
+        let examples = index.examples(for: query("Imperum POC Sentinel connector inbox"))
+
+        XCTAssertEqual(examples.count, 1)
+        XCTAssertEqual(examples.first?.hasPrefix("Hi Arnaud"), true)
+        XCTAssertFalse(TypingHistoryIndex.mayExemplify(.terminal, for: .chat))
+        XCTAssertTrue(TypingHistoryIndex.mayExemplify(.email, for: .chat))
+    }
+
     func test_weakOverlapReturnsNothing() {
         let index = TypingHistoryIndex(records: [
             record("The Imperum POC for the SOC team starts Monday. We will connect Microsoft Sentinel first.")

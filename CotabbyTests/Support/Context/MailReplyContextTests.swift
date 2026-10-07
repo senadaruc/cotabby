@@ -92,6 +92,56 @@ final class MailReplyContextTests: XCTestCase {
         XCTAssertTrue(request.prompt.hasSuffix("Dear M"))
     }
 
+    // MARK: - Condensed thread
+
+    /// From a real reply: 1500 raw characters held two sentences of message among headers,
+    /// addresses, signatures and a footer. The prompt gets who said what, and nothing else.
+    func test_aQuotedThreadIsCondensedToWhoSaidWhat() {
+        let tail = """
+
+
+        From: Altay Seyfula <altay@imperum.io>
+        Date: Wednesday, 7 October 2026 at 10:33
+        To: Berker Pekel <berker.pekel@netsmart.com.tr>
+        Cc: fatih.genc <fatih.genc@netsmart.com.tr>; Ali Pakkan <ali@imperum.io>
+        Subject: Re: Imperum Lisans Süresi
+
+        Tamamdır. Teşekkürler.\u{20}
+
+        \u{20}
+        ALTAY
+
+        CO-FOUNDER, COO
+
+         WhatsApp
+        imperum.io | LinkedIn
+
+        From: Berker Pekel <berker.pekel@netsmart.com.tr>
+        Date: Wednesday, 7 October 2026 at 08:11
+        To: Altay Seyfula <altay@imperum.io>
+        Subject: YNT: Imperum Lisans Süresi
+
+        Merhabalar,
+
+        Eğitimin temel seviyesi olması yeterli olacaktır. Akabinde oluşan soruları ayrıca konuşuruz.
+
+        Saygılarımla
+
+        Berker Pekel
+        Takım Lideri | Siber Güvenlik Çözümleri
+        +90 538 012 94 40
+        """
+        XCTAssertEqual(
+            MailReplyContext.condensedThread(tail),
+            "Altay Seyfula: Tamamdır. Teşekkürler.\n\n"
+                + "Berker Pekel: Merhabalar, Eğitimin temel seviyesi olması yeterli olacaktır. Akabinde oluşan soruları ayrıca konuşuruz."
+        )
+    }
+
+    func test_textWithoutAQuoteIsLeftAsItIs() {
+        XCTAssertEqual(MailReplyContext.condensedThread("the rest of my paragraph"), "the rest of my paragraph")
+    }
+
     // MARK: - Screen text
 
     func test_mailScreenTextKeepsTheComposeColumnAndDropsTheMessageList() {
