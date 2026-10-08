@@ -1,4 +1,5 @@
 import Foundation
+import Logging
 
 /// File overview:
 /// Finds the latest message the user received in the conversation whose reply field is focused.
@@ -65,7 +66,10 @@ final class IncomingMessageResolver {
             }
             return IncomingMessage(text: quoted.body, sender: quoted.sender, conversation: conversation, recordIDs: [])
         }
-        guard let scope, let engine = engine() else { return nil }
+        guard let scope, let engine = engine() else {
+            Self.trace("no_scope", ["title": context.featureScopeWindowTitle ?? ""])
+            return nil
+        }
         for source in scope.sources where Self.chatSources.contains(source) {
             if Date().timeIntervalSince(lastSync[source] ?? .distantPast) > Self.syncInterval {
                 lastSync[source] = Date()
@@ -73,11 +77,25 @@ final class IncomingMessageResolver {
             }
         }
         let found = engine.findConversations(title: scope.title, sources: scope.sources)
-        guard found.count == 1, let conversation = found.first else { return nil }
+        guard found.count == 1, let conversation = found.first else {
+            Self.trace("title_matches", ["title": scope.title, "matches": "\(found.count)", "sources": scope.sources.joined(separator: ",")])
+            return nil
+        }
         let latest = await Task.detached(priority: .userInitiated) {
             engine.latestMessages(source: conversation.source, conversationID: conversation.conversationId, limit: Self.maximumIncomingRun + 1)
         }.value
-        return Self.incomingRun(latest, conversation: conversation)
+        let run = Self.incomingRun(latest, conversation: conversation)
+        if run == nil {
+            Self.trace("newest_is_own", ["messages": "\(latest.count)", "newest_from_me": "\(latest.first?.isFromMe ?? false)"])
+        }
+        return run
+    }
+
+    /// Why no incoming message was found, at debug level: titles name private conversations.
+    private nonisolated static func trace(_ reason: String, _ fields: [String: String]) {
+        var metadata: Logger.Metadata = ["category": "answers", "lookup": .string(reason)]
+        for (key, value) in fields { metadata[key] = .string(value) }
+        CotabbyLogger.app.debug("Answer incoming lookup", metadata: metadata)
     }
 
     /// The incoming messages at the end of a conversation (newest first in `latest`), or nil when
