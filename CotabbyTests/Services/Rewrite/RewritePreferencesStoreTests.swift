@@ -54,8 +54,8 @@ final class RewritePreferencesStoreTests: XCTestCase {
     }
 
     func test_actionsAndTonesInPopupOrder() {
-        XCTAssertEqual(RewriteAction.actions.map(\.label), ["Fix only", "Rewrite", "Shorter", "Longer"])
         XCTAssertEqual(RewriteAction.tones.map(\.label), ["Family", "Friendly", "Close friend", "Formal", "Customer"])
+        XCTAssertEqual(RewriteAction.refinements.map(\.label), ["Shorter", "Longer"])
         XCTAssertEqual(RewriteAction.custom("make it warmer").label, "Custom")
     }
 

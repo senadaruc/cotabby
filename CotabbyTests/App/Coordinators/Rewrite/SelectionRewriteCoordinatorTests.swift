@@ -158,6 +158,28 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         XCTAssertEqual(runner.requests.first?.fixesMistakes, false)
     }
 
+    /// After a tone, Shorter refines the preview itself, keeping the tone; Replace still replaces
+    /// the original selection.
+    func test_shorterRefinesThePreviewAndKeepsTheTone() async {
+        let (_, presenter, output, runner, _) = make()
+        await send(snapshot(selected: draft))
+        presenter.buttonPress?()
+        presenter.popupModel?.onAction(.family)
+        try? await Task.sleep(nanoseconds: 30_000_000)
+        let first = runner.result
+        runner.result = "Do the dates work for you?"
+        presenter.popupModel?.onRefine(.shorter)
+        try? await Task.sleep(nanoseconds: 30_000_000)
+        XCTAssertEqual(runner.requests.count, 2)
+        XCTAssertEqual(runner.requests.last?.selection, first)
+        XCTAssertEqual(runner.requests.last?.action, .shorter)
+        XCTAssertEqual(runner.requests.last?.tone, .family)
+        XCTAssertEqual(presenter.popupModel?.phase, .preview(text: "Do the dates work for you?", unsupported: []))
+        presenter.popupModel?.onReplace()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(output.pasted, ["Do the dates work for you?"])
+    }
+
     func test_buttonOffShowsNothingUntilShortcut() async {
         var prefs = RewritePreferences.defaults
         prefs.showsButtonOnSelection = false

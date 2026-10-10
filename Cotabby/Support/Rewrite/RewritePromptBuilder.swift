@@ -49,6 +49,9 @@ nonisolated enum RewritePromptBuilder {
             "You rewrite the user's own draft text.",
             actionLine(request.action)
         ]
+        if let tone = request.tone, let description = toneDescription(tone) {
+            rules.append("Keep the same tone: \(description).")
+        }
         if let fixLine = fixLine(request) { rules.append(fixLine) }
         rules += [
             languageRule(request) + " Keep its meaning, names and numbers.",
@@ -72,6 +75,19 @@ nonisolated enum RewritePromptBuilder {
         }
         user += "Draft:\n\(request.selection)"
         return InstructPrompt(system: rules.joined(separator: "\n"), user: user)
+    }
+
+    /// How a tone reads, for a refinement that must keep it ("Keep the same tone: …").
+    static func toneDescription(_ tone: RewriteAction) -> String? {
+        switch tone {
+        case .family: return "warm and caring, for a family member"
+        case .friendly: return "warm and friendly"
+        case .closeFriend: return "relaxed and casual, like a text to a close friend, with everyday slang where it fits"
+        case .formal: return "formal and professional"
+        case .customer: return "polite, clear, helpful and professional, for a customer"
+        case .custom(let instruction): return "as the instruction \"\(instruction)\" asked"
+        default: return nil
+        }
     }
 
     /// The tick box's line for every action that has a choice: Fix only always fixes, and a custom

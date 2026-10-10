@@ -12,10 +12,11 @@ nonisolated enum RewriteAction: Equatable, Hashable, Sendable {
     case family, friendly, closeFriend, formal, customer
     case custom(String)
 
-    /// The first button row, in popup order: what to do with the text.
-    static let actions: [RewriteAction] = [.fixOnly, .rewrite, .shorter, .longer]
-    /// The second row: who the text is for. `custom` comes from the instruction box instead.
+    /// The popup's buttons: who the text is for. `custom` comes from the instruction box instead.
+    /// Typo fixing is the tick box, not a button.
     static let tones: [RewriteAction] = [.family, .friendly, .closeFriend, .formal, .customer]
+    /// Offered on the preview once a tone was chosen: they reshape that result, keeping its tone.
+    static let refinements: [RewriteAction] = [.shorter, .longer]
 
     var label: String {
         switch self {
@@ -99,6 +100,9 @@ nonisolated struct RewriteRequest: Equatable, Sendable {
     var language: String? = nil
     /// The "Fix spelling & grammar" tick box at the time of the rewrite.
     var fixesMistakes: Bool = true
+    /// Set when Shorter or Longer refines an earlier result: the tone (or custom instruction) that
+    /// produced it, which the refinement keeps. `selection` is then that result, not the user's text.
+    var tone: RewriteAction? = nil
 }
 
 nonisolated enum RewriteError: LocalizedError, Equatable {

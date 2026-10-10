@@ -129,9 +129,18 @@ final class RewritePromptBuilderTests: XCTestCase {
     }
 
     func test_everyActionHasABaseExample() {
-        for action in RewriteAction.actions + RewriteAction.tones {
+        for action in RewriteAction.tones + RewriteAction.refinements {
             let prompt = RewritePromptBuilder.basePrompt(RewriteRequest(selection: "x y", action: action, memory: .empty))
             XCTAssertTrue(prompt.contains("Rewritten: "), "\(action.label) has an example pair")
         }
+    }
+
+    /// Shorter and Longer refine the preview the user is looking at and keep the tone they chose.
+    func test_refinementKeepsTheChosenTone() {
+        var request = RewriteRequest(selection: "Are you coming on Sunday? It would be so lovely to see you!", action: .shorter, memory: .empty)
+        request.tone = .family
+        let system = RewritePromptBuilder.instructPrompt(request).system
+        XCTAssertTrue(system.contains(RewritePromptBuilder.actionLine(.shorter)))
+        XCTAssertTrue(system.contains("Keep the same tone: warm and caring, for a family member."))
     }
 }

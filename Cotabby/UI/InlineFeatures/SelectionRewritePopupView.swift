@@ -39,6 +39,8 @@ final class SelectionRewritePopupModel: ObservableObject {
     var onReplace: () -> Void = {}
     var onCopy: () -> Void = {}
     var onRetry: () -> Void = {}
+    /// Shorter / Longer on the preview: reshape the result on screen, keeping its tone.
+    var onRefine: (RewriteAction) -> Void = { _ in }
     var onClose: () -> Void = {}
 }
 
@@ -79,12 +81,7 @@ struct SelectionRewritePopupView: View {
 
     private var actions: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // What to do with the text, then who it is for.
-            WrapLayout(spacing: 6) {
-                ForEach(RewriteAction.actions, id: \.self) { action in
-                    Button(action.label) { model.onAction(action) }.buttonStyle(.bordered)
-                }
-            }
+            // Who the text is for; typo fixing is the tick box below.
             WrapLayout(spacing: 6) {
                 ForEach(RewriteAction.tones, id: \.self) { action in
                     Button(action.label) { model.onAction(action) }.buttonStyle(.bordered)
@@ -134,6 +131,10 @@ struct SelectionRewritePopupView: View {
                 Button("Copy") { model.onCopy() }
                 Button("Retry") { model.onRetry() }
                 Spacer()
+                // Reshape this result, keeping the tone that produced it.
+                ForEach(RewriteAction.refinements, id: \.self) { length in
+                    Button(length.label) { model.onRefine(length) }
+                }
             }
         }
     }

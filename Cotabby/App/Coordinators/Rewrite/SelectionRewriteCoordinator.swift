@@ -45,7 +45,9 @@ final class SelectionRewriteCoordinator {
     private var stableTask: Task<Void, Never>?
     private var rewriteTask: Task<Void, Never>?
     private var model: SelectionRewritePopupModel?
-    private var lastAction: RewriteAction?
+    /// What the last run did, for Retry: the action, the text it reshaped (nil: the user's selection),
+    /// and the tone a refinement keeps.
+    private var lastRun: (action: RewriteAction, draft: String?, tone: RewriteAction?)?
     /// Identifies the newest rewrite run. A superseded run (Retry, or another action) can still throw
     /// or resolve after its replacement started, so every write after an `await` compares its own
     /// id with this before touching the popup. `close()` bumps it too, so closing cancels in-flight runs.
@@ -196,7 +198,11 @@ final class SelectionRewriteCoordinator {
             model.disclosure = self.disclosure(usesMemory: usesMemory)
         }
         model.onAction = { [weak self] in self?.run($0) }
-        model.onRetry = { [weak self] in if let action = self?.lastAction { self?.run(action) } }
+        model.onRetry = { [weak self] in
+            guard let self, let last = self.lastRun else { return }
+            self.run(last.action, draft: last.draft, tone: last.tone)
+        }
+        model.onRefine = { [weak self] length in self?.refine(length) }
         model.onReplace = { [weak self] in self?.replace() }
         model.onCopy = { [weak self] in self?.copyPreview() }
         model.onClose = { [weak self] in self?.dismiss() }
@@ -232,9 +238,19 @@ final class SelectionRewriteCoordinator {
             : "The selected text is sent to \(host)."
     }
 
-    private func run(_ action: RewriteAction) {
+    /// Shorter or Longer on the preview: reshapes the text on screen and keeps the tone (or custom
+    /// instruction) that produced it. Replace still targets the user's original selection.
+    private func refine(_ length: RewriteAction) {
+        guard let model, case .preview(let text, _) = model.phase, let last = lastRun else { return }
+        run(length, draft: text, tone: last.tone ?? last.action)
+    }
+
+    /// Runs one rewrite. `draft` is the text to reshape (the user's selection when nil); `tone` is the
+    /// tone a refinement keeps.
+    private func run(_ action: RewriteAction, draft: String? = nil, tone: RewriteAction? = nil) {
         guard let input = targetInput, let model else { return }
-        lastAction = action
+        lastRun = (action, draft, tone)
+        let source = draft ?? input.selectedText
         rewriteTask?.cancel()
         // A new run id supersedes any run still in flight for this popup (Retry reuses the same model,
         // so the model check alone cannot tell the two apart).
@@ -252,7 +268,7 @@ final class SelectionRewriteCoordinator {
             guard let self else { return }
             var context = RewriteMemoryContext.empty
             if wantsMemory {
-                let found = await self.memory.gather(for: input, selection: input.selectedText)
+                let found = await self.memory.gather(for: input, selection: source)
                 guard isCurrent() else { return }
                 if let found {
                     context = found
@@ -262,7 +278,8 @@ final class SelectionRewriteCoordinator {
             }
             guard isCurrent() else { return }
             do {
-                var request = RewriteRequest(selection: input.selectedText, action: action, memory: context)
+                var request = RewriteRequest(selection: source, action: action, memory: context)
+                request.tone = tone
                 // Named in the prompt: Apple's model otherwise answered a Turkish draft in English.
                 request.language = RewriteLanguageDetector.language(of: input.selectedText, among: self.writingLanguages())
                 request.fixesMistakes = model.fixesMistakes
@@ -275,7 +292,9 @@ final class SelectionRewriteCoordinator {
                 )
                 guard isCurrent() else { return }
                 let facts = context.facts.map(\.text)
-                let unsupported = AnswerGroundingPolicy.unsupportedSpecifics(in: text, facts: facts, question: input.selectedText)
+                // A refinement may keep what the earlier result said, so both texts count as the user's.
+                let ownText = draft.map { input.selectedText + "\n" + $0 } ?? input.selectedText
+                let unsupported = AnswerGroundingPolicy.unsupportedSpecifics(in: text, facts: facts, question: ownText)
                 model.phase = .preview(text: text, unsupported: unsupported)
             } catch is CancellationError {
                 return
@@ -428,7 +447,7 @@ final class SelectionRewriteCoordinator {
         disclosureCancellable = nil
         fixesMistakesCancellable = nil
         model = nil
-        lastAction = nil
+        lastRun = nil
         keyTap?.remove()
         presenter.hideAll()
         dismissedTarget = target
@@ -449,7 +468,7 @@ final class SelectionRewriteCoordinator {
         target = nil
         targetInput = nil
         dismissedTarget = nil
-        lastAction = nil
+        lastRun = nil
         keyTap?.remove()
         hotkey?.remove()
         presenter.hideAll()
