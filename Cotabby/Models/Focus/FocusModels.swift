@@ -363,8 +363,9 @@ nonisolated struct FocusedInputSnapshot: Equatable {
     /// The text the user has selected, cut from the same bounded window as `precedingText` and
     /// `trailingText`; empty when the selection is a caret. Selection rewrite reads it.
     let selectedText: String
-    /// The selection in the host's full value (not the bounded window), for restoring it through
-    /// `kAXSelectedTextRangeAttribute`; nil when the host's range is not known.
+    /// The selection in the host's full value, for restoring it through `kAXSelectedTextRangeAttribute`;
+    /// nil when the host only exposes window-relative text markers (Chromium contenteditables), where
+    /// the rewrite then copies instead of restoring.
     let hostSelection: NSRange?
 
     /// True when the resolved field is an xterm.js integrated-terminal surface (VS Code / Cursor /
