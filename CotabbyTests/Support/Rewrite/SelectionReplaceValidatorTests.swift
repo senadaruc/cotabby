@@ -41,4 +41,16 @@ final class SelectionReplaceValidatorTests: XCTestCase {
             return XCTFail("No field must never receive the rewrite")
         }
     }
+
+    func test_sameTextAtAnotherPlaceCopiesInstead() {
+        let target = SelectionRewriteTarget(snapshot: field(selected: draft))
+        let elsewhere = CotabbyTestFixtures.focusedInputSnapshot(
+            bundleIdentifier: "net.whatsapp.WhatsApp", elementIdentifier: "composer", precedingText: "Dear Richard, ",
+            selection: NSRange(location: 60, length: (draft as NSString).length),
+            selectedText: draft, hostSelection: NSRange(location: 60, length: (draft as NSString).length)
+        )
+        guard case .copyInstead = SelectionReplaceValidator.outcome(target: target, current: elsewhere) else {
+            return XCTFail("The same text at another place must never be replaced")
+        }
+    }
 }
