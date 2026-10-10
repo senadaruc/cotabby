@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		644084A9B703D28F77D5D3F2 /* SelectionRewriteCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEA4D4B77157748EA642FB2A /* SelectionRewriteCoordinator.swift */; };
+		B6A6512500446DB6F13F322E /* SelectionRewriteCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEA4D4B77157748EA642FB2A /* SelectionRewriteCoordinator.swift */; };
+		A1DBF9D7DFA2D83BFD36C7F7 /* SelectionRewriteCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1333FB87F6AE6F4DD515098E /* SelectionRewriteCoordinatorTests.swift */; };
 		B870E28350C3F6614AD2A235 /* SelectionRewritePopupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 632410BB2730124D3AFE88A4 /* SelectionRewritePopupView.swift */; };
 		90F04165C104F48BDE74BFAD /* SelectionRewritePopupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 632410BB2730124D3AFE88A4 /* SelectionRewritePopupView.swift */; };
 		FCD39FF93F5984FACE362E05 /* SelectionRewritePanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F07BC2E1C2C3BA946E9990A /* SelectionRewritePanelController.swift */; };
@@ -1328,6 +1331,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		CEA4D4B77157748EA642FB2A /* SelectionRewriteCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionRewriteCoordinator.swift; sourceTree = "<group>"; };
+		1333FB87F6AE6F4DD515098E /* SelectionRewriteCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionRewriteCoordinatorTests.swift; sourceTree = "<group>"; };
 		632410BB2730124D3AFE88A4 /* SelectionRewritePopupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionRewritePopupView.swift; sourceTree = "<group>"; };
 		3F07BC2E1C2C3BA946E9990A /* SelectionRewritePanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionRewritePanelController.swift; sourceTree = "<group>"; };
 		C3477BFA73C27DE659EE6336 /* RewriteMemoryGatherer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewriteMemoryGatherer.swift; sourceTree = "<group>"; };
@@ -2172,6 +2177,22 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		5173AE312E28E91FC956EF65 /* Rewrite */ = {
+			isa = PBXGroup;
+			children = (
+				CEA4D4B77157748EA642FB2A /* SelectionRewriteCoordinator.swift */,
+			);
+			path = Rewrite;
+			sourceTree = "<group>";
+		};
+		D2A1ADA93EE2B8FE321A65EC /* Rewrite */ = {
+			isa = PBXGroup;
+			children = (
+				1333FB87F6AE6F4DD515098E /* SelectionRewriteCoordinatorTests.swift */,
+			);
+			path = Rewrite;
+			sourceTree = "<group>";
+		};
 		CF6BC5FF5DA1D5ACB0F3511F /* Rewrite */ = {
 			isa = PBXGroup;
 			children = (
@@ -3266,6 +3287,7 @@
 				D635A9BB8F3370AC767BBF23 /* Translation */,
 				3350EDE01ED5125520C79D53 /* SettingsCoordinator.swift */,
 				21CB3008986BE7FD2A4D9132 /* WelcomeCoordinator.swift */,
+				5173AE312E28E91FC956EF65 /* Rewrite */,
 			);
 			path = Coordinators;
 			sourceTree = "<group>";
@@ -3850,6 +3872,7 @@
 				CFC9576AE4A5A5734FE9BDB5 /* InlineFeatures */,
 				0E53B1ACAE79887CD16D6D44 /* Suggestion */,
 				0290613F0AB3E4BF07F1DBD9 /* Translation */,
+				D2A1ADA93EE2B8FE321A65EC /* Rewrite */,
 			);
 			path = Coordinators;
 			sourceTree = "<group>";
@@ -4925,6 +4948,7 @@
 				AF951C606C924327F463010F /* AnswerCardView.swift in Sources */,
 				B870E28350C3F6614AD2A235 /* SelectionRewritePopupView.swift in Sources */,
 				31C32EACD8D491295C3A9B7D /* AnswerCoordinator.swift in Sources */,
+				B6A6512500446DB6F13F322E /* SelectionRewriteCoordinator.swift in Sources */,
 				17F4D22EF6C54706197A8585 /* AnswerDraftEngine.swift in Sources */,
 				B7BD82D5CFDD0DD0043C7AE0 /* AnswerPromptRenderer.swift in Sources */,
 				9EB8E3DC796A0C8BFDE8E683 /* AppDelegate.swift in Sources */,
@@ -5386,6 +5410,7 @@
 				890C586336FE3B7D5765BBE7 /* AnswerCardView.swift in Sources */,
 				90F04165C104F48BDE74BFAD /* SelectionRewritePopupView.swift in Sources */,
 				D7A6DBAC9CEE69DA7A86AEB0 /* AnswerCoordinator.swift in Sources */,
+				644084A9B703D28F77D5D3F2 /* SelectionRewriteCoordinator.swift in Sources */,
 				6FE39CA30AD9A5ED657B4C58 /* AnswerDraftEngine.swift in Sources */,
 				A454C137324ADE4B4B7DBE2C /* AnswerPromptRenderer.swift in Sources */,
 				0A3443AEE6540F11E5E6BF8F /* AppDelegate.swift in Sources */,
@@ -5975,6 +6000,7 @@
 				67C36958132793C76843F875 /* LlamaTypingSessionEvalTests.swift in Sources */,
 				C4ED7301D4DC86DC558B0C04 /* LowPowerModeMonitorTests.swift in Sources */,
 				332F2AE6277FB6E871589E4D /* MacroControllerTests.swift in Sources */,
+				A1DBF9D7DFA2D83BFD36C7F7 /* SelectionRewriteCoordinatorTests.swift in Sources */,
 				AB8F186A7CB13779DAF729A0 /* MacroEngineTests.swift in Sources */,
 				8756E3050C45106D7AD188AA /* MacroTriggerStateMachineTests.swift in Sources */,
 				0C89AF5CF2114DF57DA794CF /* MailHeaderFieldDetectorTests.swift in Sources */,
