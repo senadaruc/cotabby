@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AF744843163CD2CF4B560545 /* SelectionReplaceValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 259F19FA6D4639D591998BDB /* SelectionReplaceValidator.swift */; };
+		902742D3C1CFD586F7FEA9E5 /* SelectionReplaceValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 259F19FA6D4639D591998BDB /* SelectionReplaceValidator.swift */; };
+		B42EE94B81D25B1AF13C99D3 /* SelectionReplaceValidatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EB25254EDDF55EE07CAC23C /* SelectionReplaceValidatorTests.swift */; };
 		F2E3DFAD78D542F5BB69094D /* RewriteOutputCleaner.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA40937010EA6C7C085ECF01 /* RewriteOutputCleaner.swift */; };
 		C268958529FDC59A96D2E811 /* RewriteOutputCleaner.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA40937010EA6C7C085ECF01 /* RewriteOutputCleaner.swift */; };
 		3B14CD0CF1C37E22FF12D0A5 /* RewriteOutputCleanerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28E9DF9410BEE519A78268DC /* RewriteOutputCleanerTests.swift */; };
@@ -1310,6 +1313,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		259F19FA6D4639D591998BDB /* SelectionReplaceValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionReplaceValidator.swift; sourceTree = "<group>"; };
+		7EB25254EDDF55EE07CAC23C /* SelectionReplaceValidatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionReplaceValidatorTests.swift; sourceTree = "<group>"; };
 		DA40937010EA6C7C085ECF01 /* RewriteOutputCleaner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewriteOutputCleaner.swift; sourceTree = "<group>"; };
 		28E9DF9410BEE519A78268DC /* RewriteOutputCleanerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewriteOutputCleanerTests.swift; sourceTree = "<group>"; };
 		EDC768D69A3167FBEB3D41DB /* RewritePromptBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewritePromptBuilder.swift; sourceTree = "<group>"; };
@@ -2149,6 +2154,7 @@
 				F6F889579E9AA3C1204EA2BD /* SelectionRewriteEligibility.swift */,
 				EDC768D69A3167FBEB3D41DB /* RewritePromptBuilder.swift */,
 				DA40937010EA6C7C085ECF01 /* RewriteOutputCleaner.swift */,
+				259F19FA6D4639D591998BDB /* SelectionReplaceValidator.swift */,
 			);
 			path = Rewrite;
 			sourceTree = "<group>";
@@ -2159,6 +2165,7 @@
 				4CE6F2C41625F8F1997C863C /* SelectionRewriteEligibilityTests.swift */,
 				7F0CB4C2AE63A8B39BFB6F14 /* RewritePromptBuilderTests.swift */,
 				28E9DF9410BEE519A78268DC /* RewriteOutputCleanerTests.swift */,
+				7EB25254EDDF55EE07CAC23C /* SelectionReplaceValidatorTests.swift */,
 			);
 			path = Rewrite;
 			sourceTree = "<group>";
@@ -5293,6 +5300,7 @@
 				BDF13BDA6D30BB8FF755AC32 /* TypingPredictionCandidate.swift in Sources */,
 				C0468063222C5FEA7C1CFAB3 /* TypoCaseTransfer.swift in Sources */,
 				A88F3C7039E8DDB71C5D6246 /* TypoGate.swift in Sources */,
+				AF744843163CD2CF4B560545 /* SelectionReplaceValidator.swift in Sources */,
 				F2E3DFAD78D542F5BB69094D /* RewriteOutputCleaner.swift in Sources */,
 				DC441401543BA518202B18A6 /* RewritePromptBuilder.swift in Sources */,
 				87982AB40E445289A6D5E98A /* SelectionRewriteEligibility.swift in Sources */,
@@ -5747,6 +5755,7 @@
 				733A13BF72DCBBDC37952DD9 /* TypingPredictionCandidate.swift in Sources */,
 				CF391BC4A3C80C41048D64D1 /* TypoCaseTransfer.swift in Sources */,
 				48A2F371756723299597F5A1 /* TypoGate.swift in Sources */,
+				902742D3C1CFD586F7FEA9E5 /* SelectionReplaceValidator.swift in Sources */,
 				C268958529FDC59A96D2E811 /* RewriteOutputCleaner.swift in Sources */,
 				3E9FE0EB1BC9158CFFD7EA2E /* RewritePromptBuilder.swift in Sources */,
 				119CB25AF9BE21CB70706E05 /* SelectionRewriteEligibility.swift in Sources */,
@@ -6079,6 +6088,7 @@
 				5C67947575E96AABF06B1AC9 /* TypingSessionEvalScoringTests.swift in Sources */,
 				F25F1800B79BF85AF07048C3 /* TypoCaseTransferTests.swift in Sources */,
 				C3F63C89E82ED82DF24BD603 /* TypoGateTests.swift in Sources */,
+				B42EE94B81D25B1AF13C99D3 /* SelectionReplaceValidatorTests.swift in Sources */,
 				3B14CD0CF1C37E22FF12D0A5 /* RewriteOutputCleanerTests.swift in Sources */,
 				73A6C7C339DCCFBA3BA47799 /* RewritePromptBuilderTests.swift in Sources */,
 				A00B95B9449E2C9F6A46C492 /* SelectionRewriteEligibilityTests.swift in Sources */,
