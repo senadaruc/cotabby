@@ -46,15 +46,21 @@ final class RewriteMemoryGatherer {
 
     private let search: RewriteMemorySearching
     private let sourcesByBundle: @MainActor () -> [String: [String]]
+    /// The field icon's per-window memory switch; off means no memory for this rewrite.
+    private let isAllowed: @MainActor (FocusedInputSnapshot) -> Bool
 
-    init(search: RewriteMemorySearching, sourcesByBundle: @escaping @MainActor () -> [String: [String]]) {
+    init(search: RewriteMemorySearching,
+         sourcesByBundle: @escaping @MainActor () -> [String: [String]],
+         isAllowed: @escaping @MainActor (FocusedInputSnapshot) -> Bool = { _ in true }) {
         self.search = search
         self.sourcesByBundle = sourcesByBundle
+        self.isAllowed = isAllowed
     }
 
     nonisolated deinit {}
 
     func gather(for input: FocusedInputSnapshot, selection: String) async -> RewriteMemoryContext? {
+        guard isAllowed(input) else { return nil }
         let map = sourcesByBundle()
         if let own = ConversationScopeResolver.scope(
             bundleIdentifier: input.bundleIdentifier, conversationTitle: input.featureScopeWindowTitle,

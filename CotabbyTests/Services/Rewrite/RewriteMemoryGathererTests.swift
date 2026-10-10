@@ -67,6 +67,20 @@ final class RewriteMemoryGathererTests: XCTestCase {
         XCTAssertFalse(search.scopes.contains { $0.global })
     }
 
+    func test_windowMemorySwitchOffGivesNoMemory() async {
+        let search = StubSearch()
+        search.resultsBySources[["whatsapp"]] = MemorySearchResult(scope: "conversation", conversation: conversation, elapsedMs: 1,
+                                                                   hits: [hit("fact")])
+        let gatherer = RewriteMemoryGatherer(search: search,
+                                             sourcesByBundle: { ["net.whatsapp.WhatsApp": ["whatsapp"]] },
+                                             isAllowed: { _ in false })
+        Self.retained.append(gatherer)
+
+        let memory = await gatherer.gather(for: input(), selection: "dinner 27th or 28th")
+        XCTAssertNil(memory)
+        XCTAssertTrue(search.scopes.isEmpty)
+    }
+
     func test_nothingFoundIsNil() async {
         let search = StubSearch()
         let gatherer = RewriteMemoryGatherer(search: search, sourcesByBundle: { ["net.whatsapp.WhatsApp": ["whatsapp"]] })

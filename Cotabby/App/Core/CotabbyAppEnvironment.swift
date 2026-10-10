@@ -56,6 +56,11 @@ final class CotabbyAppEnvironment {
     let translationCoordinator: TranslationCoordinator
     /// Drafts answers to questions from memory and offers them on a card in empty replies.
     let answerCoordinator: AnswerCoordinator
+    /// Selection rewrite: the popup flow plus the preferences and Keychain credential the Settings
+    /// pane edits. The same instances are shared with the engine, so a saved change applies at once.
+    let rewritePreferences: RewritePreferencesStore
+    let rewriteCredentials: KeychainOpenAICompatibleCredentialStore
+    let selectionRewriteCoordinator: SelectionRewriteCoordinator
     let settingsCoordinator: SettingsCoordinator
     let activationIndicatorController: ActivationIndicatorController
     /// Per-window Autocomplete/Translate choices made from the field icon.
@@ -363,9 +368,52 @@ final class CotabbyAppEnvironment {
         )
 
 
-        // Task 13 wires the rewrite stores through the environment and passes the local provider's real value.
+        // Selection rewrite: its own preferences and Keychain item, a local and an API provider, and
+        // memory gathered from the conversation in focus. Shares the inserter and llama runtime.
+        // Built once here: the same store and credential instances feed the Settings pane and the engine.
         let rewritePreferences = RewritePreferencesStore()
         let rewriteCredentials = KeychainOpenAICompatibleCredentialStore(serviceSuffix: "rewrite-endpoint")
+        let localRewrite = LocalRewriteProvider(
+            runtimeManager: runtimeManager,
+            hasLocalModel: { [weak runtimeModel] in runtimeModel?.selectedModelFilename != nil },
+            availability: foundationModelAvailabilityService
+        )
+        let rewriteEngine = RewriteEngine(
+            local: localRewrite,
+            api: APIRewriteProvider(client: openAICompatibleClient, preferences: { [weak rewritePreferences] in
+                rewritePreferences?.preferences ?? .defaults
+            }, credentials: rewriteCredentials),
+            preferences: { [weak rewritePreferences] in rewritePreferences?.preferences ?? .defaults }
+        )
+        let selectionRewriteCoordinator = SelectionRewriteCoordinator(
+            snapshots: focusModel.$snapshot.eraseToAnyPublisher(),
+            currentSnapshot: { [weak focusModel] in focusModel?.snapshot ?? .inactive },
+            refreshFocus: { [weak focusModel] in focusModel?.refreshNow() },
+            presenter: SelectionRewritePanelController(),
+            output: LiveSelectionRewriteTextOutput(inserter: suggestionInserter),
+            engine: rewriteEngine,
+            memory: RewriteMemoryGatherer(
+                search: MemoryEngineRewriteSearch(engine: { [weak memoryController] in memoryController?.engine }),
+                sourcesByBundle: { [weak memoryRetriever] in memoryRetriever?.sourcesByBundle ?? [:] },
+                // The field icon's per-window memory switch; off means no memory for this rewrite.
+                isAllowed: { [weak memoryRetriever] input in
+                    let key = WindowFeatureScope.windowKey(
+                        bundleIdentifier: input.bundleIdentifier, windowTitle: input.featureScopeWindowTitle
+                    )
+                    return memoryRetriever?.windowMemoryOverride(key) != false
+                }
+            ),
+            preferences: { [weak rewritePreferences] in rewritePreferences?.preferences ?? .defaults },
+            isAppAllowed: { [weak suggestionSettings, weak lowPowerModeMonitor] bundleIdentifier in
+                guard let suggestionSettings else { return false }
+                let settings = suggestionSettings.snapshot
+                let lowPower = (lowPowerModeMonitor?.isLowPowerModeEnabled ?? false) && settings.isLowPowerModeAutoDisableEnabled
+                return settings.isGloballyEnabled && !settings.isTemporarilyPaused && !lowPower
+                    && !settings.disabledAppBundleIdentifiers.contains(bundleIdentifier)
+            },
+            hotkey: TranslationHotkeyTap(suppressionController: suppressionController),
+            keyTap: TemporaryKeyTap(suppressionController: suppressionController)
+        )
         let settingsCoordinator = SettingsCoordinator(
             appUpdateManager: appUpdateManager,
             permissionManager: permissionManager,
@@ -392,8 +440,7 @@ final class CotabbyAppEnvironment {
             translationService: translationService,
             rewritePreferences: rewritePreferences,
             rewriteCredentials: rewriteCredentials,
-            // Task 13 passes the local provider's real value.
-            rewriteUsesAppleIntelligence: false
+            rewriteUsesAppleIntelligence: localRewrite.usesAppleIntelligence
         )
 
         let interactionState = SuggestionInteractionState()
@@ -549,6 +596,9 @@ final class CotabbyAppEnvironment {
         self.translationPreferences = translationPreferences
         self.translationCoordinator = translationCoordinator
         self.answerCoordinator = answerCoordinator
+        self.rewritePreferences = rewritePreferences
+        self.rewriteCredentials = rewriteCredentials
+        self.selectionRewriteCoordinator = selectionRewriteCoordinator
         self.settingsCoordinator = settingsCoordinator
         self.activationIndicatorController = activationIndicatorController
         self.windowFeatureOverrides = windowFeatureOverrides

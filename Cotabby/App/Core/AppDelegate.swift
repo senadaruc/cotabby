@@ -180,6 +180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         inlineCommandCoordinator.start()
         environment.translationCoordinator.start()
         environment.answerCoordinator.start()
+        environment.selectionRewriteCoordinator.start()
         // Brings the memory service up only if the user switched Memory on; a no-op otherwise.
         environment.memoryController.startIfEnabled()
         welcomeCoordinator.presentIfNeeded()
@@ -271,6 +272,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         inlineCommandCoordinator.stop()
         environment.translationCoordinator.stop()
         environment.answerCoordinator.stop()
+        environment.selectionRewriteCoordinator.stop()
         inputMonitor.stop()
         focusModel.stop()
 
