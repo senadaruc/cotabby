@@ -58,6 +58,9 @@ struct SelectionRewritePopupView: View {
             // The disclosure stays on screen in every phase: while the text is generating and in the
             // preview too, since the selected text is sent off-device whichever phase is showing.
             if let disclosure = model.disclosure { Text(disclosure).font(.caption).foregroundStyle(.orange) }
+            // The memory note (why memory is off, or what it found) follows the phase too, so a
+            // rewrite that found nothing still says so in the preview.
+            if let note = model.memoryNote { Text(note).font(.caption).foregroundStyle(.secondary) }
         }
         .padding(12)
         .frame(width: 360, alignment: .leading)
@@ -84,7 +87,6 @@ struct SelectionRewritePopupView: View {
                 Button("Go") { submitCustom() }.disabled(model.customInstruction.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             Toggle("Use memory", isOn: $model.usesMemory).disabled(!model.memoryToggleEnabled)
-            if let note = model.memoryNote { Text(note).font(.caption).foregroundStyle(.secondary) }
         }
     }
 

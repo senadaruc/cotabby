@@ -58,6 +58,7 @@ final class SelectionRewriteCoordinator {
     private var dismissedTarget: SelectionRewriteTarget?
 
     static let escapeKeyCode: CGKeyCode = 53
+    static let returnKeyCode: CGKeyCode = 36
 
     init(
         snapshots: AnyPublisher<FocusSnapshot, Never>,
@@ -189,9 +190,20 @@ final class SelectionRewriteCoordinator {
         self.model = model
         presenter.showPopup(near: input.caretRect, model: model, takesKeyboard: true)
         keyTap?.install { [weak self] keyCode, _ in
-            guard keyCode == Self.escapeKeyCode else { return .pass }
-            DispatchQueue.main.async { self?.dismiss() }
-            return .consume
+            // The tap's decision runs on the main actor, so the popup state can be read here. Work the
+            // decision triggers goes to the next main-queue turn, as the tap's rules require.
+            if keyCode == Self.escapeKeyCode {
+                DispatchQueue.main.async { self?.dismiss() }
+                return .consume
+            }
+            // Return reaches this tap only while the popup is open. When the popup lost the keyboard
+            // (the host is key), Return would send a chat message in the host; a preview that may be
+            // replaced takes the Return and replaces instead.
+            if keyCode == Self.returnKeyCode, let self, self.canReplaceFromTap {
+                DispatchQueue.main.async { self.replace() }
+                return .consume
+            }
+            return .pass
         }
     }
 
@@ -356,6 +368,12 @@ final class SelectionRewriteCoordinator {
             guard let self, let notice, self.model === notice else { return }
             self.dismiss()
         }
+    }
+
+    /// True when the popup shows a preview that Replace may use, but the popup is not the key window.
+    private var canReplaceFromTap: Bool {
+        guard let model, case .preview(_, let unsupported) = model.phase, unsupported.isEmpty else { return false }
+        return !presenter.isPopupKey
     }
 
     private func copyPreview() {
