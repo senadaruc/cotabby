@@ -17,7 +17,10 @@ final class RewritePreferencesStore: ObservableObject {
     private enum Key {
         static let provider = "cotabbyRewriteProvider"
         static let apiBaseURL = "cotabbyRewriteAPIBaseURL"
+        /// Before services existed: the one model name, which now belongs to `custom`.
         static let apiModelName = "cotabbyRewriteAPIModelName"
+        static let cloudProvider = "cotabbyRewriteCloudProvider"
+        static let modelsByProvider = "cotabbyRewriteModelsByProvider"
         static let usesMemory = "cotabbyRewriteUsesMemory"
         static let sendsMemoryToAPI = "cotabbyRewriteSendsMemoryToAPI"
         static let showsButton = "cotabbyRewriteShowsButton"
@@ -30,7 +33,16 @@ final class RewritePreferencesStore: ObservableObject {
         var loaded = defaults
         loaded.provider = userDefaults.string(forKey: Key.provider).flatMap(RewriteProviderKind.init(rawValue:)) ?? defaults.provider
         loaded.apiBaseURL = userDefaults.string(forKey: Key.apiBaseURL) ?? defaults.apiBaseURL
-        loaded.apiModelName = userDefaults.string(forKey: Key.apiModelName) ?? defaults.apiModelName
+        loaded.modelsByProvider = userDefaults.dictionary(forKey: Key.modelsByProvider) as? [String: String] ?? [:]
+        if let stored = userDefaults.string(forKey: Key.cloudProvider).flatMap(RewriteCloudProvider.init(rawValue:)) {
+            loaded.cloudProvider = stored
+        } else if !loaded.apiBaseURL.isEmpty {
+            // Set up before services existed: the typed endpoint stays the user's choice, as Custom.
+            loaded.cloudProvider = .custom
+            if let legacyModel = userDefaults.string(forKey: Key.apiModelName), loaded.modelsByProvider["custom"] == nil {
+                loaded.modelsByProvider["custom"] = legacyModel
+            }
+        }
         loaded.usesMemoryByDefault = userDefaults.object(forKey: Key.usesMemory) as? Bool ?? defaults.usesMemoryByDefault
         loaded.sendsMemoryToAPI = userDefaults.object(forKey: Key.sendsMemoryToAPI) as? Bool ?? defaults.sendsMemoryToAPI
         loaded.showsButtonOnSelection = userDefaults.object(forKey: Key.showsButton) as? Bool ?? defaults.showsButtonOnSelection
@@ -48,9 +60,15 @@ final class RewritePreferencesStore: ObservableObject {
         userDefaults.set(value, forKey: Key.apiBaseURL)
     }
 
+    func setCloudProvider(_ provider: RewriteCloudProvider) {
+        preferences.cloudProvider = provider
+        userDefaults.set(provider.rawValue, forKey: Key.cloudProvider)
+    }
+
+    /// Sets the model for the current service only.
     func setAPIModelName(_ value: String) {
         preferences.apiModelName = value
-        userDefaults.set(value, forKey: Key.apiModelName)
+        userDefaults.set(preferences.modelsByProvider, forKey: Key.modelsByProvider)
     }
 
     func setUsesMemoryByDefault(_ value: Bool) {

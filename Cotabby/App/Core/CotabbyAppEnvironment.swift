@@ -59,7 +59,7 @@ final class CotabbyAppEnvironment {
     /// Selection rewrite: the popup flow plus the preferences and Keychain credential the Settings
     /// pane edits. The same instances are shared with the engine, so a saved change applies at once.
     let rewritePreferences: RewritePreferencesStore
-    let rewriteCredentials: KeychainOpenAICompatibleCredentialStore
+    let rewriteCredentials: RewriteCredentialVault
     let selectionRewriteCoordinator: SelectionRewriteCoordinator
     let settingsCoordinator: SettingsCoordinator
     let activationIndicatorController: ActivationIndicatorController
@@ -372,7 +372,10 @@ final class CotabbyAppEnvironment {
         // memory gathered from the conversation in focus. Shares the inserter and llama runtime.
         // Built once here: the same store and credential instances feed the Settings pane and the engine.
         let rewritePreferences = RewritePreferencesStore()
-        let rewriteCredentials = KeychainOpenAICompatibleCredentialStore(serviceSuffix: "rewrite-endpoint")
+        // One Keychain item per cloud service, so switching services keeps every key.
+        let rewriteCredentials = RewriteCredentialVault()
+        let anthropicClient = AnthropicMessagesClient()
+        let rewriteModelList = RewriteModelListService(client: openAICompatibleClient, anthropic: anthropicClient)
         let localRewrite = LocalRewriteProvider(
             runtimeManager: runtimeManager,
             hasLocalModel: { [weak runtimeModel] in runtimeModel?.selectedModelFilename != nil },
@@ -380,9 +383,14 @@ final class CotabbyAppEnvironment {
         )
         let rewriteEngine = RewriteEngine(
             local: localRewrite,
-            api: APIRewriteProvider(client: openAICompatibleClient, preferences: { [weak rewritePreferences] in
-                rewritePreferences?.preferences ?? .defaults
-            }, credentials: rewriteCredentials),
+            api: APIRewriteProvider(
+                client: openAICompatibleClient,
+                anthropic: anthropicClient,
+                preferences: { [weak rewritePreferences] in rewritePreferences?.preferences ?? .defaults },
+                credentials: { [weak rewriteCredentials] service in
+                    rewriteCredentials?.store(for: service) ?? InMemoryOpenAICompatibleCredentialStore()
+                }
+            ),
             preferences: { [weak rewritePreferences] in rewritePreferences?.preferences ?? .defaults }
         )
         let selectionRewriteCoordinator = SelectionRewriteCoordinator(
@@ -442,6 +450,7 @@ final class CotabbyAppEnvironment {
             translationService: translationService,
             rewritePreferences: rewritePreferences,
             rewriteCredentials: rewriteCredentials,
+            rewriteModelList: rewriteModelList,
             rewriteUsesAppleIntelligence: localRewrite.usesAppleIntelligence
         )
 

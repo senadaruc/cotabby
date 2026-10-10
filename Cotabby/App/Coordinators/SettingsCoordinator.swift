@@ -33,7 +33,8 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
     private let translationPreferences: TranslationPreferencesStore
     private let translationService: TranslationService
     private let rewritePreferences: RewritePreferencesStore
-    private let rewriteCredentials: OpenAICompatibleCredentialStoring
+    private let rewriteCredentials: RewriteCredentialVault
+    private let rewriteModelList: RewriteModelListService
     private let rewriteUsesAppleIntelligence: Bool
 
     private var settingsWindowController: NSWindowController?
@@ -68,7 +69,8 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
         translationPreferences: TranslationPreferencesStore,
         translationService: TranslationService,
         rewritePreferences: RewritePreferencesStore,
-        rewriteCredentials: OpenAICompatibleCredentialStoring,
+        rewriteCredentials: RewriteCredentialVault,
+        rewriteModelList: RewriteModelListService,
         rewriteUsesAppleIntelligence: Bool
     ) {
         self.appUpdateManager = appUpdateManager
@@ -94,6 +96,7 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
         self.translationService = translationService
         self.rewritePreferences = rewritePreferences
         self.rewriteCredentials = rewriteCredentials
+        self.rewriteModelList = rewriteModelList
         self.rewriteUsesAppleIntelligence = rewriteUsesAppleIntelligence
     }
 
@@ -133,6 +136,7 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
                     translationService: translationService,
                     rewritePreferences: rewritePreferences,
                     rewriteCredentials: rewriteCredentials,
+                    rewriteModelList: rewriteModelList,
                     rewriteUsesAppleIntelligence: rewriteUsesAppleIntelligence,
                     onQuit: { NSApplication.shared.terminate(nil) }
                 )

@@ -38,6 +38,7 @@ final class RewritePreferencesStoreTests: XCTestCase {
     func test_changesPersistAcrossInstances() {
         let store = makeStore()
         store.setProvider(.api)
+        store.setCloudProvider(.custom)
         store.setAPIBaseURL("https://api.openai.com/v1")
         store.setAPIModelName("gpt-4.1-mini")
         store.setUsesMemoryByDefault(true)
@@ -64,5 +65,45 @@ final class RewritePreferencesStoreTests: XCTestCase {
         XCTAssertTrue(store.preferences.fixesMistakes)
         store.setFixesMistakes(false)
         XCTAssertFalse(makeStore().preferences.fixesMistakes)
+    }
+
+    // MARK: - Cloud providers
+
+    func test_newInstallsStartOnClaude() {
+        XCTAssertEqual(makeStore().preferences.cloudProvider, .anthropic)
+        XCTAssertEqual(makeStore().preferences.apiModelName, "claude-opus-5-5")
+    }
+
+    /// A user who set up an endpoint before providers existed keeps it as Custom.
+    func test_legacyEndpointBecomesCustom() {
+        defaults.set("https://gpustack.local/v1", forKey: "cotabbyRewriteAPIBaseURL")
+        defaults.set("qwen3", forKey: "cotabbyRewriteAPIModelName")
+        let prefs = makeStore().preferences
+        XCTAssertEqual(prefs.cloudProvider, .custom)
+        XCTAssertEqual(prefs.apiModelName, "qwen3")
+        XCTAssertEqual(prefs.effectiveBaseURL, "https://gpustack.local/v1")
+    }
+
+    func test_eachProviderRemembersItsOwnModel() {
+        let store = makeStore()
+        store.setCloudProvider(.anthropic)
+        store.setAPIModelName("claude-haiku-5-5")
+        store.setCloudProvider(.openAI)
+        store.setAPIModelName("some-openai-model")
+        store.setCloudProvider(.anthropic)
+        XCTAssertEqual(store.preferences.apiModelName, "claude-haiku-5-5")
+        let reloaded = makeStore().preferences
+        XCTAssertEqual(reloaded.cloudProvider, .anthropic)
+        XCTAssertEqual(reloaded.apiModelName, "claude-haiku-5-5")
+    }
+
+    func test_providerCatalog() {
+        XCTAssertEqual(RewriteCloudProvider.anthropic.baseURL, "https://api.anthropic.com/v1")
+        XCTAssertEqual(RewriteCloudProvider.openAI.baseURL, "https://api.openai.com/v1")
+        XCTAssertEqual(RewriteCloudProvider.gemini.baseURL, "https://generativelanguage.googleapis.com/v1beta/openai")
+        XCTAssertNil(RewriteCloudProvider.custom.baseURL)
+        XCTAssertEqual(RewriteCloudProvider.custom.keychainSuffix, "rewrite-endpoint", "keeps the key saved before providers existed")
+        XCTAssertEqual(RewriteCloudProvider.openAI.keychainSuffix, "rewrite-endpoint.openAI")
+        XCTAssertTrue(RewriteCloudProvider.anthropic.suggestedModels.contains("claude-sonnet-5-5"))
     }
 }

@@ -37,7 +37,8 @@ struct SettingsContainerView: View {
     @ObservedObject var translationPreferences: TranslationPreferencesStore
     let translationService: TranslationService
     @ObservedObject var rewritePreferences: RewritePreferencesStore
-    let rewriteCredentials: OpenAICompatibleCredentialStoring
+    let rewriteCredentials: RewriteCredentialVault
+    let rewriteModelList: RewriteModelListService
     let rewriteUsesAppleIntelligence: Bool
     let onQuit: () -> Void
 
@@ -159,7 +160,7 @@ struct SettingsContainerView: View {
             TranslationPaneView(preferences: translationPreferences, service: translationService)
         case .rewrite:
             RewritePaneView(preferences: rewritePreferences, credentials: rewriteCredentials,
-                            usesAppleIntelligence: rewriteUsesAppleIntelligence)
+                            modelList: rewriteModelList, usesAppleIntelligence: rewriteUsesAppleIntelligence)
         case .context:
             ContextPaneView(suggestionSettings: suggestionSettings, typingHistory: typingHistoryStore)
         case .shortcuts:

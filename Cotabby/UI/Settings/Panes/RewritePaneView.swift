@@ -1,12 +1,20 @@
 import SwiftUI
 
-/// Settings → Rewrite: which model rewrites selected text, whether memory may help, and whether a
-/// button appears on selection. Presentation only: values live in `RewritePreferencesStore`, the API
-/// key in its own Keychain item.
+/// Settings → Rewrite: which model rewrites selected text (this Mac, or a cloud service such as
+/// Claude or GPT with the user's key and a model picked from the service's own list), whether memory
+/// may help, and whether a button appears on selection. Presentation only: values live in
+/// `RewritePreferencesStore`, each service's key in its own Keychain item (`RewriteCredentialVault`),
+/// and the model list comes from `RewriteModelListService`.
 struct RewritePaneView: View {
     @ObservedObject var preferences: RewritePreferencesStore
-    let credentials: OpenAICompatibleCredentialStoring
+    let credentials: RewriteCredentialVault
+    let modelList: RewriteModelListService
     let usesAppleIntelligence: Bool
+
+    /// Models the service reported after "Load models"; empty until then.
+    @State private var loadedModels: [String] = []
+    @State private var modelListStatus: String?
+    @State private var isLoadingModels = false
 
     @State private var apiKey = ""
     /// The key as last read from or written to the Keychain. Typing compares against it, so loading
@@ -32,17 +40,37 @@ struct RewritePaneView: View {
                 .settingsItem(.rewriteProvider)
 
                 if preferences.preferences.provider == .api {
-                    TextField("Base URL (e.g. https://api.openai.com/v1)",
-                              text: Binding(get: { preferences.preferences.apiBaseURL }, set: preferences.setAPIBaseURL))
-                    TextField("Model (e.g. gpt-4.1-mini)",
-                              text: Binding(get: { preferences.preferences.apiModelName }, set: preferences.setAPIModelName))
+                    Picker("Service", selection: Binding(get: { preferences.preferences.cloudProvider }, set: switchService)) {
+                        ForEach(RewriteCloudProvider.allCases, id: \.self) { service in
+                            Text(service.displayName).tag(service)
+                        }
+                    }
+                    if preferences.preferences.cloudProvider == .custom {
+                        TextField("Base URL (e.g. https://gateway.example.com/v1)",
+                                  text: Binding(get: { preferences.preferences.apiBaseURL }, set: preferences.setAPIBaseURL))
+                    }
+                    HStack {
+                        TextField("Model", text: Binding(get: { preferences.preferences.apiModelName }, set: preferences.setAPIModelName))
+                        Menu("Choose") {
+                            ForEach(modelChoices, id: \.self) { model in
+                                Button(model) { preferences.setAPIModelName(model) }
+                            }
+                        }
+                        .disabled(modelChoices.isEmpty)
+                        .fixedSize()
+                        Button(isLoadingModels ? "Loading…" : "Load models") { loadModels() }
+                            .disabled(isLoadingModels)
+                    }
+                    if let modelListStatus {
+                        Text(modelListStatus).font(.caption).foregroundStyle(.secondary)
+                    }
                     SecureField("API key", text: $apiKey)
                         .onSubmit { saveAPIKey() }
                     Button("Save API Key") { saveAPIKey() }
                     if let keyStatus {
                         Text(keyStatus).font(.caption).foregroundStyle(keyStatusIsError ? .red : .secondary)
                     }
-                    if let host = URL(string: preferences.preferences.apiBaseURL)?.host {
+                    if let host = URL(string: preferences.preferences.effectiveBaseURL)?.host {
                         Text("The selected text is sent to \(host) when you rewrite.").font(.caption).foregroundStyle(.orange)
                     }
                 }
@@ -70,11 +98,7 @@ struct RewritePaneView: View {
                 .settingsItem(.rewriteButton)
             }
         }
-        .onAppear {
-            let stored = (try? credentials.readAPIKey()) ?? ""
-            savedAPIKey = stored
-            apiKey = stored
-        }
+        .onAppear { loadKey() }
         // Each edit restarts a 600 ms timer, so the key is saved once typing pauses, without a Save click.
         .onChange(of: apiKey) { _, newKey in
             pendingKeySave?.cancel()
@@ -93,13 +117,56 @@ struct RewritePaneView: View {
         }
     }
 
-    /// Writes the key to the Keychain (never to UserDefaults or logs) and reports the result under
-    /// the field. The error text comes from the Keychain call itself.
+    /// The models offered in "Choose": the service's own list once loaded, else its suggestions.
+    private var modelChoices: [String] {
+        loadedModels.isEmpty ? preferences.preferences.cloudProvider.suggestedModels : loadedModels
+    }
+
+    /// Changes service: saves a key still being typed for the old one, then shows the new one's key
+    /// and forgets the old model list.
+    private func switchService(_ service: RewriteCloudProvider) {
+        if apiKey != savedAPIKey { saveAPIKey() }
+        preferences.setCloudProvider(service)
+        loadedModels = []
+        modelListStatus = nil
+        keyStatus = nil
+        loadKey()
+    }
+
+    private func loadKey() {
+        let stored = (try? credentials.store(for: preferences.preferences.cloudProvider).readAPIKey()) ?? ""
+        savedAPIKey = stored
+        apiKey = stored
+    }
+
+    /// Asks the service for the models this key can use.
+    private func loadModels() {
+        if apiKey != savedAPIKey { saveAPIKey() }
+        let service = preferences.preferences.cloudProvider
+        let baseURL = preferences.preferences.effectiveBaseURL
+        let key = apiKey
+        isLoadingModels = true
+        modelListStatus = nil
+        Task { @MainActor in
+            defer { isLoadingModels = false }
+            do {
+                let models = try await modelList.models(for: service, baseURL: baseURL, apiKey: key)
+                guard preferences.preferences.cloudProvider == service else { return }
+                loadedModels = models
+                modelListStatus = models.isEmpty ? "The service listed no models." : "\(models.count) models — pick one with Choose."
+            } catch {
+                modelListStatus = "Couldn't load models: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Writes the key to the current service's Keychain item (never to UserDefaults or logs) and
+    /// reports the result under the field. The error text comes from the Keychain call itself.
     private func saveAPIKey() {
         pendingKeySave?.cancel()
         pendingKeySave = nil
         do {
-            try credentials.saveAPIKey(apiKey)
+            try credentials.store(for: preferences.preferences.cloudProvider).saveAPIKey(apiKey)
             savedAPIKey = apiKey
             keyStatus = "Key saved in the Keychain."
             keyStatusIsError = false

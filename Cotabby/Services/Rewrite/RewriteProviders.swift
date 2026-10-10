@@ -15,20 +15,29 @@ protocol RewriteProviding: AnyObject {
     func rewrite(_ request: RewriteRequest, onPartial: @escaping @MainActor (String) -> Void) async throws -> String
 }
 
-/// Rewrites through the user's OpenAI-compatible API (OpenAI, OpenRouter, a vLLM or GPUStack
-/// gateway, Ollama). Configuration comes from `RewritePreferencesStore`, the key from its own
-/// Keychain item, so changing it never touches autocomplete's endpoint. Owned by `RewriteEngine`.
+/// Rewrites through the user's cloud service: Claude through Anthropic's Messages API
+/// (`AnthropicMessagesClient`), every other service (OpenAI, Gemini, Mistral, Groq, OpenRouter, xAI,
+/// DeepSeek, or a custom URL such as a GPUStack gateway or Ollama) through its OpenAI-compatible
+/// endpoint. The service and its model come from `RewritePreferencesStore`; each service's key from
+/// its own Keychain item (`RewriteCloudProvider.keychainSuffix`), so switching services keeps every
+/// key and never touches autocomplete's endpoint. Owned by `RewriteEngine`.
 @MainActor
 final class APIRewriteProvider: RewriteProviding {
     static let timeout: TimeInterval = 20
 
     private let client: OpenAICompatibleAPIClient
+    private let anthropic: AnthropicMessagesClient
     private let preferences: @MainActor () -> RewritePreferences
-    private let credentials: OpenAICompatibleCredentialStoring
+    private let credentials: @MainActor (RewriteCloudProvider) -> OpenAICompatibleCredentialStoring
 
-    init(client: OpenAICompatibleAPIClient, preferences: @escaping @MainActor () -> RewritePreferences,
-         credentials: OpenAICompatibleCredentialStoring) {
+    init(
+        client: OpenAICompatibleAPIClient,
+        anthropic: AnthropicMessagesClient,
+        preferences: @escaping @MainActor () -> RewritePreferences,
+        credentials: @escaping @MainActor (RewriteCloudProvider) -> OpenAICompatibleCredentialStoring
+    ) {
         self.client = client
+        self.anthropic = anthropic
         self.preferences = preferences
         self.credentials = credentials
     }
@@ -37,11 +46,12 @@ final class APIRewriteProvider: RewriteProviding {
 
     /// Built fresh from the current preferences on every read, so a Settings edit takes effect on
     /// the next rewrite without a reload step. `try?` maps an invalid URL to nil, which reads as
-    /// "not configured" rather than surfacing a parse error in the popup.
+    /// "not configured" rather than surfacing a parse error in the popup. Claude's URL is validated
+    /// the same way; only the request format differs.
     private var configuration: OpenAICompatibleEndpointConfiguration? {
         let prefs = preferences()
         return try? OpenAICompatibleEndpointConfiguration(
-            baseURLString: prefs.apiBaseURL, modelName: prefs.apiModelName, apiMode: .chatCompletions
+            baseURLString: prefs.effectiveBaseURL, modelName: prefs.apiModelName, apiMode: .chatCompletions
         )
     }
 
@@ -55,13 +65,60 @@ final class APIRewriteProvider: RewriteProviding {
 
     func rewrite(_ request: RewriteRequest, onPartial: @escaping @MainActor (String) -> Void) async throws -> String {
         guard let configuration, !configuration.modelName.isEmpty else { throw RewriteError.noProvider }
+        let service = preferences().cloudProvider
         let prompt = RewritePromptBuilder.instructPrompt(request)
+        let apiKey = try? credentials(service).readAPIKey()
+        if service == .anthropic {
+            return try await anthropic.streamMessage(
+                baseURL: configuration.baseURL.absoluteString, apiKey: apiKey, model: configuration.modelName,
+                system: prompt.system, user: prompt.user, timeout: Self.timeout, onPartial: onPartial
+            )
+        }
         return try await client.streamChat(
             configuration: configuration,
-            apiKey: try? credentials.readAPIKey(),
+            apiKey: apiKey,
             messages: [.init(role: "system", content: prompt.system), .init(role: "user", content: prompt.user)],
             timeout: Self.timeout,
             onPartialRawText: onPartial
         )
+    }
+}
+
+/// One Keychain store per cloud service, created on first use and kept for the app's lifetime.
+/// Shared by the API provider (to read keys) and Settings → Rewrite (to save them).
+@MainActor
+final class RewriteCredentialVault {
+    private var stores: [RewriteCloudProvider: KeychainOpenAICompatibleCredentialStore] = [:]
+
+    nonisolated deinit {}
+
+    func store(for service: RewriteCloudProvider) -> OpenAICompatibleCredentialStoring {
+        if let store = stores[service] { return store }
+        let store = KeychainOpenAICompatibleCredentialStore(serviceSuffix: service.keychainSuffix)
+        stores[service] = store
+        return store
+    }
+}
+
+/// Loads the models a service offers for the Settings model picker: Claude through `GET /v1/models`,
+/// the others through their OpenAI-compatible `/models`.
+@MainActor
+final class RewriteModelListService {
+    private let client: OpenAICompatibleAPIClient
+    private let anthropic: AnthropicMessagesClient
+
+    init(client: OpenAICompatibleAPIClient, anthropic: AnthropicMessagesClient) {
+        self.client = client
+        self.anthropic = anthropic
+    }
+
+    nonisolated deinit {}
+
+    func models(for service: RewriteCloudProvider, baseURL: String, apiKey: String?) async throws -> [String] {
+        if service == .anthropic {
+            return try await anthropic.listModels(baseURL: baseURL, apiKey: apiKey)
+        }
+        let configuration = try OpenAICompatibleEndpointConfiguration(baseURLString: baseURL, modelName: "", apiMode: .chatCompletions)
+        return try await client.fetchModels(configuration: configuration, apiKey: apiKey).map(\.id)
     }
 }

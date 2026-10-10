@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		7C764C8D6039C947FE872A85 /* AnthropicMessagesClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57DC503D5AFEE9974D96BBDE /* AnthropicMessagesClient.swift */; };
+		6E377EC1DA0839259AC951EC /* AnthropicMessagesClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57DC503D5AFEE9974D96BBDE /* AnthropicMessagesClient.swift */; };
 		8D3DE234DDF9B7AF0C042F77 /* RewriteLanguageDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33066B5F112557D1896B5BCF /* RewriteLanguageDetector.swift */; };
 		759B104A72ED148ABFA3190D /* RewriteLanguageDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33066B5F112557D1896B5BCF /* RewriteLanguageDetector.swift */; };
 		5A386B994401A26D5EBD8EBD /* RewriteLanguageDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFF6C25E9BCA6D42126285E4 /* RewriteLanguageDetectorTests.swift */; };
@@ -1336,6 +1338,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		57DC503D5AFEE9974D96BBDE /* AnthropicMessagesClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnthropicMessagesClient.swift; sourceTree = "<group>"; };
 		33066B5F112557D1896B5BCF /* RewriteLanguageDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewriteLanguageDetector.swift; sourceTree = "<group>"; };
 		CFF6C25E9BCA6D42126285E4 /* RewriteLanguageDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewriteLanguageDetectorTests.swift; sourceTree = "<group>"; };
 		E7250C1F0441D75B1FE37125 /* RewritePaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewritePaneView.swift; sourceTree = "<group>"; };
@@ -2233,6 +2236,7 @@
 				7433917879BB58ABC51BE4F6 /* RewriteEngine.swift */,
 				9659C1D5634C4EDDFB80290E /* LocalRewriteProvider.swift */,
 				C3477BFA73C27DE659EE6336 /* RewriteMemoryGatherer.swift */,
+				57DC503D5AFEE9974D96BBDE /* AnthropicMessagesClient.swift */,
 			);
 			path = Rewrite;
 			sourceTree = "<group>";
@@ -5356,6 +5360,7 @@
 				7418E40356268EA32FF7E2A7 /* TranslationPreferencesStore.swift in Sources */,
 				01C93F250DE8E7D0109795F2 /* RewritePreferencesStore.swift in Sources */,
 				8AA2F7120E835DE4A7DFF959 /* RewriteProviders.swift in Sources */,
+				6E377EC1DA0839259AC951EC /* AnthropicMessagesClient.swift in Sources */,
 				9B937E83DD10A7D069E351A8 /* LocalRewriteProvider.swift in Sources */,
 				471B016E22A67C4688928155 /* RewriteEngine.swift in Sources */,
 				EFC2DBB1CB7BFA039A1F7BDB /* RewriteMemoryGatherer.swift in Sources */,
@@ -5820,6 +5825,7 @@
 				88E36607074D2607730360C9 /* TranslationPreferencesStore.swift in Sources */,
 				5C84794F71A089219F8F8C7E /* RewritePreferencesStore.swift in Sources */,
 				2242683CB06E2020167F4A17 /* RewriteProviders.swift in Sources */,
+				7C764C8D6039C947FE872A85 /* AnthropicMessagesClient.swift in Sources */,
 				6C0F2F4AB7F6030CB0FF44DD /* LocalRewriteProvider.swift in Sources */,
 				39006E3C4B4F2EA328EA8D10 /* RewriteEngine.swift in Sources */,
 				6AD0F55DEC4736A145AEFCD7 /* RewriteMemoryGatherer.swift in Sources */,

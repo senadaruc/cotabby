@@ -43,11 +43,69 @@ nonisolated enum RewriteProviderKind: String, CaseIterable, Sendable {
     case local, api
 }
 
+/// The cloud services a rewrite can use with the user's own API key. Claude goes through Anthropic's
+/// Messages API (`AnthropicMessagesClient`); every other service through its OpenAI-compatible
+/// endpoint. `custom` is any compatible URL the user types (a GPUStack gateway, Ollama, a proxy).
+nonisolated enum RewriteCloudProvider: String, CaseIterable, Sendable {
+    case anthropic, openAI, gemini, mistral, groq, openRouter, xAI, deepSeek, custom
+
+    var displayName: String {
+        switch self {
+        case .anthropic: return "Claude (Anthropic)"
+        case .openAI: return "OpenAI (GPT)"
+        case .gemini: return "Google Gemini"
+        case .mistral: return "Mistral"
+        case .groq: return "Groq"
+        case .openRouter: return "OpenRouter"
+        case .xAI: return "xAI (Grok)"
+        case .deepSeek: return "DeepSeek"
+        case .custom: return "Custom endpoint"
+        }
+    }
+
+    /// The service's API root; nil for `custom`, whose URL the user enters.
+    var baseURL: String? {
+        switch self {
+        case .anthropic: return "https://api.anthropic.com/v1"
+        case .openAI: return "https://api.openai.com/v1"
+        case .gemini: return "https://generativelanguage.googleapis.com/v1beta/openai"
+        case .mistral: return "https://api.mistral.ai/v1"
+        case .groq: return "https://api.groq.com/openai/v1"
+        case .openRouter: return "https://openrouter.ai/api/v1"
+        case .xAI: return "https://api.x.ai/v1"
+        case .deepSeek: return "https://api.deepseek.com/v1"
+        case .custom: return nil
+        }
+    }
+
+    /// Models offered before the live list is loaded. Only stable names are listed; "Load models"
+    /// asks the service for its current list.
+    var suggestedModels: [String] {
+        switch self {
+        case .anthropic: return ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"]
+        case .mistral: return ["mistral-large-latest", "mistral-small-latest"]
+        case .deepSeek: return ["deepseek-chat"]
+        default: return []
+        }
+    }
+
+    /// The model used until the user picks one; empty where no name is stable enough to assume.
+    var defaultModel: String { suggestedModels.first ?? "" }
+
+    /// The Keychain item that holds this service's key, so switching services keeps every key.
+    /// `custom` keeps the item used before services existed.
+    var keychainSuffix: String { self == .custom ? "rewrite-endpoint" : "rewrite-endpoint.\(rawValue)" }
+}
+
 /// The Rewrite settings, as one snapshot the coordinator and engine read per rewrite.
 nonisolated struct RewritePreferences: Equatable, Sendable {
     var provider: RewriteProviderKind
+    /// Which cloud service the API provider uses.
+    var cloudProvider: RewriteCloudProvider
+    /// The URL for `custom`; the named services carry their own.
     var apiBaseURL: String
-    var apiModelName: String
+    /// The chosen model per service (by `RewriteCloudProvider.rawValue`), so switching keeps each choice.
+    var modelsByProvider: [String: String]
     var usesMemoryByDefault: Bool
     /// The popup's "Fix spelling & grammar" tick box: every action except Fix only also corrects
     /// mistakes when it is on. Remembered between rewrites.
@@ -62,8 +120,9 @@ nonisolated struct RewritePreferences: Equatable, Sendable {
 
     static let defaults = RewritePreferences(
         provider: .local,
+        cloudProvider: .anthropic,
         apiBaseURL: "",
-        apiModelName: "",
+        modelsByProvider: [:],
         usesMemoryByDefault: false,
         fixesMistakes: true,
         sendsMemoryToAPI: false,
@@ -72,6 +131,15 @@ nonisolated struct RewritePreferences: Equatable, Sendable {
         shortcutModifiers: ShortcutModifierMask.control.rawValue | ShortcutModifierMask.option.rawValue,
         shortcutLabel: "⌃⌥R"
     )
+
+    /// The model for the current service: the user's choice, else the service's default.
+    var apiModelName: String {
+        get { modelsByProvider[cloudProvider.rawValue] ?? cloudProvider.defaultModel }
+        set { modelsByProvider[cloudProvider.rawValue] = newValue }
+    }
+
+    /// The API root the current service is reached at.
+    var effectiveBaseURL: String { cloudProvider.baseURL ?? apiBaseURL }
 }
 
 /// What memory contributes to one rewrite: facts about the person or thread, and a few of the
