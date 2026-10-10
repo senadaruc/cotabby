@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		82A9AAB7807C96D6595E90F0 /* FocusSelectionText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C75A46FDD17B1C46AD55960 /* FocusSelectionText.swift */; };
+		77C96228C13882A26C78A64B /* FocusSelectionText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C75A46FDD17B1C46AD55960 /* FocusSelectionText.swift */; };
+		78BD8E3F95C73A2371F7CAF1 /* FocusSelectionTextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CD0010A0E69DB9D738B3B74 /* FocusSelectionTextTests.swift */; };
 		000C6FB630E84073B89BF926 /* SpellingDictionaryPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72B8156EEF23664F775190AB /* SpellingDictionaryPicker.swift */; };
 		00B988D789E7FC55653191DB /* SentenceBoundaryClassifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06FC72BD286ABA5B3CEF82F7 /* SentenceBoundaryClassifier.swift */; };
 		0144ECDA06A8BDEFBB8DACE3 /* RuntimeBootstrapModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DF8AA184C5F9CFFDF97A070 /* RuntimeBootstrapModel.swift */; };
@@ -1293,6 +1296,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		9C75A46FDD17B1C46AD55960 /* FocusSelectionText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusSelectionText.swift; sourceTree = "<group>"; };
+		9CD0010A0E69DB9D738B3B74 /* FocusSelectionTextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusSelectionTextTests.swift; sourceTree = "<group>"; };
 		003594B09C83EF2DF35577D5 /* SuggestionDebugLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SuggestionDebugLogger.swift; sourceTree = "<group>"; };
 		00BD4DE5D9D8C9BB66B78633 /* TextDirectionDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextDirectionDetectorTests.swift; sourceTree = "<group>"; };
 		00ECEC4853F92CB46D565BBC /* DocumentsHistoryReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentsHistoryReader.swift; sourceTree = "<group>"; };
@@ -4117,6 +4122,7 @@
 				C8B2BA5E0AD5E3F1D89531B9 /* FocusedInputPollingSignatureTests.swift */,
 				C1337F5C94FA9A6388841805 /* FocusPollBackoffTests.swift */,
 				122FFC0E7042DEDD8A65B10E /* FocusDropoutGraceTests.swift */,
+				9CD0010A0E69DB9D738B3B74 /* FocusSelectionTextTests.swift */,
 			);
 			path = Focus;
 			sourceTree = "<group>";
@@ -4173,6 +4179,7 @@
 				D1891267512941C84BEA4172 /* FocusedInputPollingSignature.swift */,
 				ECD5C8648740E7050CCA657F /* FocusPollBackoff.swift */,
 				083BD3C2F8381C578F79CAF4 /* FocusDropoutGrace.swift */,
+				9C75A46FDD17B1C46AD55960 /* FocusSelectionText.swift */,
 			);
 			path = Focus;
 			sourceTree = "<group>";
@@ -4922,6 +4929,7 @@
 				985C583A41DEEE040F48D661 /* FocusModels.swift in Sources */,
 				94A93C9AECB84D56E3347601 /* FocusPollBackoff.swift in Sources */,
 				173816DE29DB9BD269F6CB52 /* FocusDropoutGrace.swift in Sources */,
+				82A9AAB7807C96D6595E90F0 /* FocusSelectionText.swift in Sources */,
 				F2919788D0F55970FCCCA8BD /* FocusSessionScopedCache.swift in Sources */,
 				0CF6C912A1B25718CE090195 /* FocusSnapshotResolver.swift in Sources */,
 				89329024F050602EFBC7CC6B /* FocusTracker.swift in Sources */,
@@ -5370,6 +5378,7 @@
 				4666D3B3A81CCB4CC68FC395 /* FocusModels.swift in Sources */,
 				8E460A307B1ED0DA783CB247 /* FocusPollBackoff.swift in Sources */,
 				8160853D76A1DC4E39EA7B57 /* FocusDropoutGrace.swift in Sources */,
+				77C96228C13882A26C78A64B /* FocusSelectionText.swift in Sources */,
 				661EABC3ED7985F859D133D0 /* FocusSessionScopedCache.swift in Sources */,
 				D23D73517490D31EEC3E09EA /* FocusSnapshotResolver.swift in Sources */,
 				B00FDD3DEE0B73FF5136C91C /* FocusTracker.swift in Sources */,
@@ -5771,6 +5780,7 @@
 				CED430DD80E4769920E3C0E5 /* FocusModelsTests.swift in Sources */,
 				5CBE09685D85DFED89B79437 /* FocusPollBackoffTests.swift in Sources */,
 				21651FF33882CBCCFC8875A8 /* FocusDropoutGraceTests.swift in Sources */,
+				78BD8E3F95C73A2371F7CAF1 /* FocusSelectionTextTests.swift in Sources */,
 				02C80969B8D6A0DBDC619FCA /* FocusSessionScopedCacheTests.swift in Sources */,
 				935C8D87322CE57F91B673B6 /* FocusSnapshotExternalApplicationIdentityTests.swift in Sources */,
 				E60DE8299D729AB113647904 /* FocusSnapshotResolverLiveTests.swift in Sources */,

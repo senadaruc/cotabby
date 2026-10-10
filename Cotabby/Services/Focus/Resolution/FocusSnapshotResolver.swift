@@ -350,7 +350,9 @@ struct FocusSnapshotResolver {
             conversationTitle: conversationTitle,
             hostTextMetrics: Self.mergingRunLinePitch(hostTextMetrics, edges: observedContentEdges),
             elementFrameRect: resolvedCandidate.elementFrameRect,
-            hostMarkedTextRange: resolvedCandidate.markedTextRange ?? chromiumCompletionRange ?? smartComposeRange
+            hostMarkedTextRange: resolvedCandidate.markedTextRange ?? chromiumCompletionRange ?? smartComposeRange,
+            selectedText: FocusSelectionText.extract(windowText: contextWindow.text, windowSelection: contextWindow.selection),
+            hostSelection: selection
         )
 
         if let reason = Self.blockedReason(
