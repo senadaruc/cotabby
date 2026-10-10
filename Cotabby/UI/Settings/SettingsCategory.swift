@@ -18,6 +18,7 @@ enum SettingsCategory: String, CaseIterable, Hashable, Identifiable {
     case writing
     case context
     case translation
+    case rewrite
     case memory
     case engineAndModel
     case shortcuts
@@ -37,6 +38,7 @@ enum SettingsCategory: String, CaseIterable, Hashable, Identifiable {
         case .writing: return "Writing"
         case .context: return "Context"
         case .translation: return "Translation"
+        case .rewrite: return "Rewrite"
         case .memory: return "Memory"
         case .engineAndModel: return "Engine & Model"
         case .shortcuts: return "Shortcuts"
@@ -57,6 +59,7 @@ enum SettingsCategory: String, CaseIterable, Hashable, Identifiable {
         case .writing: return "square.and.pencil"
         case .context: return "doc.text"
         case .translation: return "character.bubble.fill"
+        case .rewrite: return "wand.and.stars"
         case .memory: return "brain"
         case .engineAndModel: return "cpu.fill"
         case .shortcuts: return "keyboard.fill"
@@ -79,6 +82,7 @@ enum SettingsCategory: String, CaseIterable, Hashable, Identifiable {
         case .writing: return .indigo
         case .context: return .teal
         case .translation: return .blue
+        case .rewrite: return .indigo
         case .memory: return .mint
         case .engineAndModel: return .orange
         case .shortcuts: return .pink
@@ -99,6 +103,7 @@ enum SettingsCategory: String, CaseIterable, Hashable, Identifiable {
         case .writing: return "Length, profile, and corrections"
         case .context: return "What the model can reference"
         case .translation: return "Translate messages and replies"
+        case .rewrite: return "Rewrite selected text with AI"
         case .memory: return "Chat and mail history for suggestions"
         case .engineAndModel: return "Choose the engine and models"
         case .shortcuts: return "Keys that accept suggestions"
@@ -116,7 +121,7 @@ enum SettingsCategory: String, CaseIterable, Hashable, Identifiable {
     static let sidebarGroups: [[SettingsCategory]] = [
         [.home],
         [.general, .appearance, .emoji],
-        [.writing, .context, .translation, .memory, .engineAndModel],
+        [.writing, .context, .translation, .rewrite, .memory, .engineAndModel],
         [.shortcuts, .apps, .permissions],
         [.performance, .about]
     ]

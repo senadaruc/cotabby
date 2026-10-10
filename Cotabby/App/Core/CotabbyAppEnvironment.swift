@@ -363,6 +363,9 @@ final class CotabbyAppEnvironment {
         )
 
 
+        // Task 13 wires the rewrite stores through the environment and passes the local provider's real value.
+        let rewritePreferences = RewritePreferencesStore()
+        let rewriteCredentials = KeychainOpenAICompatibleCredentialStore(serviceSuffix: "rewrite-endpoint")
         let settingsCoordinator = SettingsCoordinator(
             appUpdateManager: appUpdateManager,
             permissionManager: permissionManager,
@@ -386,7 +389,11 @@ final class CotabbyAppEnvironment {
             memoryController: memoryController,
             memoryControl: memoryControl,
             translationPreferences: translationPreferences,
-            translationService: translationService
+            translationService: translationService,
+            rewritePreferences: rewritePreferences,
+            rewriteCredentials: rewriteCredentials,
+            // Task 13 passes the local provider's real value.
+            rewriteUsesAppleIntelligence: false
         )
 
         let interactionState = SuggestionInteractionState()

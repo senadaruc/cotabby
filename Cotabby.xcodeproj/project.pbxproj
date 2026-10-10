@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		9C09A008CDE2C8EFB4B9D15C /* RewritePaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7250C1F0441D75B1FE37125 /* RewritePaneView.swift */; };
+		D1E558494560675566123A01 /* RewritePaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7250C1F0441D75B1FE37125 /* RewritePaneView.swift */; };
 		644084A9B703D28F77D5D3F2 /* SelectionRewriteCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEA4D4B77157748EA642FB2A /* SelectionRewriteCoordinator.swift */; };
 		B6A6512500446DB6F13F322E /* SelectionRewriteCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEA4D4B77157748EA642FB2A /* SelectionRewriteCoordinator.swift */; };
 		A1DBF9D7DFA2D83BFD36C7F7 /* SelectionRewriteCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1333FB87F6AE6F4DD515098E /* SelectionRewriteCoordinatorTests.swift */; };
@@ -1331,6 +1333,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		E7250C1F0441D75B1FE37125 /* RewritePaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewritePaneView.swift; sourceTree = "<group>"; };
 		CEA4D4B77157748EA642FB2A /* SelectionRewriteCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionRewriteCoordinator.swift; sourceTree = "<group>"; };
 		1333FB87F6AE6F4DD515098E /* SelectionRewriteCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionRewriteCoordinatorTests.swift; sourceTree = "<group>"; };
 		632410BB2730124D3AFE88A4 /* SelectionRewritePopupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionRewritePopupView.swift; sourceTree = "<group>"; };
@@ -2680,6 +2683,7 @@
 				B85ECBA936DAC06F98552271 /* TranslationPaneView.swift */,
 				9FEEB296E66D24C95D3DABAB /* TypingHistorySectionView.swift */,
 				D48B95B6665109B6C6A63B42 /* WritingPaneView.swift */,
+				E7250C1F0441D75B1FE37125 /* RewritePaneView.swift */,
 			);
 			path = Panes;
 			sourceTree = "<group>";
@@ -5341,6 +5345,7 @@
 				69C60D16A49D53C29C6EAC5A /* RewriteModels.swift in Sources */,
 				24EE74F6BE91FC7AF04AB8A7 /* TranslationOverlayController.swift in Sources */,
 				33765A26561DCD843A03205E /* TranslationPaneView.swift in Sources */,
+				D1E558494560675566123A01 /* RewritePaneView.swift in Sources */,
 				7418E40356268EA32FF7E2A7 /* TranslationPreferencesStore.swift in Sources */,
 				01C93F250DE8E7D0109795F2 /* RewritePreferencesStore.swift in Sources */,
 				8AA2F7120E835DE4A7DFF959 /* RewriteProviders.swift in Sources */,
@@ -5803,6 +5808,7 @@
 				8D5D3AEFC99819F8ADC30509 /* RewriteModels.swift in Sources */,
 				F399998A7FBAB7115932D7AA /* TranslationOverlayController.swift in Sources */,
 				4D8EAA5D687A54D5428258F6 /* TranslationPaneView.swift in Sources */,
+				9C09A008CDE2C8EFB4B9D15C /* RewritePaneView.swift in Sources */,
 				88E36607074D2607730360C9 /* TranslationPreferencesStore.swift in Sources */,
 				5C84794F71A089219F8F8C7E /* RewritePreferencesStore.swift in Sources */,
 				2242683CB06E2020167F4A17 /* RewriteProviders.swift in Sources */,

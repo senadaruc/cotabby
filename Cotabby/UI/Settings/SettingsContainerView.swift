@@ -36,6 +36,9 @@ struct SettingsContainerView: View {
     let typingHistoryStore: TypingHistoryStore
     @ObservedObject var translationPreferences: TranslationPreferencesStore
     let translationService: TranslationService
+    @ObservedObject var rewritePreferences: RewritePreferencesStore
+    let rewriteCredentials: OpenAICompatibleCredentialStoring
+    let rewriteUsesAppleIntelligence: Bool
     let onQuit: () -> Void
 
     @AppStorage("cotabbySettingsSelectedCategoryV2")
@@ -154,6 +157,9 @@ struct SettingsContainerView: View {
             MemoryPaneView(controller: memoryController, control: memoryControl)
         case .translation:
             TranslationPaneView(preferences: translationPreferences, service: translationService)
+        case .rewrite:
+            RewritePaneView(preferences: rewritePreferences, credentials: rewriteCredentials,
+                            usesAppleIntelligence: rewriteUsesAppleIntelligence)
         case .context:
             ContextPaneView(suggestionSettings: suggestionSettings, typingHistory: typingHistoryStore)
         case .shortcuts:

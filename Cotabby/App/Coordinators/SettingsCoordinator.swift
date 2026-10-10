@@ -32,6 +32,9 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
     private let memoryControl: MemoryControlModel
     private let translationPreferences: TranslationPreferencesStore
     private let translationService: TranslationService
+    private let rewritePreferences: RewritePreferencesStore
+    private let rewriteCredentials: OpenAICompatibleCredentialStoring
+    private let rewriteUsesAppleIntelligence: Bool
 
     private var settingsWindowController: NSWindowController?
 
@@ -63,7 +66,10 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
         memoryController: MemoryEngineController,
         memoryControl: MemoryControlModel,
         translationPreferences: TranslationPreferencesStore,
-        translationService: TranslationService
+        translationService: TranslationService,
+        rewritePreferences: RewritePreferencesStore,
+        rewriteCredentials: OpenAICompatibleCredentialStoring,
+        rewriteUsesAppleIntelligence: Bool
     ) {
         self.appUpdateManager = appUpdateManager
         self.permissionManager = permissionManager
@@ -86,6 +92,9 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
         self.memoryControl = memoryControl
         self.translationPreferences = translationPreferences
         self.translationService = translationService
+        self.rewritePreferences = rewritePreferences
+        self.rewriteCredentials = rewriteCredentials
+        self.rewriteUsesAppleIntelligence = rewriteUsesAppleIntelligence
     }
 
     /// Shows the settings window, reusing the existing instance if it is already open.
@@ -122,6 +131,9 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
                     typingHistoryStore: typingHistoryStore,
                     translationPreferences: translationPreferences,
                     translationService: translationService,
+                    rewritePreferences: rewritePreferences,
+                    rewriteCredentials: rewriteCredentials,
+                    rewriteUsesAppleIntelligence: rewriteUsesAppleIntelligence,
                     onQuit: { NSApplication.shared.terminate(nil) }
                 )
             )

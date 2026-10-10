@@ -66,6 +66,10 @@ enum SettingsItem: String, CaseIterable, Identifiable {
     case translationApps
     case translationLanguages
     case contextLivePreview
+    // Rewrite
+    case rewriteProvider
+    case rewriteMemory
+    case rewriteButton
     // Memory
     case memoryService
     case memorySources
@@ -171,6 +175,9 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .translationEnabled: return "Translate Messages"
         case .translationApps: return "Translation Apps"
         case .translationLanguages: return "Translation Languages"
+        case .rewriteProvider: return "Rewrite Model"
+        case .rewriteMemory: return "Rewrite with Memory"
+        case .rewriteButton: return "Rewrite Button"
         case .memoryService: return "Conversation Memory"
         case .memorySources: return "Memory Sources"
         case .memoryIndex: return "Memory Index"
@@ -270,6 +277,9 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .translationEnabled: return "character.bubble"
         case .translationApps: return "app.badge"
         case .translationLanguages: return "globe"
+        case .rewriteProvider: return "cpu"
+        case .rewriteMemory: return "brain"
+        case .rewriteButton: return "wand.and.stars"
         case .memoryService: return "brain"
         case .memorySources: return "tray.full"
         case .memoryIndex: return "square.stack.3d.up"
@@ -343,6 +353,8 @@ enum SettingsItem: String, CaseIterable, Identifiable {
             return .memory
         case .translationEnabled, .translationApps, .translationLanguages:
             return .translation
+        case .rewriteProvider, .rewriteMemory, .rewriteButton:
+            return .rewrite
         case .engine, .appleIntelligenceAvailability, .appleLanguageFallback, .appleLanguageFallbackModel, .modelStatus, .selectedModel,
              .lowPowerModeAutoDisable, .powerBasedModelSwitching, .batteryModel, .pluggedInModel,
              .downloadModels, .huggingFaceBrowser, .modelsFolder, .lmStudio,
@@ -416,6 +428,9 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .translationEnabled: return "Translate incoming messages and offer replies in the chat's language."
         case .translationApps: return "Apps whose chats are translated."
         case .translationLanguages: return "Which languages translate on this Mac, and how."
+        case .rewriteProvider: return "Choose Cotabby's local models or your API model for rewriting."
+        case .rewriteMemory: return "Let rewrites use facts and your style from memory."
+        case .rewriteButton: return "Show a button when you select text, or use ⌃⌥R."
         case .memoryService: return "Remember chat and mail history on this Mac for suggestions."
         case .memorySources: return "WhatsApp, Mail, Teams, Slack and other history sources."
         case .memoryIndex: return "LEANN index settings: embeddings, chunking, search."
@@ -604,6 +619,12 @@ enum SettingsItem: String, CaseIterable, Identifiable {
             return ["translate", "translation apps", "whatsapp", "teams", "telegram", "slack", "outlook", "mail"]
         case .translationLanguages:
             return ["translation languages", "apple translation", "download languages", "offline translation"]
+        case .rewriteProvider:
+            return ["rewrite", "rephrase", "api", "openai", "cloud", "model", "polish"]
+        case .rewriteMemory:
+            return ["memory", "facts", "style", "rewrite"]
+        case .rewriteButton:
+            return ["selection", "button", "shortcut", "rewrite", "select text"]
         case .memoryService:
             return ["memory", "rag", "leann", "history", "conversation", "chat history", "remember"]
         case .memorySources:
