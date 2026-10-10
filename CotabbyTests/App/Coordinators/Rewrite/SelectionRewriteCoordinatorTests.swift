@@ -278,4 +278,34 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         XCTAssertEqual(output.pasted, [runner.result])
         XCTAssertTrue(output.copied.isEmpty)
     }
+
+    func test_doubleReplacePastesOnce() async {
+        let (_, presenter, output, runner, _) = make()
+        await send(snapshot(selected: draft))
+        presenter.buttonPress?()
+        presenter.popupModel?.onAction(.fixGrammar)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        // The popup holds the keyboard, so the activation wait runs and the first Replace is still in
+        // flight when the second arrives. Waiting past the 100 ms settle shows any second paste.
+        presenter.isPopupKey = true
+        presenter.popupModel?.onReplace()
+        presenter.popupModel?.onReplace()
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertEqual(output.pasted, [runner.result])
+    }
+
+    func test_closeDuringActivationWaitDoesNotPaste() async {
+        let (_, presenter, output, runner, _) = make()
+        await send(snapshot(selected: draft))
+        presenter.buttonPress?()
+        presenter.popupModel?.onAction(.fixGrammar)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        presenter.isPopupKey = true
+        presenter.popupModel?.onReplace()
+        // Esc or ✕ lands during the 100 ms activation wait.
+        presenter.popupModel?.onClose()
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertTrue(output.pasted.isEmpty)
+        XCTAssertTrue(output.copied.isEmpty)
+    }
 }

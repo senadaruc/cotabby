@@ -244,7 +244,8 @@ final class SelectionRewriteCoordinator {
     /// Starts Replace. Guarded synchronously so a stale or ungrounded preview never starts the flow;
     /// `isReplacing` is set here, before the task runs, so no focus snapshot slips in between.
     private func replace() {
-        guard let model, target != nil, case .preview(_, let unsupported) = model.phase, unsupported.isEmpty else { return }
+        // `!isReplacing` makes a double Return or double click a no-op while the first Replace is in flight.
+        guard !isReplacing, let model, target != nil, case .preview(_, let unsupported) = model.phase, unsupported.isEmpty else { return }
         isReplacing = true
         Task { @MainActor in await self.performReplace() }
     }
@@ -259,6 +260,8 @@ final class SelectionRewriteCoordinator {
             // Activation is not instant: give the host time to take key status back before the focus
             // read and validation below, otherwise they see the popup's own field.
             try? await Task.sleep(nanoseconds: 100_000_000)
+            // Esc or ✕ during the wait closes the popup: the user backed out, so nothing is pasted.
+            guard self.model === model else { return }
         }
         refreshFocus()
         var outcome = SelectionReplaceValidator.outcome(target: target, current: currentSnapshot().context)
