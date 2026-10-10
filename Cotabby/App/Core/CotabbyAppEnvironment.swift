@@ -389,7 +389,7 @@ final class CotabbyAppEnvironment {
             snapshots: focusModel.$snapshot.eraseToAnyPublisher(),
             currentSnapshot: { [weak focusModel] in focusModel?.snapshot ?? .inactive },
             refreshFocus: { [weak focusModel] in focusModel?.refreshNow() },
-            presenter: SelectionRewritePanelController(),
+            presenter: SelectionRewritePanelController(indicator: activationIndicatorController),
             output: LiveSelectionRewriteTextOutput(inserter: suggestionInserter),
             engine: rewriteEngine,
             memory: RewriteMemoryGatherer(

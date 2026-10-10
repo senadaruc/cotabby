@@ -2,18 +2,22 @@ import AppKit
 import SwiftUI
 
 /// File overview:
-/// The two floating surfaces of selection rewrite: the small Cotabby button at the selection's end,
-/// and the popup that replaces it when pressed. Both are non-activating panels (like
-/// `AnswerCardController`), so the host app stays the active app and keeps its selection. The popup
-/// takes the keyboard as soon as it opens, so Return and typing go to the popup and never fall
-/// through to the edited app (Return in a chat app would send the message). The button panel never
-/// becomes key. Owned by `SelectionRewriteCoordinator`.
+/// The two surfaces of selection rewrite: the button, which is the field-edge Cotabby icon turned
+/// into a wand (`ActivationIndicatorController.showRewrite`), and the popup that opens beside it.
+/// Reusing the icon keeps the affordance outside the field: a separate button at the caret covered
+/// the selection's first letters (WhatsApp, 2026-10-10). The popup is a non-activating panel (like
+/// `AnswerCardController`), so the host app stays the active app and keeps its selection; it takes
+/// the keyboard as soon as it opens, so Return and typing go to the popup and never fall through to
+/// the edited app (Return in a chat app would send the message). Owned by
+/// `SelectionRewriteCoordinator`.
 @MainActor
 final class SelectionRewritePanelController {
-    /// Two separate panels rather than one: the small button and the popup have different sizes and
-    /// lifetimes, and the button is hidden the moment the popup opens.
-    private var buttonPanel: RewritePanel?
+    private let indicator: ActivationIndicatorController
     private var popupPanel: RewritePanel?
+
+    init(indicator: ActivationIndicatorController) {
+        self.indicator = indicator
+    }
     /// The caret rect the popup was last opened at. Kept so `refit()` can recompute placement for
     /// the new content size with the same rule `showPopup` used.
     private var popupAnchor: CGRect?
@@ -21,30 +25,17 @@ final class SelectionRewritePanelController {
     var isPopupVisible: Bool { popupPanel?.isVisible ?? false }
     var isPopupKey: Bool { popupPanel?.isKeyWindow ?? false }
 
-    /// `anchor` is the caret rect at the selection's end in AppKit screen coordinates (bottom-left
-    /// origin), as `FocusedInputSnapshot.caretRect` provides.
-    func showButton(near anchor: CGRect, onPress: @escaping () -> Void) {
-        let panel = buttonPanel ?? Self.makePanel()
-        buttonPanel = panel
-        let view = Button(action: onPress) {
-            Image(systemName: "wand.and.stars").font(.system(size: 12, weight: .semibold))
-                .frame(width: 24, height: 24)
-                .background(.regularMaterial, in: Circle())
-        }
-        .buttonStyle(.plain)
-        .help("Rewrite with AI")
-        panel.contentView = FirstClickHostingView(rootView: view)
-        let size = CGSize(width: 26, height: 26)
-        panel.setFrame(CGRect(origin: CGPoint(x: anchor.maxX + 6, y: anchor.minY - 2), size: size), display: true)
-        panel.orderFrontRegardless()
+    /// Shows the rewrite button where the Cotabby icon sits, just outside the field's edge.
+    /// `caretRect` and `fieldFrame` are AppKit screen coordinates (bottom-left origin).
+    func showButton(caretRect: CGRect, fieldFrame: CGRect?, onPress: @escaping () -> Void) {
+        indicator.showRewrite(caretRect: caretRect, inputFrameRect: fieldFrame, onPress: onPress)
     }
 
-    /// Shows the popup at the selection's end. With `takesKeyboard` it also becomes key, so its
-    /// keystrokes reach the popup rather than the edited app; a notice passes false and leaves the
-    /// host's keyboard alone. Hides the button first: the popup replaces it.
+    /// Shows the popup beside the rewrite icon when it is on screen (else at `anchor`). With
+    /// `takesKeyboard` it also becomes key, so its keystrokes reach the popup rather than the edited
+    /// app; a notice passes false and leaves the host's keyboard alone.
     func showPopup(near anchor: CGRect, model: SelectionRewritePopupModel, takesKeyboard: Bool) {
-        buttonPanel?.orderOut(nil)
-        popupAnchor = anchor
+        popupAnchor = indicator.rewriteIconFrame ?? anchor
         let panel = popupPanel ?? Self.makePanel()
         popupPanel = panel
         let hosting = FirstClickHostingView(rootView: SelectionRewritePopupView(model: model))
@@ -72,12 +63,12 @@ final class SelectionRewritePanelController {
         panel.makeKey()
     }
 
-    func hideButton() { buttonPanel?.orderOut(nil) }
+    func hideButton() { indicator.endRewrite() }
 
     /// Closes both panels. Takes the keyboard back first (`allowsKey = false`) so that no later
     /// `makeKey` call can pull focus into a panel that is already gone.
     func hideAll() {
-        buttonPanel?.orderOut(nil)
+        indicator.endRewrite()
         popupPanel?.allowsKey = false
         popupPanel?.orderOut(nil)
     }
@@ -113,8 +104,8 @@ final class SelectionRewritePanelController {
     }
 }
 
-/// A borderless panel that refuses key status unless `allowsKey` is set. The popup sets it while it
-/// is open; the button panel never sets it, so the button can never take the keyboard.
+/// A borderless panel that refuses key status unless `allowsKey` is set, which the popup does
+/// while it is open.
 private final class RewritePanel: NSPanel {
     var allowsKey = false
     override var canBecomeKey: Bool { allowsKey }

@@ -135,7 +135,10 @@ final class SelectionRewriteCoordinator {
         // A selection the user already dismissed keeps its shortcut but not its button.
         let isDismissed = dismissedTarget != nil && dismissedTarget == target
         if prefs.showsButtonOnSelection, !isDismissed {
-            presenter.showButton(near: input.caretRect) { [weak self] in self?.openPopup() }
+            // The button replaces the field-edge Cotabby icon, so it is placed from the field's own frame.
+            presenter.showButton(caretRect: input.caretRect, fieldFrame: input.elementFrameRect ?? input.inputFrameRect) { [weak self] in
+                self?.openPopup()
+            }
         }
     }
 
@@ -439,7 +442,7 @@ final class SelectionRewriteCoordinator {
 @MainActor protocol SelectionRewritePresenting: AnyObject {
     var isPopupVisible: Bool { get }
     var isPopupKey: Bool { get }
-    func showButton(near anchor: CGRect, onPress: @escaping () -> Void)
+    func showButton(caretRect: CGRect, fieldFrame: CGRect?, onPress: @escaping () -> Void)
     /// `takesKeyboard` is true for a popup the user opened (it needs typing and Return) and false for a
     /// notice, which must not swallow the user's keystrokes while it is on screen.
     func showPopup(near anchor: CGRect, model: SelectionRewritePopupModel, takesKeyboard: Bool)

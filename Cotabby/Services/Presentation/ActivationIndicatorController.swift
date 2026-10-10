@@ -19,7 +19,11 @@ final class ActivationIndicatorController {
         let view = ClickableHostingView(rootView: AnyView(EmptyView()))
         view.onClick = { [weak self] in
             guard let self else { return }
-            self.onClick?(self.panel.frame)
+            if let onRewritePress = self.onRewritePress {
+                onRewritePress()
+            } else {
+                self.onClick?(self.panel.frame)
+            }
         }
         return view
     }()
@@ -51,6 +55,42 @@ final class ActivationIndicatorController {
 
     private var isVisible = false
 
+    /// Set while selection rewrite owns the icon (`showRewrite`): a click opens the rewrite popup
+    /// instead of the field-scope popup, and focus-driven `show`/`hide` calls leave the icon alone,
+    /// because a selection makes the field "not supported" for autocomplete and would hide it.
+    private var onRewritePress: (() -> Void)?
+
+    /// The icon's screen frame while it is the rewrite button, so the popup can open beside it.
+    var rewriteIconFrame: CGRect? { onRewritePress != nil && panel.isVisible ? panel.frame : nil }
+
+    /// Turns the field-edge icon into the rewrite button for the current selection, at the same place
+    /// the Cotabby icon sits (just outside the field's left edge), whatever the indicator setting:
+    /// the rewrite button has its own setting in Settings → Rewrite.
+    func showRewrite(caretRect: CGRect, inputFrameRect: CGRect?, onPress: @escaping () -> Void) {
+        onRewritePress = onPress
+        guard Self.isUsableCaret(caretRect) else {
+            panel.orderOut(nil)
+            isVisible = false
+            return
+        }
+        place(view: FieldEdgeIconIndicatorView(rewrite: true), caretRect: caretRect, inputFrameRect: inputFrameRect)
+    }
+
+    /// Gives the icon back to focus-driven control and hides it; the next focus update shows the
+    /// Cotabby icon again where autocomplete applies.
+    func endRewrite() {
+        guard onRewritePress != nil else { return }
+        onRewritePress = nil
+        panel.orderOut(nil)
+        isVisible = false
+        // The focus update for the same change may already have run (and been ignored while rewrite
+        // owned the icon), so ask for the normal icon now instead of waiting for the next one.
+        onRewriteEnded?()
+    }
+
+    /// Called after `endRewrite()` gives the icon back; `AppDelegate` re-evaluates the normal icon.
+    var onRewriteEnded: (() -> Void)?
+
     /// Shows or hides the field-edge Cotabby icon indicator.
     func show(
         enabled: Bool,
@@ -58,6 +98,8 @@ final class ActivationIndicatorController {
         inputFrameRect: CGRect?,
         dimmed: Bool = false
     ) {
+        // Selection rewrite owns the icon until it calls `endRewrite()`.
+        guard onRewritePress == nil else { return }
         guard enabled else {
             hide(reason: "Activation indicator hidden because it is disabled.")
             return
@@ -68,7 +110,12 @@ final class ActivationIndicatorController {
             return
         }
 
-        contentView.rootView = AnyView(FieldEdgeIconIndicatorView(dimmed: dimmed))
+        place(view: FieldEdgeIconIndicatorView(dimmed: dimmed), caretRect: caretRect, inputFrameRect: inputFrameRect)
+    }
+
+    /// Renders `view` and puts the panel just outside the field's edge.
+    private func place(view: FieldEdgeIconIndicatorView, caretRect: CGRect, inputFrameRect: CGRect?) {
+        contentView.rootView = AnyView(view)
         contentView.layoutSubtreeIfNeeded()
         let contentSize = contentView.fittingSize
         let origin = fieldEdgeIconOrigin(
@@ -89,6 +136,7 @@ final class ActivationIndicatorController {
 
     /// Hides the indicator when Cotabby is not actively supporting the current field.
     func hide(reason _: String) {
+        guard onRewritePress == nil else { return }
         panel.orderOut(nil)
         isVisible = false
     }

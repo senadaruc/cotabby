@@ -14,7 +14,10 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         var isPopupKey = false
         var buttonPress: (() -> Void)?
         var popupModel: SelectionRewritePopupModel?
-        func showButton(near anchor: CGRect, onPress: @escaping () -> Void) { buttonPress = onPress }
+        var buttonFieldFrame: CGRect?
+        func showButton(caretRect: CGRect, fieldFrame: CGRect?, onPress: @escaping () -> Void) {
+            buttonPress = onPress; buttonFieldFrame = fieldFrame
+        }
         var takesKeyboardCalls: [Bool] = []
         func showPopup(near anchor: CGRect, model: SelectionRewritePopupModel, takesKeyboard: Bool) {
             popupModel = model; isPopupVisible = true; buttonPress = nil; takesKeyboardCalls.append(takesKeyboard)
@@ -113,6 +116,14 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         presenter.buttonPress?()
         XCTAssertNotNil(presenter.popupModel)
         XCTAssertEqual(presenter.popupModel?.phase, .actions)
+    }
+
+    /// The button takes the place of the field-edge Cotabby icon, so it needs the field's own frame;
+    /// placed at the caret it covered the selection's first letters (WhatsApp, 2026-10-10).
+    func test_buttonIsPlacedFromTheFieldFrame() async {
+        let (_, presenter, _, _, _) = make()
+        await send(snapshot(selected: draft))
+        XCTAssertEqual(presenter.buttonFieldFrame, CGRect(x: 0, y: 0, width: 240, height: 32))
     }
 
     func test_buttonOffShowsNothingUntilShortcut() async {

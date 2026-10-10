@@ -101,6 +101,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activationIndicatorController.onClick = { [weak self] iconFrame in
             self?.toggleFieldScopeMenu(anchorRect: iconFrame)
         }
+        activationIndicatorController.onRewriteEnded = { [weak self] in
+            guard let self else { return }
+            self.updateActivationIndicator(for: self.focusModel.snapshot)
+        }
 
         focusModel.$snapshot
             .sink { [weak self] snapshot in

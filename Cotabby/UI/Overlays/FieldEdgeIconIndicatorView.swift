@@ -10,17 +10,26 @@ struct FieldEdgeIconIndicatorView: View {
     /// Autocomplete is off in this app or window. The icon stays (it is how the user turns it back
     /// on) but fades so it reads as "Cotabby is here, but paused".
     var dimmed = false
+    /// Text is selected and can be rewritten: the icon becomes the rewrite button (a wand), so the
+    /// affordance stays at the field's edge instead of a second button covering the selection.
+    var rewrite = false
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .fill(Color(red: 0.18, green: 0.19, blue: 0.21))
-            Image("MenuBarCatIcon")
-                .renderingMode(.template)
-                .resizable()
-                .scaledToFit()
-                .frame(height: 9.1)
-                .foregroundStyle(.white)
+            if rewrite {
+                Image(systemName: "wand.and.stars")
+                    .font(.system(size: 8.5, weight: .semibold))
+                    .foregroundStyle(.white)
+            } else {
+                Image("MenuBarCatIcon")
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(height: 9.1)
+                    .foregroundStyle(.white)
+            }
         }
         .frame(width: side, height: side)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
