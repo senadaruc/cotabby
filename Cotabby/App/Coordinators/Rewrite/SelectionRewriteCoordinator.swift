@@ -107,9 +107,7 @@ final class SelectionRewriteCoordinator {
         if presenter.isPopupKey, snapshot.context == nil || snapshot.bundleIdentifier == Bundle.main.bundleIdentifier {
             return
         }
-        guard let input = snapshot.context,
-              SelectionRewriteEligibility.verdict(for: input, appAllowed: isAppAllowed(input.bundleIdentifier)) == .eligible
-        else {
+        guard let input = rewritableInput(in: snapshot) else {
             close()
             return
         }
@@ -142,12 +140,24 @@ final class SelectionRewriteCoordinator {
 
     /// ⌃⌥R: open the popup for the current selection.
     func handleShortcut() {
-        if target == nil, let input = currentSnapshot().context,
-           SelectionRewriteEligibility.verdict(for: input, appAllowed: isAppAllowed(input.bundleIdentifier)) == .eligible {
+        if target == nil, let input = rewritableInput(in: currentSnapshot()) {
             target = SelectionRewriteTarget(snapshot: input)
             targetInput = input
         }
         openPopup()
+    }
+
+    /// The field's input when the selection may arm the button and shortcut: an eligible selection, or
+    /// one that is only too long (the popup then says so). Credential fields are never armed, even
+    /// when the focus resolver kept their context.
+    private func rewritableInput(in snapshot: FocusSnapshot) -> FocusedInputSnapshot? {
+        guard snapshot.capability != .blocked(CredentialFieldDetector.blockedReason),
+              let input = snapshot.context
+        else { return nil }
+        switch SelectionRewriteEligibility.verdict(for: input, appAllowed: isAppAllowed(input.bundleIdentifier)) {
+        case .eligible, .tooLong: return input
+        case .noSelection, .tooShort, .ineligible: return nil
+        }
     }
 
     // MARK: - The popup

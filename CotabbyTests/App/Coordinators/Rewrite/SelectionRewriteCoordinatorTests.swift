@@ -226,6 +226,31 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         XCTAssertNil(presenter.buttonPress)
     }
 
+    func test_tooLongSelectionShowsTheMessage() async {
+        let (_, presenter, _, _, _) = make()
+        let long = String(repeating: "word ", count: 401) // 2,005 characters, over the 2,000 limit
+        await send(snapshot(selected: long))
+        XCTAssertNotNil(presenter.buttonPress)
+        presenter.buttonPress?()
+        XCTAssertEqual(presenter.popupModel?.phase, .failed("Selection too long to rewrite."))
+    }
+
+    func test_credentialFieldShowsNoButton() async {
+        let (coordinator, presenter, _, _, _) = make()
+        let input = CotabbyTestFixtures.focusedInputSnapshot(
+            bundleIdentifier: "net.whatsapp.WhatsApp", elementIdentifier: "composer", precedingText: "",
+            selection: NSRange(location: 0, length: (draft as NSString).length),
+            selectedText: draft, hostSelection: NSRange(location: 0, length: (draft as NSString).length)
+        )
+        let credential = FocusSnapshot(applicationName: "WhatsApp", bundleIdentifier: "net.whatsapp.WhatsApp",
+                                       capability: .blocked(CredentialFieldDetector.blockedReason), context: input)
+        await send(credential)
+        XCTAssertNil(presenter.buttonPress)
+        // The shortcut must not open the popup for a credential field either.
+        coordinator.handleShortcut()
+        XCTAssertNil(presenter.popupModel)
+    }
+
     func test_shortcutReopensAfterEsc() async {
         let (coordinator, presenter, _, _, _) = make()
         await send(snapshot(selected: draft))
