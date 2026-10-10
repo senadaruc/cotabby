@@ -44,7 +44,15 @@ final class SelectionRewriteCoordinator {
     private var rewriteTask: Task<Void, Never>?
     private var model: SelectionRewritePopupModel?
     private var lastAction: RewriteAction?
-    private var lastFacts: [String] = []
+    /// Identifies the newest rewrite run. A superseded run (Retry, or another action) can still throw
+    /// or resolve after its replacement started, so every write after an `await` compares its own
+    /// id with this before touching the popup. `close()` bumps it too, so closing cancels in-flight runs.
+    private var runID = 0
+    /// True from the moment Replace starts until its paste or copy notice is done. Focus snapshots
+    /// arriving in that window reflect our own panel and paste, not the user moving on.
+    private var isReplacing = false
+    /// Keeps the disclosure text in step with the memory toggle while one popup is open.
+    private var disclosureCancellable: AnyCancellable?
 
     static let escapeKeyCode: CGKeyCode = 53
 
@@ -90,6 +98,7 @@ final class SelectionRewriteCoordinator {
     // MARK: - Observing the selection
 
     private func observe(_ snapshot: FocusSnapshot) {
+        if isReplacing { return }
         // While the user types in the popup's instruction box, focus reports Cotabby or no field;
         // that is not the user leaving the selection.
         if presenter.isPopupKey, snapshot.context == nil || snapshot.bundleIdentifier == Bundle.main.bundleIdentifier {
@@ -148,10 +157,11 @@ final class SelectionRewriteCoordinator {
         if !engine.memoryAllowed {
             model.memoryNote = "Memory stays on this Mac. Allow it in Settings → Rewrite to use it with your API model."
         }
-        if engine.activeProviderSendsOffDevice, let host = engine.activeHostName {
-            model.disclosure = engine.memoryAllowed
-                ? "The selected text and memory facts are sent to \(host)."
-                : "The selected text is sent to \(host)."
+        // The disclosure names memory only while the toggle is on, so it is recomputed on every toggle
+        // change. `$usesMemory` emits the new value when it is set, so the sink reads it directly.
+        disclosureCancellable = model.$usesMemory.sink { [weak self, weak model] usesMemory in
+            guard let self, let model else { return }
+            model.disclosure = self.disclosure(usesMemory: usesMemory)
         }
         model.onAction = { [weak self] in self?.run($0) }
         model.onRetry = { [weak self] in if let action = self?.lastAction { self?.run(action) } }
@@ -167,40 +177,62 @@ final class SelectionRewriteCoordinator {
         }
     }
 
+    /// The disclosure for the current toggle: memory facts are named only while memory is on.
+    /// Empty when the provider stays on this Mac.
+    private func disclosure(usesMemory: Bool) -> String? {
+        guard engine.activeProviderSendsOffDevice, let host = engine.activeHostName else { return nil }
+        return usesMemory
+            ? "The selected text and memory facts are sent to \(host)."
+            : "The selected text is sent to \(host)."
+    }
+
     private func run(_ action: RewriteAction) {
         guard let input = targetInput, let model else { return }
         lastAction = action
         rewriteTask?.cancel()
+        // A new run id supersedes any run still in flight for this popup (Retry reuses the same model,
+        // so the model check alone cannot tell the two apart).
+        runID += 1
+        let id = runID
         model.phase = .generating("")
         presenter.refit()
         let wantsMemory = model.usesMemory && engine.memoryAllowed
+        // True only while this run is still the newest for this popup and has not been cancelled.
+        let isCurrent = { [weak self, weak model] () -> Bool in
+            guard let self, let model else { return false }
+            return self.runID == id && self.model === model && !Task.isCancelled
+        }
         rewriteTask = Task { [weak self] in
             guard let self else { return }
             var context = RewriteMemoryContext.empty
             if wantsMemory {
-                if let found = await self.memory.gather(for: input, selection: input.selectedText) {
+                let found = await self.memory.gather(for: input, selection: input.selectedText)
+                guard isCurrent() else { return }
+                if let found {
                     context = found
                 } else {
                     model.memoryNote = "No memory for this person."
                 }
             }
-            guard !Task.isCancelled, self.model === model else { return }
+            guard isCurrent() else { return }
             do {
                 let text = try await self.engine.rewrite(
                     RewriteRequest(selection: input.selectedText, action: action, memory: context),
-                    onPartial: { [weak self, weak model] partial in
-                        guard let model, self?.model === model, case .generating = model.phase else { return }
+                    onPartial: { partial in
+                        guard isCurrent(), case .generating = model.phase else { return }
                         model.phase = .generating(partial)
                     }
                 )
-                guard !Task.isCancelled, self.model === model else { return }
-                self.lastFacts = context.facts.map(\.text)
-                let unsupported = AnswerGroundingPolicy.unsupportedSpecifics(in: text, facts: self.lastFacts, question: input.selectedText)
+                guard isCurrent() else { return }
+                let facts = context.facts.map(\.text)
+                let unsupported = AnswerGroundingPolicy.unsupportedSpecifics(in: text, facts: facts, question: input.selectedText)
                 model.phase = .preview(text: text, unsupported: unsupported)
             } catch is CancellationError {
                 return
             } catch {
-                guard self.model === model else { return }
+                // A superseded run can fail with URLError(.cancelled) rather than CancellationError;
+                // the token check keeps that failure off the newer run's popup.
+                guard isCurrent() else { return }
                 model.phase = .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
             }
             self.presenter.refit()
@@ -209,11 +241,25 @@ final class SelectionRewriteCoordinator {
 
     // MARK: - Replace and copy
 
+    /// Starts Replace. Guarded synchronously so a stale or ungrounded preview never starts the flow;
+    /// `isReplacing` is set here, before the task runs, so no focus snapshot slips in between.
     private func replace() {
+        guard let model, target != nil, case .preview(_, let unsupported) = model.phase, unsupported.isEmpty else { return }
+        isReplacing = true
+        Task { @MainActor in await self.performReplace() }
+    }
+
+    private func performReplace() async {
+        defer { isReplacing = false }
         guard let model, let target, case .preview(let text, let unsupported) = model.phase, unsupported.isEmpty else { return }
         let wasTyping = presenter.isPopupKey
         presenter.hideAll()
-        if wasTyping { output.activate(pid: target.processIdentifier) }
+        if wasTyping {
+            output.activate(pid: target.processIdentifier)
+            // Activation is not instant: give the host time to take key status back before the focus
+            // read and validation below, otherwise they see the popup's own field.
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
         refreshFocus()
         var outcome = SelectionReplaceValidator.outcome(target: target, current: currentSnapshot().context)
         if outcome == .restoreSelectionThenReplace, let range = target.hostSelection,
@@ -245,9 +291,12 @@ final class SelectionRewriteCoordinator {
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 guard let self else { return }
                 self.refreshFocus()
-                if let input = self.currentSnapshot().context,
-                   SelectionRewriteTarget.fieldKey(for: input) == target.fieldKey,
-                   (input.precedingText + input.selectedText + input.trailingText).contains(probe) {
+                // The user moved on (another field, or no field): stop without copying. The paste most
+                // likely landed in the field they left, and copying now would overwrite their clipboard.
+                guard let input = self.currentSnapshot().context,
+                      SelectionRewriteTarget.fieldKey(for: input) == target.fieldKey
+                else { return }
+                if (input.precedingText + input.selectedText + input.trailingText).contains(probe) {
                     return
                 }
             }
@@ -280,6 +329,9 @@ final class SelectionRewriteCoordinator {
         rewriteTask?.cancel()
         stableTask = nil
         rewriteTask = nil
+        // Invalidates any run still awaiting the engine: its writes check the token before touching the popup.
+        runID += 1
+        disclosureCancellable = nil
         model = nil
         target = nil
         targetInput = nil

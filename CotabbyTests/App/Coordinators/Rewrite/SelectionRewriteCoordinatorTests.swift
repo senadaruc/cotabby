@@ -40,9 +40,18 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         var result = "Please let me know if the dates work for you."
         var gate: CheckedContinuation<Void, Never>?
         var holds = false
+        /// When true, the first call waits on `gate` and then throws `URLError(.cancelled)`, the way a
+        /// superseded URLSession request fails. Later calls return at once.
+        var cancelFirstAfterGate = false
+        private(set) var calls = 0
         private(set) var requests: [RewriteRequest] = []
         func rewrite(_ request: RewriteRequest, onPartial: @escaping @MainActor (String) -> Void) async throws -> String {
             requests.append(request)
+            calls += 1
+            if calls == 1 && cancelFirstAfterGate {
+                await withCheckedContinuation { gate = $0 }
+                throw URLError(.cancelled)
+            }
             if holds { await withCheckedContinuation { gate = $0 } }
             onPartial(result)
             return result
@@ -59,9 +68,9 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
     private var subject = PassthroughSubject<FocusSnapshot, Never>()
     private var current = FocusSnapshot.inactive
 
-    private func snapshot(selected: String, element: String = "composer") -> FocusSnapshot {
+    private func snapshot(selected: String, element: String = "composer", preceding: String = "Dear Richard, ") -> FocusSnapshot {
         let input = CotabbyTestFixtures.focusedInputSnapshot(
-            bundleIdentifier: "net.whatsapp.WhatsApp", elementIdentifier: element, precedingText: "Dear Richard, ",
+            bundleIdentifier: "net.whatsapp.WhatsApp", elementIdentifier: element, precedingText: preceding,
             selection: NSRange(location: 14, length: (selected as NSString).length),
             selectedText: selected, hostSelection: NSRange(location: 14, length: (selected as NSString).length)
         )
@@ -121,6 +130,7 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         try? await Task.sleep(nanoseconds: 20_000_000)
         XCTAssertEqual(presenter.popupModel?.phase, .preview(text: runner.result, unsupported: []))
         presenter.popupModel?.onReplace()
+        try? await Task.sleep(nanoseconds: 30_000_000)
         XCTAssertEqual(output.pasted, [runner.result])
         XCTAssertNil(presenter.popupModel, "The popup closes after a successful replace")
     }
@@ -133,6 +143,7 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         try? await Task.sleep(nanoseconds: 20_000_000)
         current = snapshot(selected: "something else entirely here")
         presenter.popupModel?.onReplace()
+        try? await Task.sleep(nanoseconds: 30_000_000)
         XCTAssertTrue(output.pasted.isEmpty)
         XCTAssertEqual(output.copied, [runner.result])
     }
@@ -185,6 +196,7 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         try? await Task.sleep(nanoseconds: 20_000_000)
         XCTAssertEqual(presenter.popupModel?.phase, .preview(text: runner.result, unsupported: ["Arnaud"]))
         presenter.popupModel?.onReplace()
+        try? await Task.sleep(nanoseconds: 30_000_000)
         XCTAssertTrue(output.pasted.isEmpty)
     }
 
@@ -195,6 +207,7 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         presenter.popupModel?.onAction(.fixGrammar)
         try? await Task.sleep(nanoseconds: 20_000_000)
         presenter.popupModel?.onReplace()
+        try? await Task.sleep(nanoseconds: 30_000_000)
         // The field still shows the old text: the paste never landed.
         try? await Task.sleep(nanoseconds: 1_200_000_000)
         XCTAssertEqual(output.copied, [runner.result])
@@ -206,5 +219,63 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         XCTAssertNotNil(presenter.buttonPress)
         await send(snapshot(selected: ""))
         XCTAssertNil(presenter.buttonPress)
+    }
+
+    func test_retryWhileGeneratingIgnoresTheSupersededRun() async {
+        let (_, presenter, _, runner, _) = make()
+        runner.cancelFirstAfterGate = true
+        await send(snapshot(selected: draft))
+        presenter.buttonPress?()
+        presenter.popupModel?.onAction(.rewrite)
+        try? await Task.sleep(nanoseconds: 10_000_000)
+        let firstGate = runner.gate
+        // Retry supersedes the held first run; the second run completes straight away.
+        runner.result = "Please let me know if the dates work for you soon."
+        presenter.popupModel?.onRetry()
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        // The superseded run now fails with URLError(.cancelled), as a cancelled URLSession request does.
+        firstGate?.resume()
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertEqual(presenter.popupModel?.phase, .preview(text: runner.result, unsupported: []))
+    }
+
+    func test_noMemoryForThisPersonNote() async {
+        let (_, presenter, _, _, _) = make()
+        await send(snapshot(selected: draft))
+        presenter.buttonPress?()
+        presenter.popupModel?.usesMemory = true
+        presenter.popupModel?.onAction(.rewrite)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertEqual(presenter.popupModel?.memoryNote, "No memory for this person.")
+    }
+
+    func test_disclosureFollowsTheMemoryToggle() async {
+        let (_, presenter, _, runner, _) = make()
+        runner.activeProviderSendsOffDevice = true
+        runner.activeHostName = "api.example.com"
+        await send(snapshot(selected: draft))
+        presenter.buttonPress?()
+        XCTAssertEqual(presenter.popupModel?.disclosure, "The selected text is sent to api.example.com.")
+        presenter.popupModel?.usesMemory = true
+        try? await Task.sleep(nanoseconds: 5_000_000)
+        XCTAssertEqual(presenter.popupModel?.disclosure, "The selected text and memory facts are sent to api.example.com.")
+        presenter.popupModel?.usesMemory = false
+        try? await Task.sleep(nanoseconds: 5_000_000)
+        XCTAssertEqual(presenter.popupModel?.disclosure, "The selected text is sent to api.example.com.")
+    }
+
+    func test_verifySucceedsWithoutCopy() async {
+        let (_, presenter, output, runner, _) = make()
+        await send(snapshot(selected: draft))
+        presenter.buttonPress?()
+        presenter.popupModel?.onAction(.fixGrammar)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        presenter.popupModel?.onReplace()
+        try? await Task.sleep(nanoseconds: 30_000_000)
+        // The host shows the rewrite in the same field now, so the poll sees it and nothing is copied.
+        current = snapshot(selected: "", preceding: "Dear Richard, " + runner.result)
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        XCTAssertEqual(output.pasted, [runner.result])
+        XCTAssertTrue(output.copied.isEmpty)
     }
 }
