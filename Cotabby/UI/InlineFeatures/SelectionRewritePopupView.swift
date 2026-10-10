@@ -38,7 +38,6 @@ final class SelectionRewritePopupModel: ObservableObject {
     var onCopy: () -> Void = {}
     var onRetry: () -> Void = {}
     var onClose: () -> Void = {}
-    var onFocusInstruction: () -> Void = {}
 }
 
 /// Renders `SelectionRewritePopupModel.phase` as one card. `@ObservedObject` subscribes the view to
@@ -56,6 +55,9 @@ struct SelectionRewritePopupView: View {
             case .failed(let message): failure(message)
             case .notice(let message): Text(message).font(.callout).foregroundStyle(.secondary)
             }
+            // The disclosure stays on screen in every phase: while the text is generating and in the
+            // preview too, since the selected text is sent off-device whichever phase is showing.
+            if let disclosure = model.disclosure { Text(disclosure).font(.caption).foregroundStyle(.orange) }
         }
         .padding(12)
         .frame(width: 360, alignment: .leading)
@@ -78,15 +80,11 @@ struct SelectionRewritePopupView: View {
             HStack {
                 TextField("Custom instruction (e.g. make it warmer)", text: $model.customInstruction)
                     .textFieldStyle(.roundedBorder)
-                    // Tapping the box asks the panel controller for keyboard focus; the panel is
-                    // non-activating, so without this request typing would go to the edited app.
-                    .onTapGesture { model.onFocusInstruction() }
                     .onSubmit { submitCustom() }
                 Button("Go") { submitCustom() }.disabled(model.customInstruction.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             Toggle("Use memory", isOn: $model.usesMemory).disabled(!model.memoryToggleEnabled)
             if let note = model.memoryNote { Text(note).font(.caption).foregroundStyle(.secondary) }
-            if let disclosure = model.disclosure { Text(disclosure).font(.caption).foregroundStyle(.orange) }
         }
     }
 

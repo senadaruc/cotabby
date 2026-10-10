@@ -969,8 +969,13 @@ enum AXHelper {
 
     /// Selects `range` in the focused element of the app `pid`, through `kAXSelectedTextRangeAttribute`.
     /// Used to put back a selection the user made before Cotabby's rewrite popup took the keyboard.
-    /// `AXValueCreate` boxes the `CFRange`; the element is the app's own focused element, so the write
-    /// lands in the field the user was editing or fails (returns false) without side effects.
+    /// `AXValueCreate` boxes the `CFRange` into a new AXValue. It returns a +1 Core Foundation object,
+    /// and Swift's ARC takes ownership of it when it is bridged to the `AXValue` binding here, so there
+    /// is no manual `CFRelease`; a nil return means nothing was allocated and we return false. The
+    /// `&cfRange` inout pointer is only read during the `AXValueCreate` call, so the stack local is safe.
+    /// The element is the app's own focused element, so the write lands in the field the user was
+    /// editing. A non-`.success` `AXError` (no focused element, a field that refuses the attribute,
+    /// or a host that has since moved focus) returns false with no retry and no other side effect.
     static func setSelectedTextRange(_ range: NSRange, onFocusedElementOf pid: pid_t) -> Bool {
         guard let element = focusedElement(forApplicationPID: pid) else { return false }
         var cfRange = CFRange(location: range.location, length: range.length)

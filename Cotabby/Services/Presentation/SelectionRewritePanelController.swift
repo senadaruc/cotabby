@@ -4,16 +4,19 @@ import SwiftUI
 /// File overview:
 /// The two floating surfaces of selection rewrite: the small Cotabby button at the selection's end,
 /// and the popup that replaces it when pressed. Both are non-activating panels (like
-/// `AnswerCardController`), so a click never takes focus from the app being edited and its
-/// selection stays put. The popup can become key only after `allowKeyboard()`, which the
-/// coordinator calls when the user clicks into the custom instruction box. Owned by
-/// `SelectionRewriteCoordinator`.
+/// `AnswerCardController`), so the host app stays the active app and keeps its selection. The popup
+/// takes the keyboard as soon as it opens, so Return and typing go to the popup and never fall
+/// through to the edited app (Return in a chat app would send the message). The button panel never
+/// becomes key. Owned by `SelectionRewriteCoordinator`.
 @MainActor
 final class SelectionRewritePanelController {
     /// Two separate panels rather than one: the small button and the popup have different sizes and
     /// lifetimes, and the button is hidden the moment the popup opens.
     private var buttonPanel: RewritePanel?
     private var popupPanel: RewritePanel?
+    /// The caret rect the popup was last opened at. Kept so `refit()` can recompute placement for
+    /// the new content size with the same rule `showPopup` used.
+    private var popupAnchor: CGRect?
 
     var isPopupVisible: Bool { popupPanel?.isVisible ?? false }
     var isPopupKey: Bool { popupPanel?.isKeyWindow ?? false }
@@ -36,37 +39,32 @@ final class SelectionRewritePanelController {
         panel.orderFrontRegardless()
     }
 
-    /// Shows the popup under the selection's end (or above it when there is no room below), clamped
-    /// to the screen that holds the anchor. Hides the button first: the popup replaces it.
+    /// Shows the popup at the selection's end and makes it key, so its keystrokes reach the popup
+    /// rather than the edited app. Hides the button first: the popup replaces it.
     func showPopup(near anchor: CGRect, model: SelectionRewritePopupModel) {
         buttonPanel?.orderOut(nil)
+        popupAnchor = anchor
         let panel = popupPanel ?? Self.makePanel()
         popupPanel = panel
-        panel.allowsKey = false
         let hosting = FirstClickHostingView(rootView: SelectionRewritePopupView(model: model))
         panel.contentView = hosting
-        let size = hosting.fittingSize
-        let screen = NSScreen.screens.first { $0.frame.contains(anchor.origin) }?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
-        var origin = CGPoint(x: anchor.minX, y: anchor.minY - size.height - 8)
-        if origin.y < screen.minY { origin.y = anchor.maxY + 8 }
-        origin.x = min(max(origin.x, screen.minX + 8), screen.maxX - size.width - 8)
-        panel.setFrame(CGRect(origin: origin, size: size), display: true)
+        place(panel, size: hosting.fittingSize)
         panel.orderFrontRegardless()
+        // Keyboard only after the panel is on screen. `allowsKey` is what lets an NSPanel with
+        // `.nonactivatingPanel` become key at all; the host app is not activated by this.
+        panel.allowsKey = true
+        panel.makeKey()
     }
 
-    /// Resizes the popup to its content after a phase change (preview text arrives).
-    /// The top edge is kept fixed, so the popup grows downward from where it was opened.
+    /// Resizes the popup to its content after a phase change (preview text arrives), then places it
+    /// again with the same rule as `showPopup`, so it stays on screen as it grows.
     func refit() {
         guard let panel = popupPanel, let view = panel.contentView else { return }
-        let size = view.fittingSize
-        var frame = panel.frame
-        frame.origin.y += frame.height - size.height
-        frame.size = size
-        panel.setFrame(frame, display: true)
+        place(panel, size: view.fittingSize)
     }
 
-    /// Lets the popup take the keyboard for the instruction box. The panel stays non-activating, so
-    /// the edited app remains the active app; only keystrokes come here until the popup closes.
+    /// Lets the popup take the keyboard for the instruction box. `showPopup` already does this, so
+    /// this is only a second request if the popup lost key status while open.
     func allowKeyboard() {
         guard let panel = popupPanel else { return }
         panel.allowsKey = true
@@ -81,6 +79,21 @@ final class SelectionRewritePanelController {
         buttonPanel?.orderOut(nil)
         popupPanel?.allowsKey = false
         popupPanel?.orderOut(nil)
+    }
+
+    /// The one placement rule for the popup, used by both `showPopup` and `refit`: below the caret
+    /// when the popup fits there, otherwise above it, then clamped inside the visible frame of the
+    /// screen that holds the caret's midpoint. The midpoint is used because the caret's origin can sit
+    /// on a screen edge, and the origin can fall outside every screen's frame.
+    private func place(_ panel: RewritePanel, size: CGSize) {
+        guard let anchor = popupAnchor else { return }
+        let midpoint = CGPoint(x: anchor.midX, y: anchor.midY)
+        let screen = (NSScreen.screens.first { $0.frame.contains(midpoint) } ?? NSScreen.main)?.visibleFrame ?? .zero
+        var origin = CGPoint(x: anchor.minX, y: anchor.minY - size.height - 8)
+        if origin.y < screen.minY { origin.y = anchor.maxY + 8 }
+        origin.x = min(max(origin.x, screen.minX + 8), screen.maxX - size.width - 8)
+        origin.y = min(max(origin.y, screen.minY + 8), screen.maxY - size.height - 8)
+        panel.setFrame(CGRect(origin: origin, size: size), display: true)
     }
 
     /// Built the same way as `AnswerCardController`'s panel: non-activating, floating above normal
@@ -99,8 +112,8 @@ final class SelectionRewritePanelController {
     }
 }
 
-/// A borderless panel that refuses key status by default. `allowsKey` is flipped on only while the
-/// instruction box needs typing, so the rest of the time the edited app keeps the keyboard.
+/// A borderless panel that refuses key status unless `allowsKey` is set. The popup sets it while it
+/// is open; the button panel never sets it, so the button can never take the keyboard.
 private final class RewritePanel: NSPanel {
     var allowsKey = false
     override var canBecomeKey: Bool { allowsKey }
