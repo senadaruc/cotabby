@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		8AA2F7120E835DE4A7DFF959 /* RewriteProviders.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48EAF9ACD4EFF5B795962B77 /* RewriteProviders.swift */; };
+		2242683CB06E2020167F4A17 /* RewriteProviders.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48EAF9ACD4EFF5B795962B77 /* RewriteProviders.swift */; };
+		2D68C561F06231CC876E04C9 /* APIRewriteProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20A2455CB64DE15D0928E78 /* APIRewriteProviderTests.swift */; };
 		AF744843163CD2CF4B560545 /* SelectionReplaceValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 259F19FA6D4639D591998BDB /* SelectionReplaceValidator.swift */; };
 		902742D3C1CFD586F7FEA9E5 /* SelectionReplaceValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 259F19FA6D4639D591998BDB /* SelectionReplaceValidator.swift */; };
 		B42EE94B81D25B1AF13C99D3 /* SelectionReplaceValidatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EB25254EDDF55EE07CAC23C /* SelectionReplaceValidatorTests.swift */; };
@@ -1313,6 +1316,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		48EAF9ACD4EFF5B795962B77 /* RewriteProviders.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewriteProviders.swift; sourceTree = "<group>"; };
+		F20A2455CB64DE15D0928E78 /* APIRewriteProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIRewriteProviderTests.swift; sourceTree = "<group>"; };
 		259F19FA6D4639D591998BDB /* SelectionReplaceValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionReplaceValidator.swift; sourceTree = "<group>"; };
 		7EB25254EDDF55EE07CAC23C /* SelectionReplaceValidatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionReplaceValidatorTests.swift; sourceTree = "<group>"; };
 		DA40937010EA6C7C085ECF01 /* RewriteOutputCleaner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewriteOutputCleaner.swift; sourceTree = "<group>"; };
@@ -2174,6 +2179,7 @@
 			isa = PBXGroup;
 			children = (
 				C3B850844147DA7C83FD5144 /* RewritePreferencesStore.swift */,
+				48EAF9ACD4EFF5B795962B77 /* RewriteProviders.swift */,
 			);
 			path = Rewrite;
 			sourceTree = "<group>";
@@ -2190,6 +2196,7 @@
 			isa = PBXGroup;
 			children = (
 				AD68F9211DB27716348178CB /* RewritePreferencesStoreTests.swift */,
+				F20A2455CB64DE15D0928E78 /* APIRewriteProviderTests.swift */,
 			);
 			path = Rewrite;
 			sourceTree = "<group>";
@@ -5284,6 +5291,7 @@
 				33765A26561DCD843A03205E /* TranslationPaneView.swift in Sources */,
 				7418E40356268EA32FF7E2A7 /* TranslationPreferencesStore.swift in Sources */,
 				01C93F250DE8E7D0109795F2 /* RewritePreferencesStore.swift in Sources */,
+				8AA2F7120E835DE4A7DFF959 /* RewriteProviders.swift in Sources */,
 				3265346744616CFE2583CB41 /* TranslationScrollFollow.swift in Sources */,
 				F60A94747732F706FD666925 /* TypefaceEvidence.swift in Sources */,
 				DA4693E09A0790D12F531CCA /* TypefaceMatcher.swift in Sources */,
@@ -5739,6 +5747,7 @@
 				4D8EAA5D687A54D5428258F6 /* TranslationPaneView.swift in Sources */,
 				88E36607074D2607730360C9 /* TranslationPreferencesStore.swift in Sources */,
 				5C84794F71A089219F8F8C7E /* RewritePreferencesStore.swift in Sources */,
+				2242683CB06E2020167F4A17 /* RewriteProviders.swift in Sources */,
 				0748A7928BFECA992ECB9815 /* TranslationScrollFollow.swift in Sources */,
 				2740742B866BC12043B81268 /* TypefaceEvidence.swift in Sources */,
 				9F8656C10B45DA6699A43787 /* TypefaceMatcher.swift in Sources */,
@@ -6054,6 +6063,7 @@
 				CF04C28598AF9A437990C8A4 /* SurfaceContextComposerTests.swift in Sources */,
 				15D7C2CFE930F62B88F07EA7 /* SymSpellCorrectorTests.swift in Sources */,
 				48F40C2DE77C509C4D8A8155 /* RewritePreferencesStoreTests.swift in Sources */,
+				2D68C561F06231CC876E04C9 /* APIRewriteProviderTests.swift in Sources */,
 				19284043DCEDC562269991EE /* SymSpellTests.swift in Sources */,
 				833A5A25C0F5B0E9A46DA04D /* SyntheticReplacePlannerTests.swift in Sources */,
 				E43B0EA04ED0B747CC8D9EBC /* SystemMetricsStoreTests.swift in Sources */,
