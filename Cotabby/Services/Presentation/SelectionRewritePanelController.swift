@@ -39,9 +39,10 @@ final class SelectionRewritePanelController {
         panel.orderFrontRegardless()
     }
 
-    /// Shows the popup at the selection's end and makes it key, so its keystrokes reach the popup
-    /// rather than the edited app. Hides the button first: the popup replaces it.
-    func showPopup(near anchor: CGRect, model: SelectionRewritePopupModel) {
+    /// Shows the popup at the selection's end. With `takesKeyboard` it also becomes key, so its
+    /// keystrokes reach the popup rather than the edited app; a notice passes false and leaves the
+    /// host's keyboard alone. Hides the button first: the popup replaces it.
+    func showPopup(near anchor: CGRect, model: SelectionRewritePopupModel, takesKeyboard: Bool) {
         buttonPanel?.orderOut(nil)
         popupAnchor = anchor
         let panel = popupPanel ?? Self.makePanel()
@@ -52,8 +53,8 @@ final class SelectionRewritePanelController {
         panel.orderFrontRegardless()
         // Keyboard only after the panel is on screen. `allowsKey` is what lets an NSPanel with
         // `.nonactivatingPanel` become key at all; the host app is not activated by this.
-        panel.allowsKey = true
-        panel.makeKey()
+        panel.allowsKey = takesKeyboard
+        if takesKeyboard { panel.makeKey() }
     }
 
     /// Resizes the popup to its content after a phase change (preview text arrives), then places it

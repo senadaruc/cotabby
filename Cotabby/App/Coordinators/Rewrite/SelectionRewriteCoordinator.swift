@@ -53,6 +53,9 @@ final class SelectionRewriteCoordinator {
     private var isReplacing = false
     /// Keeps the disclosure text in step with the memory toggle while one popup is open.
     private var disclosureCancellable: AnyCancellable?
+    /// The selection the user dismissed (✕, Esc, Copy, or a notice timing out). Its button stays hidden
+    /// while the selection is unchanged, but ⌃⌥R still reopens the popup for it. Cleared by `close()`.
+    private var dismissedTarget: SelectionRewriteTarget?
 
     static let escapeKeyCode: CGKeyCode = 53
 
@@ -130,7 +133,9 @@ final class SelectionRewriteCoordinator {
         hotkey?.install(keyCode: prefs.shortcutKeyCode, modifiers: prefs.shortcutModifiers) { [weak self] in
             DispatchQueue.main.async { self?.handleShortcut() }
         }
-        if prefs.showsButtonOnSelection {
+        // A selection the user already dismissed keeps its shortcut but not its button.
+        let isDismissed = dismissedTarget != nil && dismissedTarget == target
+        if prefs.showsButtonOnSelection, !isDismissed {
             presenter.showButton(near: input.caretRect) { [weak self] in self?.openPopup() }
         }
     }
@@ -167,12 +172,15 @@ final class SelectionRewriteCoordinator {
         model.onRetry = { [weak self] in if let action = self?.lastAction { self?.run(action) } }
         model.onReplace = { [weak self] in self?.replace() }
         model.onCopy = { [weak self] in self?.copyPreview() }
-        model.onClose = { [weak self] in self?.close() }
+        model.onClose = { [weak self] in self?.dismiss() }
+        if input.selectedText.count > SelectionRewriteEligibility.maximumCharacters {
+            model.phase = .failed(RewriteError.selectionTooLong.errorDescription ?? "Selection too long to rewrite.")
+        }
         self.model = model
-        presenter.showPopup(near: input.caretRect, model: model)
+        presenter.showPopup(near: input.caretRect, model: model, takesKeyboard: true)
         keyTap?.install { [weak self] keyCode, _ in
             guard keyCode == Self.escapeKeyCode else { return .pass }
-            DispatchQueue.main.async { self?.close() }
+            DispatchQueue.main.async { self?.dismiss() }
             return .consume
         }
     }
@@ -311,7 +319,7 @@ final class SelectionRewriteCoordinator {
     private func copyPreview() {
         guard let model, case .preview(let text, _) = model.phase else { return }
         output.copyToClipboard(text)
-        close()
+        dismiss()
     }
 
     private func copyAndNotify(_ text: String, reason: String) {
@@ -319,14 +327,34 @@ final class SelectionRewriteCoordinator {
         CotabbyLogger.app.info("Rewrite copied instead", metadata: ["category": "rewrite", "reason": .string(reason)])
         guard let model, let input = targetInput else { return close() }
         model.phase = .notice(reason)
-        presenter.showPopup(near: input.caretRect, model: model)
+        presenter.showPopup(near: input.caretRect, model: model, takesKeyboard: false)
         Task { [weak self, weak model] in
             try? await Task.sleep(nanoseconds: 2_500_000_000)
             guard let self, let model, self.model === model else { return }
-            self.close()
+            self.dismiss()
         }
     }
 
+    /// The user dismissed the popup (✕, Esc, Copy, or a notice timing out). Closes the popup and any
+    /// rewrite in flight, but keeps the selection target and the ⌃⌥R hotkey: `observe` does not re-arm an
+    /// unchanged selection, so dropping the target would leave the shortcut dead until the selection
+    /// changed. The button stays hidden for this selection (`dismissedTarget`).
+    private func dismiss() {
+        stableTask?.cancel()
+        rewriteTask?.cancel()
+        stableTask = nil
+        rewriteTask = nil
+        runID += 1
+        disclosureCancellable = nil
+        model = nil
+        lastAction = nil
+        keyTap?.remove()
+        presenter.hideAll()
+        dismissedTarget = target
+    }
+
+    /// Full teardown: the selection is gone or the user moved on (another selection, another field or
+    /// app, a successful Replace). Also removes the shortcut and forgets the dismissed selection.
     private func close() {
         stableTask?.cancel()
         rewriteTask?.cancel()
@@ -338,6 +366,7 @@ final class SelectionRewriteCoordinator {
         model = nil
         target = nil
         targetInput = nil
+        dismissedTarget = nil
         lastAction = nil
         keyTap?.remove()
         hotkey?.remove()
@@ -351,7 +380,9 @@ final class SelectionRewriteCoordinator {
     var isPopupVisible: Bool { get }
     var isPopupKey: Bool { get }
     func showButton(near anchor: CGRect, onPress: @escaping () -> Void)
-    func showPopup(near anchor: CGRect, model: SelectionRewritePopupModel)
+    /// `takesKeyboard` is true for a popup the user opened (it needs typing and Return) and false for a
+    /// notice, which must not swallow the user's keystrokes while it is on screen.
+    func showPopup(near anchor: CGRect, model: SelectionRewritePopupModel, takesKeyboard: Bool)
     func refit()
     func allowKeyboard()
     func hideButton()

@@ -15,7 +15,10 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         var buttonPress: (() -> Void)?
         var popupModel: SelectionRewritePopupModel?
         func showButton(near anchor: CGRect, onPress: @escaping () -> Void) { buttonPress = onPress }
-        func showPopup(near anchor: CGRect, model: SelectionRewritePopupModel) { popupModel = model; isPopupVisible = true; buttonPress = nil }
+        var takesKeyboardCalls: [Bool] = []
+        func showPopup(near anchor: CGRect, model: SelectionRewritePopupModel, takesKeyboard: Bool) {
+            popupModel = model; isPopupVisible = true; buttonPress = nil; takesKeyboardCalls.append(takesKeyboard)
+        }
         func refit() {}
         func allowKeyboard() { isPopupKey = true }
         func hideButton() { buttonPress = nil }
@@ -146,6 +149,8 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         try? await Task.sleep(nanoseconds: 30_000_000)
         XCTAssertTrue(output.pasted.isEmpty)
         XCTAssertEqual(output.copied, [runner.result])
+        // The copy notice is shown without taking the keyboard from the host.
+        XCTAssertEqual(presenter.takesKeyboardCalls.last, false)
     }
 
     func test_typingIntoHostWhileGeneratingClosesAndIgnoresResult() async {
@@ -218,6 +223,28 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         await send(snapshot(selected: draft))
         XCTAssertNotNil(presenter.buttonPress)
         await send(snapshot(selected: ""))
+        XCTAssertNil(presenter.buttonPress)
+    }
+
+    func test_shortcutReopensAfterEsc() async {
+        let (coordinator, presenter, _, _, _) = make()
+        await send(snapshot(selected: draft))
+        presenter.buttonPress?()
+        XCTAssertNotNil(presenter.popupModel)
+        presenter.popupModel?.onClose()
+        XCTAssertNil(presenter.popupModel)
+        // The selection is unchanged, so the shortcut must still be armed and reopen the popup.
+        coordinator.handleShortcut()
+        XCTAssertNotNil(presenter.popupModel)
+    }
+
+    func test_dismissedSelectionShowsNoButtonAgain() async {
+        let (_, presenter, _, _, _) = make()
+        await send(snapshot(selected: draft))
+        presenter.buttonPress?()
+        presenter.popupModel?.onClose()
+        // Same selection reported again: the button must stay away.
+        await send(snapshot(selected: draft))
         XCTAssertNil(presenter.buttonPress)
     }
 
