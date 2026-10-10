@@ -4,10 +4,10 @@ import SwiftUI
 /// The small Cotabby affordance shown just outside a supported text field. Always renders the
 /// built-in cat glyph on Cotabby's dark rounded chip.
 struct FieldEdgeIconIndicatorView: View {
-    // 0.77 of the original chip: 0.7 kept it discreet beside the input, then 10% larger
+    // 0.805 of the original chip: 0.7 kept it discreet beside the input, then 15% larger
     // (user request, 2026-10-10) made it easier to see and to click.
-    private let side: CGFloat = 15.4
-    private let cornerRadius: CGFloat = 3.85
+    private let side: CGFloat = 16.1
+    private let cornerRadius: CGFloat = 4
     /// Autocomplete is off in this app or window. The icon stays (it is how the user turns it back
     /// on) but fades so it reads as "Cotabby is here, but paused".
     var dimmed = false
@@ -21,14 +21,14 @@ struct FieldEdgeIconIndicatorView: View {
                 .fill(Color(red: 0.18, green: 0.19, blue: 0.21))
             if rewrite {
                 Image(systemName: "wand.and.stars")
-                    .font(.system(size: 9.4, weight: .semibold))
+                    .font(.system(size: 9.8, weight: .semibold))
                     .foregroundStyle(.white)
             } else {
                 Image("MenuBarCatIcon")
                     .renderingMode(.template)
                     .resizable()
                     .scaledToFit()
-                    .frame(height: 10)
+                    .frame(height: 10.5)
                     .foregroundStyle(.white)
             }
         }
