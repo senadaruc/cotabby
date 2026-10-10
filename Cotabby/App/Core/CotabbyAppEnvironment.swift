@@ -95,9 +95,6 @@ final class CotabbyAppEnvironment {
             suppressionController: suppressionController
         )
         let calendarAccessibilityCaptureGuard = CalendarAccessibilityCaptureGuard()
-        inputMonitor.onPointerDown = { [weak calendarAccessibilityCaptureGuard] point in
-            calendarAccessibilityCaptureGuard?.handlePointerDown(atAccessibilityPoint: point)
-        }
         inputMonitor.globalToggleKeyCodeProvider = { suggestionSettings.globalToggleKeyCode }
         inputMonitor.globalToggleKeyModifiersProvider = { suggestionSettings.globalToggleKeyModifiers }
         inputMonitor.onGlobalToggleHotkey = { [weak suggestionSettings] in
@@ -129,6 +126,13 @@ final class CotabbyAppEnvironment {
             },
             terminalCursorProvider: terminalCursorTracker
         )
+        // A click is how a user leaves a composer inside the same app, so the focus tracker hears
+        // about it too: a field that vanishes right after a click is published at once rather than
+        // held as a host redraw. Set here, once both receivers exist.
+        inputMonitor.onPointerDown = { [weak calendarAccessibilityCaptureGuard, weak focusModel] point in
+            calendarAccessibilityCaptureGuard?.handlePointerDown(atAccessibilityPoint: point)
+            focusModel?.notePointerDown()
+        }
         terminalCursorTracker.onFixUpdated = { [weak focusModel] in
             focusModel?.refreshNow()
         }

@@ -82,6 +82,12 @@ final class FocusTrackingModel: ObservableObject {
         tracker.refreshNow()
     }
 
+    /// Forwards a physical click so the tracker publishes a field that disappears right after it
+    /// instead of holding it as a host redraw (see `FocusDropoutGrace`).
+    func notePointerDown() {
+        tracker.notePointerDown()
+    }
+
     /// Forwards the coordinator's "I just mutated the focused field" hint so resolver caches that
     /// predate the mutation cannot serve stale geometry to the next capture.
     func invalidateTransientCaretCaches() {

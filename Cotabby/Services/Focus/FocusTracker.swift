@@ -52,6 +52,10 @@ final class FocusTracker {
     // pure `FocusPollBackoff` so they can be unit-tested without a live timer.
     private var backoff = FocusPollBackoff()
 
+    // Keeps a live field published through a host's brief "no focused field" read (WhatsApp,
+    // Safari, and Teams redraw their composer while typing). See `FocusDropoutGrace`.
+    private var dropoutGrace = FocusDropoutGrace()
+
     // Cached element resolved via cursor hit-testing for Chromium OOPIF editors (e.g. Gmail
     // compose) that the system-wide focused-element query cannot see. Re-validated each tick via
     // AXFocused and dropped the instant it loses focus or the frontmost app changes, so it never
@@ -182,6 +186,12 @@ final class FocusTracker {
         rescheduleTimerIfIntervalChanged()
     }
 
+    /// Records a physical click so a field that disappears right after it is published at once
+    /// instead of being held as a redraw: clicking is how a user leaves a composer in the same app.
+    func notePointerDown() {
+        dropoutGrace.notePointerDown(at: ProcessInfo.processInfo.systemUptime)
+    }
+
     /// Drops resolver caches whose contents Cotabby just made stale by mutating the focused field
     /// itself (the static-run walk after a synthetic insert). The next capture pays fresh walks.
     func invalidateTransientCaretCaches() {
@@ -225,23 +235,75 @@ final class FocusTracker {
         let capture = captureSnapshot()
         lastCaptureUptimeNanoseconds = DispatchTime.now().uptimeNanoseconds
 
+        var didChangeFocusedInput = capture.didChangeFocusedInput
+        if capture.foundNoField {
+            // Decide before the signature is cleared: clearing it bumps `focusChangeSequence`,
+            // which would make the field's return a new focus session even if the snapshot were held.
+            if holdDropout(capture.snapshot) {
+                reportPoll(capture, didChangeFocusedInput: false)
+                // Report a change so idle backoff keeps the full poll cadence until the hold resolves.
+                return true
+            }
+            didChangeFocusedInput = clearFocusedInputSignatureIfNeeded()
+        } else {
+            noteFieldObserved()
+        }
+
         let snapshotChanged = capture.snapshot != snapshot
         if snapshotChanged {
             snapshot = capture.snapshot
         }
 
+        reportPoll(capture, didChangeFocusedInput: didChangeFocusedInput)
+        return snapshotChanged || didChangeFocusedInput
+    }
+
+    /// Feeds the debug overlay. Reports what this poll read, even while a dropout is held.
+    private func reportPoll(_ capture: FocusCaptureResult, didChangeFocusedInput: Bool) {
         onPoll?(
             FocusPollingEvent(
                 sequence: pollSequence,
                 focusChangeSequence: focusChangeSequence,
-                didChangeFocusedInput: capture.didChangeFocusedInput,
+                didChangeFocusedInput: didChangeFocusedInput,
                 applicationName: capture.snapshot.applicationName,
                 capabilitySummary: capture.snapshot.capability.shortLabel,
                 occurredAt: Date()
             )
         )
+    }
 
-        return snapshotChanged || capture.didChangeFocusedInput
+    /// True when a capture with no field should be held as a host redraw (see `FocusDropoutGrace`).
+    /// Logs only the transitions, since the hold is re-evaluated on every poll while it lasts.
+    private func holdDropout(_ captured: FocusSnapshot) -> Bool {
+        let wasHolding = dropoutGrace.isHolding
+        let decision = dropoutGrace.evaluateDropout(
+            published: snapshot,
+            captured: captured,
+            now: ProcessInfo.processInfo.systemUptime
+        )
+        switch decision {
+        case .hold:
+            if !wasHolding {
+                CotabbyLogger.focus.debug(
+                    "Focus dropout held: app=\(captured.applicationName) detail=\(captured.capability.summary)"
+                )
+            }
+            return true
+        case .release:
+            if wasHolding {
+                CotabbyLogger.focus.debug(
+                    "Focus dropout published: app=\(captured.applicationName) detail=\(captured.capability.summary)"
+                )
+            }
+            return false
+        }
+    }
+
+    private func noteFieldObserved() {
+        if dropoutGrace.isHolding {
+            CotabbyLogger.focus.debug("Focus dropout bridged: app=\(snapshot.applicationName) field returned")
+        }
+        dropoutGrace.fieldObserved()
     }
 
     /// A system alert or banner can own the system-wide focused element while the user types into
@@ -367,10 +429,7 @@ final class FocusTracker {
         )
 
         guard let context = firstPassSnapshot.context else {
-            return FocusCaptureResult(
-                snapshot: firstPassSnapshot,
-                didChangeFocusedInput: clearFocusedInputSignatureIfNeeded()
-            )
+            return FocusCaptureResult(snapshot: firstPassSnapshot, didChangeFocusedInput: false, foundNoField: true)
         }
 
         let nextSignature = FocusedInputPollingSignature(context: context)
@@ -554,6 +613,8 @@ final class FocusTracker {
         CotabbyLogger.focus.info("Focus capture resumed")
     }
 
+    /// A capture with no field. `performCaptureAndPublish` clears the field signature unless the
+    /// read is held as a host redraw.
     private func inactiveCapture(
         applicationName: String,
         bundleIdentifier: String?,
@@ -566,7 +627,8 @@ final class FocusTracker {
                 capability: capability,
                 context: nil
             ),
-            didChangeFocusedInput: clearFocusedInputSignatureIfNeeded()
+            didChangeFocusedInput: false,
+            foundNoField: true
         )
     }
 
@@ -588,4 +650,7 @@ final class FocusTracker {
 private struct FocusCaptureResult {
     let snapshot: FocusSnapshot
     let didChangeFocusedInput: Bool
+    /// The poll found no usable field. The field signature is cleared after the dropout grace
+    /// decides, not during capture.
+    var foundNoField = false
 }
