@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		87982AB40E445289A6D5E98A /* SelectionRewriteEligibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6F889579E9AA3C1204EA2BD /* SelectionRewriteEligibility.swift */; };
+		119CB25AF9BE21CB70706E05 /* SelectionRewriteEligibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6F889579E9AA3C1204EA2BD /* SelectionRewriteEligibility.swift */; };
+		A00B95B9449E2C9F6A46C492 /* SelectionRewriteEligibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CE6F2C41625F8F1997C863C /* SelectionRewriteEligibilityTests.swift */; };
 		5C84794F71A089219F8F8C7E /* RewritePreferencesStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3B850844147DA7C83FD5144 /* RewritePreferencesStore.swift */; };
 		01C93F250DE8E7D0109795F2 /* RewritePreferencesStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3B850844147DA7C83FD5144 /* RewritePreferencesStore.swift */; };
 		69C60D16A49D53C29C6EAC5A /* RewriteModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 757EBC44AC069A5DBB1BA88A /* RewriteModels.swift */; };
@@ -1301,6 +1304,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		F6F889579E9AA3C1204EA2BD /* SelectionRewriteEligibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionRewriteEligibility.swift; sourceTree = "<group>"; };
+		4CE6F2C41625F8F1997C863C /* SelectionRewriteEligibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionRewriteEligibilityTests.swift; sourceTree = "<group>"; };
 		C3B850844147DA7C83FD5144 /* RewritePreferencesStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewritePreferencesStore.swift; sourceTree = "<group>"; };
 		757EBC44AC069A5DBB1BA88A /* RewriteModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewriteModels.swift; sourceTree = "<group>"; };
 		AD68F9211DB27716348178CB /* RewritePreferencesStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewritePreferencesStoreTests.swift; sourceTree = "<group>"; };
@@ -2128,6 +2133,22 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		CF6BC5FF5DA1D5ACB0F3511F /* Rewrite */ = {
+			isa = PBXGroup;
+			children = (
+				F6F889579E9AA3C1204EA2BD /* SelectionRewriteEligibility.swift */,
+			);
+			path = Rewrite;
+			sourceTree = "<group>";
+		};
+		AEBDA6C99416DB100C7390B7 /* Rewrite */ = {
+			isa = PBXGroup;
+			children = (
+				4CE6F2C41625F8F1997C863C /* SelectionRewriteEligibilityTests.swift */,
+			);
+			path = Rewrite;
+			sourceTree = "<group>";
+		};
 		86074EC77C2EE6FF4137A503 /* Rewrite */ = {
 			isa = PBXGroup;
 			children = (
@@ -3583,6 +3604,7 @@
 				C33F213B45FF359E6176B987 /* Suggestion */,
 				9463CB8FA51F378E0DA4396E /* Translation */,
 				0AF20FCEC932776FDD999FD6 /* Utilities */,
+				AEBDA6C99416DB100C7390B7 /* Rewrite */,
 			);
 			path = Support;
 			sourceTree = "<group>";
@@ -4509,6 +4531,7 @@
 				81E6FF5F2E0AE29DA29FF3DC /* Suggestion */,
 				EAD863059119DF530FF056B3 /* Translation */,
 				9ED3FC5CD8FA7C322F2AC166 /* Utilities */,
+				CF6BC5FF5DA1D5ACB0F3511F /* Rewrite */,
 			);
 			path = Support;
 			sourceTree = "<group>";
@@ -5256,6 +5279,7 @@
 				BDF13BDA6D30BB8FF755AC32 /* TypingPredictionCandidate.swift in Sources */,
 				C0468063222C5FEA7C1CFAB3 /* TypoCaseTransfer.swift in Sources */,
 				A88F3C7039E8DDB71C5D6246 /* TypoGate.swift in Sources */,
+				87982AB40E445289A6D5E98A /* SelectionRewriteEligibility.swift in Sources */,
 				240A4CAB91DF14B030A86F06 /* AutomaticCorrectionRevertMemory.swift in Sources */,
 				B2A6C1474B9F3A6E26F488C9 /* UnitConversionEvaluator.swift in Sources */,
 				BF59EF5F74E5DA170E31FF12 /* V8ValueDeserializer.swift in Sources */,
@@ -5707,6 +5731,7 @@
 				733A13BF72DCBBDC37952DD9 /* TypingPredictionCandidate.swift in Sources */,
 				CF391BC4A3C80C41048D64D1 /* TypoCaseTransfer.swift in Sources */,
 				48A2F371756723299597F5A1 /* TypoGate.swift in Sources */,
+				119CB25AF9BE21CB70706E05 /* SelectionRewriteEligibility.swift in Sources */,
 				488BCDBFD0CF837C4B67FF94 /* AutomaticCorrectionRevertMemory.swift in Sources */,
 				2DD6D14058C7FD05DBE1AD60 /* UnitConversionEvaluator.swift in Sources */,
 				024EF7BD4982DC9180BAE9FB /* V8ValueDeserializer.swift in Sources */,
@@ -6036,6 +6061,7 @@
 				5C67947575E96AABF06B1AC9 /* TypingSessionEvalScoringTests.swift in Sources */,
 				F25F1800B79BF85AF07048C3 /* TypoCaseTransferTests.swift in Sources */,
 				C3F63C89E82ED82DF24BD603 /* TypoGateTests.swift in Sources */,
+				A00B95B9449E2C9F6A46C492 /* SelectionRewriteEligibilityTests.swift in Sources */,
 				5372F97DB0EC0D660715651E /* AutomaticCorrectionRevertMemoryTests.swift in Sources */,
 				9CD0DEFE83D73972985D2F1C /* UnitConversionEvaluatorTests.swift in Sources */,
 				E5B8A88A1BC2F84444EABDE0 /* VisualContextCoordinatorTests.swift in Sources */,
