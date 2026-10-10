@@ -8,7 +8,7 @@ final class RewriteOutputCleanerTests: XCTestCase {
 
     func test_plainOutputPassesThrough() {
         XCTAssertEqual(
-            RewriteOutputCleaner.clean("Please let me know if the dates work for you.", selection: draft, action: .fixGrammar),
+            RewriteOutputCleaner.clean("Please let me know if the dates work for you.", selection: draft, action: .fixOnly),
             "Please let me know if the dates work for you."
         )
     }
@@ -33,7 +33,7 @@ final class RewriteOutputCleanerTests: XCTestCase {
 
     func test_selectionTrailingWhitespaceIsKept() {
         XCTAssertEqual(
-            RewriteOutputCleaner.clean("Best regards,", selection: "Best regard, \n", action: .fixGrammar),
+            RewriteOutputCleaner.clean("Best regards,", selection: "Best regard, \n", action: .fixOnly),
             "Best regards, \n"
         )
     }
@@ -49,7 +49,7 @@ final class RewriteOutputCleanerTests: XCTestCase {
 
     func test_userOpeningLikeAPrefaceIsKept() {
         XCTAssertEqual(
-            RewriteOutputCleaner.clean("Here is my address: Main Street 1", selection: "Here is my adress: Main Street 1", action: .fixGrammar),
+            RewriteOutputCleaner.clean("Here is my address: Main Street 1", selection: "Here is my adress: Main Street 1", action: .fixOnly),
             "Here is my address: Main Street 1"
         )
     }
@@ -57,8 +57,14 @@ final class RewriteOutputCleanerTests: XCTestCase {
     func test_quotesThatBelongToTheSelectionStay() {
         let quoted = "\"Sounds good\" he said, let us meet."
         XCTAssertEqual(
-            RewriteOutputCleaner.clean("\"Sounds good,\" he said. Let us meet.", selection: quoted, action: .fixGrammar),
+            RewriteOutputCleaner.clean("\"Sounds good,\" he said. Let us meet.", selection: quoted, action: .fixOnly),
             "\"Sounds good,\" he said. Let us meet."
         )
+    }
+
+    func test_longerMayGrowWellBeyondTheDraft() {
+        let draft = "can we meet tomorrow"
+        let longer = "Hi Richard, I hope you are well. Could we meet tomorrow to go over the POC results and the next steps? Let me know what time suits you best."
+        XCTAssertEqual(RewriteOutputCleaner.clean(longer, selection: draft, action: .longer), longer)
     }
 }

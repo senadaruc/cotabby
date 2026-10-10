@@ -413,7 +413,8 @@ final class CotabbyAppEnvironment {
             },
             hotkey: TranslationHotkeyTap(suppressionController: suppressionController),
             keyTap: TemporaryKeyTap(suppressionController: suppressionController),
-            writingLanguages: { [weak suggestionSettings] in suggestionSettings?.responseLanguages ?? [] }
+            writingLanguages: { [weak suggestionSettings] in suggestionSettings?.responseLanguages ?? [] },
+            setFixesMistakes: { [weak rewritePreferences] in rewritePreferences?.setFixesMistakes($0) }
         )
         let settingsCoordinator = SettingsCoordinator(
             appUpdateManager: appUpdateManager,

@@ -132,9 +132,30 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         let (_, presenter, _, runner, _) = make(languages: ["English", "Turkish"])
         await send(snapshot(selected: "selam beraber cigar iceriz wihiskey"))
         presenter.buttonPress?()
-        presenter.popupModel?.onAction(.fixGrammar)
+        presenter.popupModel?.onAction(.fixOnly)
         try? await Task.sleep(nanoseconds: 30_000_000)
         XCTAssertEqual(runner.requests.first?.language, "Turkish")
+    }
+
+    func test_longerUsesMemoryEvenWithTheToggleOff() async {
+        let (_, presenter, _, runner, memory) = make()
+        memory.context = RewriteMemoryContext(facts: [.init(text: "POC results due Friday", source: "teams", sender: "Richard")], styleExamples: [])
+        await send(snapshot(selected: draft))
+        presenter.buttonPress?()
+        presenter.popupModel?.usesMemory = false
+        presenter.popupModel?.onAction(.longer)
+        try? await Task.sleep(nanoseconds: 30_000_000)
+        XCTAssertEqual(runner.requests.first?.memory, memory.context)
+    }
+
+    func test_fixTickBoxReachesTheRequest() async {
+        let (_, presenter, _, runner, _) = make()
+        await send(snapshot(selected: draft))
+        presenter.buttonPress?()
+        presenter.popupModel?.fixesMistakes = false
+        presenter.popupModel?.onAction(.formal)
+        try? await Task.sleep(nanoseconds: 30_000_000)
+        XCTAssertEqual(runner.requests.first?.fixesMistakes, false)
     }
 
     func test_buttonOffShowsNothingUntilShortcut() async {
@@ -151,7 +172,7 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         let (_, presenter, output, runner, _) = make()
         await send(snapshot(selected: draft))
         presenter.buttonPress?()
-        presenter.popupModel?.onAction(.fixGrammar)
+        presenter.popupModel?.onAction(.fixOnly)
         try? await Task.sleep(nanoseconds: 20_000_000)
         XCTAssertEqual(presenter.popupModel?.phase, .preview(text: runner.result, unsupported: []))
         presenter.popupModel?.onReplace()
@@ -231,7 +252,7 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         let (_, presenter, output, runner, _) = make()
         await send(snapshot(selected: draft))
         presenter.buttonPress?()
-        presenter.popupModel?.onAction(.fixGrammar)
+        presenter.popupModel?.onAction(.fixOnly)
         try? await Task.sleep(nanoseconds: 20_000_000)
         presenter.popupModel?.onReplace()
         try? await Task.sleep(nanoseconds: 30_000_000)
@@ -342,7 +363,7 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         let (_, presenter, output, runner, _) = make()
         await send(snapshot(selected: draft))
         presenter.buttonPress?()
-        presenter.popupModel?.onAction(.fixGrammar)
+        presenter.popupModel?.onAction(.fixOnly)
         try? await Task.sleep(nanoseconds: 20_000_000)
         presenter.popupModel?.onReplace()
         try? await Task.sleep(nanoseconds: 30_000_000)
@@ -359,7 +380,7 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         // The selection names Richard and the 28th, so the rewrite is grounded and Replace stays on.
         await send(snapshot(selected: "Hi Richard, the 28th works."))
         presenter.buttonPress?()
-        presenter.popupModel?.onAction(.fixGrammar)
+        presenter.popupModel?.onAction(.fixOnly)
         try? await Task.sleep(nanoseconds: 20_000_000)
         presenter.popupModel?.onReplace()
         try? await Task.sleep(nanoseconds: 30_000_000)
@@ -374,7 +395,7 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         let (_, presenter, output, runner, _) = make()
         await send(snapshot(selected: draft))
         presenter.buttonPress?()
-        presenter.popupModel?.onAction(.fixGrammar)
+        presenter.popupModel?.onAction(.fixOnly)
         try? await Task.sleep(nanoseconds: 20_000_000)
         // The popup holds the keyboard, so the activation wait runs and the first Replace is still in
         // flight when the second arrives. Waiting past the 100 ms settle shows any second paste.
@@ -389,7 +410,7 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         let (_, presenter, output, runner, _) = make()
         await send(snapshot(selected: draft))
         presenter.buttonPress?()
-        presenter.popupModel?.onAction(.fixGrammar)
+        presenter.popupModel?.onAction(.fixOnly)
         try? await Task.sleep(nanoseconds: 20_000_000)
         presenter.isPopupKey = true
         presenter.popupModel?.onReplace()

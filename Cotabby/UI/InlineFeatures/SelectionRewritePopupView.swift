@@ -24,6 +24,8 @@ final class SelectionRewritePopupModel: ObservableObject {
 
     @Published var phase: Phase = .actions
     @Published var usesMemory = false
+    /// The "Fix spelling & grammar" tick box; the coordinator seeds it from Settings and remembers changes.
+    @Published var fixesMistakes = true
     @Published var memoryToggleEnabled = true
     /// Why memory is off, or what it found ("No memory for this person").
     @Published var memoryNote: String?
@@ -77,9 +79,18 @@ struct SelectionRewritePopupView: View {
 
     private var actions: some View {
         VStack(alignment: .leading, spacing: 8) {
-            FlowRow(items: RewriteAction.presets) { action in
-                Button(action.label) { model.onAction(action) }.buttonStyle(.bordered)
+            // What to do with the text, then who it is for.
+            WrapLayout(spacing: 6) {
+                ForEach(RewriteAction.actions, id: \.self) { action in
+                    Button(action.label) { model.onAction(action) }.buttonStyle(.bordered)
+                }
             }
+            WrapLayout(spacing: 6) {
+                ForEach(RewriteAction.tones, id: \.self) { action in
+                    Button(action.label) { model.onAction(action) }.buttonStyle(.bordered)
+                }
+            }
+            Toggle("Fix spelling & grammar", isOn: $model.fixesMistakes)
             HStack {
                 TextField("Custom instruction (e.g. make it warmer)", text: $model.customInstruction)
                     .textFieldStyle(.roundedBorder)
@@ -96,11 +107,11 @@ struct SelectionRewritePopupView: View {
         model.onAction(.custom(instruction))
     }
 
-    /// `final` false means the text is still streaming in, so it is drawn dimmed.
     /// The rewrite as plain wrapped text at its full height. Not a ScrollView: the panel sizes itself
     /// to the view's fitting size, and a ScrollView has no ideal height, so the preview collapsed to
     /// nothing and only its scroller showed (2026-10-10). A selection is at most 2,000 characters, and
-    /// the panel's placement keeps it on screen.
+    /// the panel's placement keeps it on screen. `final` false means the text is still streaming in,
+    /// so it is drawn dimmed.
     private func preview(_ text: String, final: Bool) -> some View {
         Text(text)
             .textSelection(.enabled)
@@ -138,20 +149,50 @@ struct SelectionRewritePopupView: View {
     }
 }
 
-/// Wraps buttons onto as many lines as the popup width needs.
-private struct FlowRow<Item: Hashable, Content: View>: View {
-    let items: [Item]
-    let content: (Item) -> Content
+/// Lays buttons out left to right and wraps onto a new line when the popup's width runs out, so
+/// the nine actions and tones need no fixed row split.
+private struct WrapLayout: Layout {
+    var spacing: CGFloat
 
-    var body: some View {
-        // `ViewThatFits` (macOS 13+; the deployment target is 14.0) picks the first layout that fits
-        // the offered width: one row when all buttons fit, otherwise two rows.
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 6) { ForEach(items, id: \.self, content: content) }
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) { ForEach(items.prefix(3), id: \.self, content: content) }
-                HStack(spacing: 6) { ForEach(items.dropFirst(3), id: \.self, content: content) }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
+        let rows = arrange(subviews, width: proposal.width ?? .greatestFiniteMagnitude)
+        let height = rows.reduce(0) { $0 + $1.height } + spacing * CGFloat(max(rows.count - 1, 0))
+        let width = rows.map(\.width).max() ?? 0
+        return CGSize(width: proposal.width ?? width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
+        var y = bounds.minY
+        for row in arrange(subviews, width: bounds.width) {
+            var x = bounds.minX
+            for index in row.indices {
+                let size = subviews[index].sizeThatFits(.unspecified)
+                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+                x += size.width + spacing
             }
+            y += row.height + spacing
         }
+    }
+
+    private struct Row {
+        var indices: [Int] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    private func arrange(_ subviews: Subviews, width: CGFloat) -> [Row] {
+        var rows: [Row] = [Row()]
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(.unspecified)
+            let extra = rows[rows.count - 1].indices.isEmpty ? size.width : size.width + spacing
+            if !rows[rows.count - 1].indices.isEmpty, rows[rows.count - 1].width + extra > width {
+                rows.append(Row())
+            }
+            let gap = rows[rows.count - 1].indices.isEmpty ? 0 : spacing
+            rows[rows.count - 1].indices.append(index)
+            rows[rows.count - 1].width += size.width + gap
+            rows[rows.count - 1].height = max(rows[rows.count - 1].height, size.height)
+        }
+        return rows.filter { !$0.indices.isEmpty }
     }
 }

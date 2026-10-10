@@ -55,7 +55,7 @@ final class APIRewriteProviderTests: XCTestCase {
                                           credentials: InMemoryOpenAICompatibleCredentialStore(apiKey: "rk"))
         Self.retained.append(contentsOf: [client as AnyObject, provider as AnyObject])
         let text = try await provider.rewrite(
-            RewriteRequest(selection: "Fxed draft.", action: .fixGrammar, memory: .empty), onPartial: { _ in }
+            RewriteRequest(selection: "Fxed draft.", action: .fixOnly, memory: .empty), onPartial: { _ in }
         )
         XCTAssertEqual(text, "Fixed.")
     }

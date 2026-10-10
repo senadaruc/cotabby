@@ -21,6 +21,7 @@ final class RewritePreferencesStore: ObservableObject {
         static let usesMemory = "cotabbyRewriteUsesMemory"
         static let sendsMemoryToAPI = "cotabbyRewriteSendsMemoryToAPI"
         static let showsButton = "cotabbyRewriteShowsButton"
+        static let fixesMistakes = "cotabbyRewriteFixesMistakes"
     }
 
     init(userDefaults: UserDefaults = .standard) {
@@ -33,6 +34,7 @@ final class RewritePreferencesStore: ObservableObject {
         loaded.usesMemoryByDefault = userDefaults.object(forKey: Key.usesMemory) as? Bool ?? defaults.usesMemoryByDefault
         loaded.sendsMemoryToAPI = userDefaults.object(forKey: Key.sendsMemoryToAPI) as? Bool ?? defaults.sendsMemoryToAPI
         loaded.showsButtonOnSelection = userDefaults.object(forKey: Key.showsButton) as? Bool ?? defaults.showsButtonOnSelection
+        loaded.fixesMistakes = userDefaults.object(forKey: Key.fixesMistakes) as? Bool ?? defaults.fixesMistakes
         preferences = loaded
     }
 
@@ -59,6 +61,11 @@ final class RewritePreferencesStore: ObservableObject {
     func setSendsMemoryToAPI(_ value: Bool) {
         preferences.sendsMemoryToAPI = value
         userDefaults.set(value, forKey: Key.sendsMemoryToAPI)
+    }
+
+    func setFixesMistakes(_ value: Bool) {
+        preferences.fixesMistakes = value
+        userDefaults.set(value, forKey: Key.fixesMistakes)
     }
 
     func setShowsButtonOnSelection(_ value: Bool) {

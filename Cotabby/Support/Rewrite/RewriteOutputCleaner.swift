@@ -23,7 +23,13 @@ nonisolated enum RewriteOutputCleaner {
         }
         guard !text.isEmpty else { return nil }
         let core = selection.trimmingCharacters(in: .whitespacesAndNewlines)
-        let limit = action == .shorter ? core.count : core.count * maximumGrowth + 40
+        let limit: Int
+        switch action {
+        case .shorter: limit = core.count
+        // Longer expands a short draft into a full message, so a few words may become a paragraph.
+        case .longer: limit = core.count * 8 + 400
+        default: limit = core.count * maximumGrowth + 40
+        }
         guard text.count <= limit else { return nil }
         let leading = String(selection.prefix(while: { $0.isWhitespace }))
         let trailing = String(selection.reversed().prefix(while: { $0.isWhitespace }).reversed())

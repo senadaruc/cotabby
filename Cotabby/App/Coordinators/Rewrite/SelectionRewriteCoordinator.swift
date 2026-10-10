@@ -55,6 +55,9 @@ final class SelectionRewriteCoordinator {
     private var isReplacing = false
     /// Keeps the disclosure text in step with the memory toggle while one popup is open.
     private var disclosureCancellable: AnyCancellable?
+    /// Remembers the popup's tick box in Settings while the popup is open.
+    private var fixesMistakesCancellable: AnyCancellable?
+    private let setFixesMistakes: @MainActor (Bool) -> Void
     /// The selection the user dismissed (✕, Esc, Copy, or a notice timing out). Its button stays hidden
     /// while the selection is unchanged, but ⌃⌥R still reopens the popup for it. Cleared by `close()`.
     private var dismissedTarget: SelectionRewriteTarget?
@@ -75,6 +78,7 @@ final class SelectionRewriteCoordinator {
         hotkey: TranslationHotkeyTap?,
         keyTap: TemporaryKeyTap?,
         writingLanguages: @escaping @MainActor () -> [String] = { [] },
+        setFixesMistakes: @escaping @MainActor (Bool) -> Void = { _ in },
         stableSelectionDelay: UInt64 = 250_000_000
     ) {
         self.snapshots = snapshots
@@ -89,6 +93,7 @@ final class SelectionRewriteCoordinator {
         self.hotkey = hotkey
         self.keyTap = keyTap
         self.writingLanguages = writingLanguages
+        self.setFixesMistakes = setFixesMistakes
         self.stableSelectionDelay = stableSelectionDelay
     }
 
@@ -177,6 +182,10 @@ final class SelectionRewriteCoordinator {
         let model = SelectionRewritePopupModel()
         model.memoryToggleEnabled = engine.memoryAllowed
         model.usesMemory = engine.memoryAllowed && prefs.usesMemoryByDefault
+        model.fixesMistakes = prefs.fixesMistakes
+        fixesMistakesCancellable = model.$fixesMistakes.dropFirst().sink { [weak self] value in
+            self?.setFixesMistakes(value)
+        }
         if !engine.memoryAllowed {
             model.memoryNote = "Memory stays on this Mac. Allow it in Settings → Rewrite to use it with your API model."
         }
@@ -233,7 +242,7 @@ final class SelectionRewriteCoordinator {
         let id = runID
         model.phase = .generating("")
         presenter.refit()
-        let wantsMemory = model.usesMemory && engine.memoryAllowed
+        let wantsMemory = (model.usesMemory || action.alwaysUsesMemory) && engine.memoryAllowed
         // True only while this run is still the newest for this popup and has not been cancelled.
         let isCurrent = { [weak self, weak model] () -> Bool in
             guard let self, let model else { return false }
@@ -256,6 +265,7 @@ final class SelectionRewriteCoordinator {
                 var request = RewriteRequest(selection: input.selectedText, action: action, memory: context)
                 // Named in the prompt: Apple's model otherwise answered a Turkish draft in English.
                 request.language = RewriteLanguageDetector.language(of: input.selectedText, among: self.writingLanguages())
+                request.fixesMistakes = model.fixesMistakes
                 let text = try await self.engine.rewrite(
                     request,
                     onPartial: { partial in
@@ -416,6 +426,7 @@ final class SelectionRewriteCoordinator {
         rewriteTask = nil
         runID += 1
         disclosureCancellable = nil
+        fixesMistakesCancellable = nil
         model = nil
         lastAction = nil
         keyTap?.remove()
@@ -433,6 +444,7 @@ final class SelectionRewriteCoordinator {
         // Invalidates any run still awaiting the engine: its writes check the token before touching the popup.
         runID += 1
         disclosureCancellable = nil
+        fixesMistakesCancellable = nil
         model = nil
         target = nil
         targetInput = nil

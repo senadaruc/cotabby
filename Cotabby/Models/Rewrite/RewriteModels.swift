@@ -8,22 +8,33 @@ import Foundation
 
 /// One rewrite the popup offers. `custom` carries the user's own instruction.
 nonisolated enum RewriteAction: Equatable, Hashable, Sendable {
-    case fixGrammar, rewrite, formal, friendly, shorter
+    case fixOnly, rewrite, shorter, longer
+    case family, friendly, closeFriend, formal, customer
     case custom(String)
 
-    /// The preset buttons, in popup order. `custom` comes from the instruction box instead.
-    static let presets: [RewriteAction] = [.fixGrammar, .rewrite, .formal, .friendly, .shorter]
+    /// The first button row, in popup order: what to do with the text.
+    static let actions: [RewriteAction] = [.fixOnly, .rewrite, .shorter, .longer]
+    /// The second row: who the text is for. `custom` comes from the instruction box instead.
+    static let tones: [RewriteAction] = [.family, .friendly, .closeFriend, .formal, .customer]
 
     var label: String {
         switch self {
-        case .fixGrammar: return "Fix spelling & grammar"
+        case .fixOnly: return "Fix only"
         case .rewrite: return "Rewrite"
-        case .formal: return "Formal"
-        case .friendly: return "Friendly"
         case .shorter: return "Shorter"
+        case .longer: return "Longer"
+        case .family: return "Family"
+        case .friendly: return "Friendly"
+        case .closeFriend: return "Close friend"
+        case .formal: return "Formal"
+        case .customer: return "Customer"
         case .custom: return "Custom"
         }
     }
+
+    /// Longer expands the message from what memory knows, so it gathers memory whenever memory may
+    /// be used, whatever the popup's "Use memory" box says.
+    var alwaysUsesMemory: Bool { self == .longer }
 }
 
 /// Which model rewrites: Cotabby's own local models, or the user's OpenAI-compatible API.
@@ -37,6 +48,9 @@ nonisolated struct RewritePreferences: Equatable, Sendable {
     var apiBaseURL: String
     var apiModelName: String
     var usesMemoryByDefault: Bool
+    /// The popup's "Fix spelling & grammar" tick box: every action except Fix only also corrects
+    /// mistakes when it is on. Remembered between rewrites.
+    var fixesMistakes: Bool
     /// Whether memory facts and style examples may go to the API provider. Off by default: memory
     /// otherwise never leaves the Mac.
     var sendsMemoryToAPI: Bool
@@ -50,6 +64,7 @@ nonisolated struct RewritePreferences: Equatable, Sendable {
         apiBaseURL: "",
         apiModelName: "",
         usesMemoryByDefault: false,
+        fixesMistakes: true,
         sendsMemoryToAPI: false,
         showsButtonOnSelection: true,
         shortcutKeyCode: 15, // kVK_ANSI_R
@@ -82,6 +97,8 @@ nonisolated struct RewriteRequest: Equatable, Sendable {
     /// The selection's language by its English name ("Turkish"), when `RewriteLanguageDetector`
     /// could tell; the prompt then requires it instead of hoping the model keeps the language.
     var language: String? = nil
+    /// The "Fix spelling & grammar" tick box at the time of the rewrite.
+    var fixesMistakes: Bool = true
 }
 
 nonisolated enum RewriteError: LocalizedError, Equatable {

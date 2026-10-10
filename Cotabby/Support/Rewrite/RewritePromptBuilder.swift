@@ -29,11 +29,17 @@ nonisolated enum RewritePromptBuilder {
 
     static func actionLine(_ action: RewriteAction) -> String {
         switch action {
-        case .fixGrammar: return "Fix only spelling, grammar and punctuation mistakes; keep the wording."
-        case .rewrite: return "Rewrite it to read clearer and more natural, with the same meaning."
-        case .formal: return "Rewrite it in a more formal, professional tone."
-        case .friendly: return "Rewrite it in a warmer, friendlier tone."
+        case .fixOnly: return "Fix only spelling, grammar and punctuation mistakes; keep the wording."
+        case .rewrite: return "Rewrite it to read clearer and more natural, with the same meaning and tone."
         case .shorter: return "Rewrite it shorter, keeping all of its content."
+        case .longer:
+            return "Rewrite it longer and more complete: spell out what the user means, using the facts from earlier conversations where they help, but never invent anything that is in neither."
+        case .family: return "Rewrite it in a warm, caring tone for a family member."
+        case .friendly: return "Rewrite it in a warm, friendly tone."
+        case .closeFriend:
+            return "Rewrite it the way you would text a close friend: relaxed and casual, with everyday slang where it fits naturally."
+        case .formal: return "Rewrite it in a formal, professional tone."
+        case .customer: return "Rewrite it as a message to a customer: polite, clear, helpful and professional."
         case .custom(let instruction): return "Follow this instruction: \"\(instruction)\""
         }
     }
@@ -41,7 +47,10 @@ nonisolated enum RewritePromptBuilder {
     static func instructPrompt(_ request: RewriteRequest) -> InstructPrompt {
         var rules = [
             "You rewrite the user's own draft text.",
-            actionLine(request.action),
+            actionLine(request.action)
+        ]
+        if let fixLine = fixLine(request) { rules.append(fixLine) }
+        rules += [
             languageRule(request) + " Keep its meaning, names and numbers.",
             "Return only the rewritten text: no quotes, no preface, no explanation."
         ]
@@ -63,6 +72,18 @@ nonisolated enum RewritePromptBuilder {
         }
         user += "Draft:\n\(request.selection)"
         return InstructPrompt(system: rules.joined(separator: "\n"), user: user)
+    }
+
+    /// The tick box's line for every action that has a choice: Fix only always fixes, and a custom
+    /// instruction says for itself what it wants.
+    private static func fixLine(_ request: RewriteRequest) -> String? {
+        switch request.action {
+        case .fixOnly, .custom: return nil
+        default:
+            return request.fixesMistakes
+                ? "Also fix spelling, grammar and punctuation mistakes."
+                : "Do not correct the user's spelling or grammar; keep their own way of writing."
+        }
     }
 
     /// Requires the detected language by name, since a generic "same language" rule let Apple's model
@@ -92,14 +113,22 @@ nonisolated enum RewritePromptBuilder {
 
     private static func baseExample(_ action: RewriteAction) -> (draft: String, rewritten: String) {
         switch action {
-        case .fixGrammar:
+        case .fixOnly:
             return ("i will send u the file tomorow, sory for the delay", "I will send you the file tomorrow, sorry for the delay.")
         case .formal:
             return ("hey, can u send me the report asap", "Hello, could you please send me the report at your earliest convenience?")
         case .friendly:
             return ("Send me the report.", "Hi! Could you send me the report when you get a chance? Thanks a lot!")
+        case .family:
+            return ("are you coming sunday", "Are you coming on Sunday? It would be so lovely to see you!")
+        case .closeFriend:
+            return ("Are you available to meet this evening?", "you free tonight? let's grab something")
+        case .customer:
+            return ("we got your problem, will fix soon", "Thank you for letting us know. We are looking into the issue and will update you shortly.")
         case .shorter:
             return ("I just wanted to let you know that I will not be able to make it to the meeting tomorrow.", "I can't make it to tomorrow's meeting.")
+        case .longer:
+            return ("can we meet tomorrow", "Could we meet tomorrow? I'd like to go over where things stand and agree on the next steps. Let me know what time works for you.")
         case .rewrite, .custom:
             return ("i will send u the file tomorow, sory for the delay its been busy", "I'll send you the file tomorrow. Sorry for the delay, it's been busy.")
         }

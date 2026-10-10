@@ -7,10 +7,10 @@ final class RewritePromptBuilderTests: XCTestCase {
     private let draft = "Please let me know if te dates are ok and wors for you."
 
     func test_instructPromptCarriesRulesActionAndSelection() {
-        let prompt = RewritePromptBuilder.instructPrompt(RewriteRequest(selection: draft, action: .fixGrammar, memory: .empty))
+        let prompt = RewritePromptBuilder.instructPrompt(RewriteRequest(selection: draft, action: .fixOnly, memory: .empty))
         XCTAssertTrue(prompt.system.contains("same language"))
         XCTAssertTrue(prompt.system.contains("Return only the rewritten text"))
-        XCTAssertTrue(prompt.system.contains(RewritePromptBuilder.actionLine(.fixGrammar)))
+        XCTAssertTrue(prompt.system.contains(RewritePromptBuilder.actionLine(.fixOnly)))
         XCTAssertTrue(prompt.user.hasSuffix(draft))
         XCTAssertFalse(prompt.user.contains("Facts"))
     }
@@ -79,7 +79,7 @@ final class RewritePromptBuilderTests: XCTestCase {
     // MARK: - Language
 
     func test_namedLanguageIsRequiredInTheRewrite() {
-        var request = RewriteRequest(selection: "selam beraber cigar iceriz wihiskey", action: .fixGrammar, memory: .empty)
+        var request = RewriteRequest(selection: "selam beraber cigar iceriz wihiskey", action: .fixOnly, memory: .empty)
         request.language = "Turkish"
         let prompt = RewritePromptBuilder.instructPrompt(request)
         XCTAssertTrue(prompt.system.contains("The draft is written in Turkish."))
@@ -98,5 +98,40 @@ final class RewritePromptBuilderTests: XCTestCase {
         var request = RewriteRequest(selection: "selam nasilsin", action: .rewrite, memory: .empty)
         request.language = "Turkish"
         XCTAssertTrue(RewritePromptBuilder.basePrompt(request).contains("Written in Turkish"))
+    }
+
+    // MARK: - Tones and the fix tick box
+
+    func test_fixTickBoxAddsTypoFixingToATone() {
+        var request = RewriteRequest(selection: draft, action: .formal, memory: .empty)
+        request.fixesMistakes = true
+        XCTAssertTrue(RewritePromptBuilder.instructPrompt(request).system.contains("Also fix spelling, grammar and punctuation mistakes."))
+        request.fixesMistakes = false
+        XCTAssertTrue(RewritePromptBuilder.instructPrompt(request).system.contains("Do not correct the user's spelling"))
+    }
+
+    func test_fixOnlyNeedsNoTickBoxLine() {
+        var request = RewriteRequest(selection: draft, action: .fixOnly, memory: .empty)
+        request.fixesMistakes = false
+        let system = RewritePromptBuilder.instructPrompt(request).system
+        XCTAssertTrue(system.contains(RewritePromptBuilder.actionLine(.fixOnly)))
+        XCTAssertFalse(system.contains("Do not correct the user's spelling"))
+    }
+
+    func test_closeFriendAsksForRelaxedSlang() {
+        XCTAssertTrue(RewritePromptBuilder.actionLine(.closeFriend).contains("slang"))
+    }
+
+    func test_longerMayUseTheFactsButNeverInvents() {
+        let line = RewritePromptBuilder.actionLine(.longer)
+        XCTAssertTrue(line.contains("longer"))
+        XCTAssertTrue(line.contains("never invent"))
+    }
+
+    func test_everyActionHasABaseExample() {
+        for action in RewriteAction.actions + RewriteAction.tones {
+            let prompt = RewritePromptBuilder.basePrompt(RewriteRequest(selection: "x y", action: action, memory: .empty))
+            XCTAssertTrue(prompt.contains("Rewritten: "), "\(action.label) has an example pair")
+        }
     }
 }

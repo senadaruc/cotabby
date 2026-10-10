@@ -37,7 +37,7 @@ final class RewriteEngineTests: XCTestCase {
         var prefs = RewritePreferences.defaults
         prefs.provider = .api
         let (engine, local, api) = make(prefs)
-        _ = try await engine.rewrite(RewriteRequest(selection: draft, action: .fixGrammar, memory: .empty), onPartial: { _ in })
+        _ = try await engine.rewrite(RewriteRequest(selection: draft, action: .fixOnly, memory: .empty), onPartial: { _ in })
         XCTAssertEqual(api.received.count, 1)
         XCTAssertTrue(local.received.isEmpty)
     }

@@ -53,8 +53,16 @@ final class RewritePreferencesStoreTests: XCTestCase {
         XCTAssertFalse(reloaded.showsButtonOnSelection)
     }
 
-    func test_presetLabelsAreTheSixActionsMinusCustom() {
-        XCTAssertEqual(RewriteAction.presets.map(\.label), ["Fix spelling & grammar", "Rewrite", "Formal", "Friendly", "Shorter"])
+    func test_actionsAndTonesInPopupOrder() {
+        XCTAssertEqual(RewriteAction.actions.map(\.label), ["Fix only", "Rewrite", "Shorter", "Longer"])
+        XCTAssertEqual(RewriteAction.tones.map(\.label), ["Family", "Friendly", "Close friend", "Formal", "Customer"])
         XCTAssertEqual(RewriteAction.custom("make it warmer").label, "Custom")
+    }
+
+    func test_fixTickBoxDefaultsOnAndPersists() {
+        let store = makeStore()
+        XCTAssertTrue(store.preferences.fixesMistakes)
+        store.setFixesMistakes(false)
+        XCTAssertFalse(makeStore().preferences.fixesMistakes)
     }
 }
