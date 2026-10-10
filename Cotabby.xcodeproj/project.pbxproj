@@ -7,6 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		5C84794F71A089219F8F8C7E /* RewritePreferencesStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3B850844147DA7C83FD5144 /* RewritePreferencesStore.swift */; };
+		01C93F250DE8E7D0109795F2 /* RewritePreferencesStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3B850844147DA7C83FD5144 /* RewritePreferencesStore.swift */; };
+		69C60D16A49D53C29C6EAC5A /* RewriteModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 757EBC44AC069A5DBB1BA88A /* RewriteModels.swift */; };
+		8D5D3AEFC99819F8ADC30509 /* RewriteModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 757EBC44AC069A5DBB1BA88A /* RewriteModels.swift */; };
+		48F40C2DE77C509C4D8A8155 /* RewritePreferencesStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD68F9211DB27716348178CB /* RewritePreferencesStoreTests.swift */; };
 		82A9AAB7807C96D6595E90F0 /* FocusSelectionText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C75A46FDD17B1C46AD55960 /* FocusSelectionText.swift */; };
 		77C96228C13882A26C78A64B /* FocusSelectionText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C75A46FDD17B1C46AD55960 /* FocusSelectionText.swift */; };
 		78BD8E3F95C73A2371F7CAF1 /* FocusSelectionTextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CD0010A0E69DB9D738B3B74 /* FocusSelectionTextTests.swift */; };
@@ -1296,6 +1301,9 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		C3B850844147DA7C83FD5144 /* RewritePreferencesStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewritePreferencesStore.swift; sourceTree = "<group>"; };
+		757EBC44AC069A5DBB1BA88A /* RewriteModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewriteModels.swift; sourceTree = "<group>"; };
+		AD68F9211DB27716348178CB /* RewritePreferencesStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewritePreferencesStoreTests.swift; sourceTree = "<group>"; };
 		9C75A46FDD17B1C46AD55960 /* FocusSelectionText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusSelectionText.swift; sourceTree = "<group>"; };
 		9CD0010A0E69DB9D738B3B74 /* FocusSelectionTextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusSelectionTextTests.swift; sourceTree = "<group>"; };
 		003594B09C83EF2DF35577D5 /* SuggestionDebugLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SuggestionDebugLogger.swift; sourceTree = "<group>"; };
@@ -2120,6 +2128,30 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		86074EC77C2EE6FF4137A503 /* Rewrite */ = {
+			isa = PBXGroup;
+			children = (
+				C3B850844147DA7C83FD5144 /* RewritePreferencesStore.swift */,
+			);
+			path = Rewrite;
+			sourceTree = "<group>";
+		};
+		54605B411DCEB756FD9A11C4 /* Rewrite */ = {
+			isa = PBXGroup;
+			children = (
+				757EBC44AC069A5DBB1BA88A /* RewriteModels.swift */,
+			);
+			path = Rewrite;
+			sourceTree = "<group>";
+		};
+		0489FABDAF4D744D5A83903A /* Rewrite */ = {
+			isa = PBXGroup;
+			children = (
+				AD68F9211DB27716348178CB /* RewritePreferencesStoreTests.swift */,
+			);
+			path = Rewrite;
+			sourceTree = "<group>";
+		};
 		011A5248848010A06D9A182A /* Input */ = {
 			isa = PBXGroup;
 			children = (
@@ -2193,6 +2225,7 @@
 				B0ACD82A4062021762443C9A /* Spelling */,
 				47C8100B9B0020FD0C25603E /* Suggestion */,
 				987BC94D9D28389C8CE0406E /* Visual */,
+				0489FABDAF4D744D5A83903A /* Rewrite */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -3418,6 +3451,7 @@
 				50D6C35B203AC5C0BF4BB1A8 /* Spelling */,
 				2D8E398BA5F2ED675A25AAFD /* Suggestion */,
 				B83C01707055589407F5338B /* Translation */,
+				54605B411DCEB756FD9A11C4 /* Rewrite */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -4299,6 +4333,7 @@
 				D3CA6AE5C4E79858A3A07282 /* Translation */,
 				7CE2AB7F84E13EB0A98D263D /* Updates */,
 				2574DDA4AFE2DE99E608EF95 /* Visual */,
+				86074EC77C2EE6FF4137A503 /* Rewrite */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -5200,9 +5235,11 @@
 				86C1D546D6DE1777DBE6CCC4 /* TranslationHotkeyTap.swift in Sources */,
 				02BD1E581B8CB51A8912D93A /* TranslationLanguagePolicy.swift in Sources */,
 				ADDA3DD1B4DD52B898774D5E /* TranslationModels.swift in Sources */,
+				69C60D16A49D53C29C6EAC5A /* RewriteModels.swift in Sources */,
 				24EE74F6BE91FC7AF04AB8A7 /* TranslationOverlayController.swift in Sources */,
 				33765A26561DCD843A03205E /* TranslationPaneView.swift in Sources */,
 				7418E40356268EA32FF7E2A7 /* TranslationPreferencesStore.swift in Sources */,
+				01C93F250DE8E7D0109795F2 /* RewritePreferencesStore.swift in Sources */,
 				3265346744616CFE2583CB41 /* TranslationScrollFollow.swift in Sources */,
 				F60A94747732F706FD666925 /* TypefaceEvidence.swift in Sources */,
 				DA4693E09A0790D12F531CCA /* TypefaceMatcher.swift in Sources */,
@@ -5649,9 +5686,11 @@
 				A1807CDAA7D835525D7B7870 /* TranslationHotkeyTap.swift in Sources */,
 				1038CF642829E77824F2B25D /* TranslationLanguagePolicy.swift in Sources */,
 				4FEF448AF18494F11C816D80 /* TranslationModels.swift in Sources */,
+				8D5D3AEFC99819F8ADC30509 /* RewriteModels.swift in Sources */,
 				F399998A7FBAB7115932D7AA /* TranslationOverlayController.swift in Sources */,
 				4D8EAA5D687A54D5428258F6 /* TranslationPaneView.swift in Sources */,
 				88E36607074D2607730360C9 /* TranslationPreferencesStore.swift in Sources */,
+				5C84794F71A089219F8F8C7E /* RewritePreferencesStore.swift in Sources */,
 				0748A7928BFECA992ECB9815 /* TranslationScrollFollow.swift in Sources */,
 				2740742B866BC12043B81268 /* TypefaceEvidence.swift in Sources */,
 				9F8656C10B45DA6699A43787 /* TypefaceMatcher.swift in Sources */,
@@ -5962,6 +6001,7 @@
 				EB9DC100AADED49A684632FC /* SuggestionWordAcceptanceTests.swift in Sources */,
 				CF04C28598AF9A437990C8A4 /* SurfaceContextComposerTests.swift in Sources */,
 				15D7C2CFE930F62B88F07EA7 /* SymSpellCorrectorTests.swift in Sources */,
+				48F40C2DE77C509C4D8A8155 /* RewritePreferencesStoreTests.swift in Sources */,
 				19284043DCEDC562269991EE /* SymSpellTests.swift in Sources */,
 				833A5A25C0F5B0E9A46DA04D /* SyntheticReplacePlannerTests.swift in Sources */,
 				E43B0EA04ED0B747CC8D9EBC /* SystemMetricsStoreTests.swift in Sources */,
