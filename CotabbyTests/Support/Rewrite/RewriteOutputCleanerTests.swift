@@ -47,6 +47,13 @@ final class RewriteOutputCleanerTests: XCTestCase {
         XCTAssertNil(RewriteOutputCleaner.clean(draft + " And some more words.", selection: draft, action: .shorter))
     }
 
+    func test_userOpeningLikeAPrefaceIsKept() {
+        XCTAssertEqual(
+            RewriteOutputCleaner.clean("Here is my address: Main Street 1", selection: "Here is my adress: Main Street 1", action: .fixGrammar),
+            "Here is my address: Main Street 1"
+        )
+    }
+
     func test_quotesThatBelongToTheSelectionStay() {
         let quoted = "\"Sounds good\" he said, let us meet."
         XCTAssertEqual(

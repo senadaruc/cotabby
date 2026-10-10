@@ -12,7 +12,11 @@ nonisolated enum RewriteOutputCleaner {
     static func clean(_ raw: String, selection: String, action: RewriteAction) -> String? {
         var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         text = stripCodeFence(text)
-        text = stripPreface(text)
+        // A preface is a wrapper the model added. When the user's own selection opens the same way
+        // ("Here is my address: ..."), the model may be echoing it, so the opening stays.
+        if !startsWithPreface(selection.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            text = stripPreface(text)
+        }
         text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if !startsWithQuote(selection.trimmingCharacters(in: .whitespacesAndNewlines)) {
             text = stripWrappingQuotes(text)
@@ -35,11 +39,19 @@ nonisolated enum RewriteOutputCleaner {
     }
 
     /// "Here is…:", "Here's a friendlier version:", "Sure! …:", "Rewritten text:", "Rewritten:".
+    /// Anchored at the start, so only an opening preface matches.
+    private static let prefacePattern = #"^(?:(?:sure|certainly|of course)[!.,]?\s*)?(?:here(?:'s| is)[^:\n]{0,60}:|rewritten(?: text| version)?:)\s*"#
+
     private static func stripPreface(_ text: String) -> String {
-        let pattern = #"^(?:(?:sure|certainly|of course)[!.,]?\s*)?(?:here(?:'s| is)[^:\n]{0,60}:|rewritten(?: text| version)?:)\s*"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return text }
+        guard let regex = try? NSRegularExpression(pattern: prefacePattern, options: [.caseInsensitive]) else { return text }
         let range = NSRange(text.startIndex..., in: text)
         return regex.stringByReplacingMatches(in: text, range: range, withTemplate: "")
+    }
+
+    /// Whether the (trimmed) selection itself opens with a preface-like phrase, using the same pattern.
+    private static func startsWithPreface(_ text: String) -> Bool {
+        guard let regex = try? NSRegularExpression(pattern: prefacePattern, options: [.caseInsensitive]) else { return false }
+        return regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
     }
 
     private static let quotePairs: [(Character, Character)] = [("\"", "\""), ("“", "”"), ("'", "'"), ("«", "»")]
