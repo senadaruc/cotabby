@@ -967,6 +967,17 @@ enum AXHelper {
         return boolValue(for: attribute, on: appElement) == enabled
     }
 
+    /// Selects `range` in the focused element of the app `pid`, through `kAXSelectedTextRangeAttribute`.
+    /// Used to put back a selection the user made before Cotabby's rewrite popup took the keyboard.
+    /// `AXValueCreate` boxes the `CFRange`; the element is the app's own focused element, so the write
+    /// lands in the field the user was editing or fails (returns false) without side effects.
+    static func setSelectedTextRange(_ range: NSRange, onFocusedElementOf pid: pid_t) -> Bool {
+        guard let element = focusedElement(forApplicationPID: pid) else { return false }
+        var cfRange = CFRange(location: range.location, length: range.length)
+        guard let value = AXValueCreate(.cfRange, &cfRange) else { return false }
+        return AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value) == .success
+    }
+
     /// Hit-tests the Accessibility tree at a Cocoa screen point (bottom-left origin) by converting
     /// to the top-left origin that `AXUIElementCopyElementAtPosition` expects.
     ///

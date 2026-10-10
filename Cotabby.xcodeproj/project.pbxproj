@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B870E28350C3F6614AD2A235 /* SelectionRewritePopupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 632410BB2730124D3AFE88A4 /* SelectionRewritePopupView.swift */; };
+		90F04165C104F48BDE74BFAD /* SelectionRewritePopupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 632410BB2730124D3AFE88A4 /* SelectionRewritePopupView.swift */; };
+		FCD39FF93F5984FACE362E05 /* SelectionRewritePanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F07BC2E1C2C3BA946E9990A /* SelectionRewritePanelController.swift */; };
+		70F71661076A0E8687946860 /* SelectionRewritePanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F07BC2E1C2C3BA946E9990A /* SelectionRewritePanelController.swift */; };
 		EFC2DBB1CB7BFA039A1F7BDB /* RewriteMemoryGatherer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3477BFA73C27DE659EE6336 /* RewriteMemoryGatherer.swift */; };
 		6AD0F55DEC4736A145AEFCD7 /* RewriteMemoryGatherer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3477BFA73C27DE659EE6336 /* RewriteMemoryGatherer.swift */; };
 		2CAFC68950CEAD8696CC3EB0 /* RewriteMemoryGathererTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D17BCCEBAD2B714F43EBBE8 /* RewriteMemoryGathererTests.swift */; };
@@ -1324,6 +1328,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		632410BB2730124D3AFE88A4 /* SelectionRewritePopupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionRewritePopupView.swift; sourceTree = "<group>"; };
+		3F07BC2E1C2C3BA946E9990A /* SelectionRewritePanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionRewritePanelController.swift; sourceTree = "<group>"; };
 		C3477BFA73C27DE659EE6336 /* RewriteMemoryGatherer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewriteMemoryGatherer.swift; sourceTree = "<group>"; };
 		4D17BCCEBAD2B714F43EBBE8 /* RewriteMemoryGathererTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewriteMemoryGathererTests.swift; sourceTree = "<group>"; };
 		9659C1D5634C4EDDFB80290E /* LocalRewriteProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalRewriteProvider.swift; sourceTree = "<group>"; };
@@ -3017,6 +3023,7 @@
 				01CEF8C4BF90005BF4FF3F75 /* AnswerCardView.swift */,
 				871C7A27BAB5A510273D0A19 /* EmojiPickerView.swift */,
 				F7F3F983901FC3648076B23D /* MacroReferenceSheet.swift */,
+				632410BB2730124D3AFE88A4 /* SelectionRewritePopupView.swift */,
 			);
 			path = InlineFeatures;
 			sourceTree = "<group>";
@@ -3991,6 +3998,7 @@
 				9A3C5A66AA93E50E4A64ED46 /* OverlayController.swift */,
 				4A65BCABF4B23690AE3DBE93 /* PixelCaretLocator.swift */,
 				683945CBE9B88F1A2D28A254 /* TranslationOverlayController.swift */,
+				3F07BC2E1C2C3BA946E9990A /* SelectionRewritePanelController.swift */,
 			);
 			path = Presentation;
 			sourceTree = "<group>";
@@ -4913,7 +4921,9 @@
 				56D2FDE72FE21C35E8BDD06C /* ActivationIndicatorController.swift in Sources */,
 				CC54CAD96A348364989132D3 /* ActiveSuggestionSession.swift in Sources */,
 				B839BAD909262FE0E10EE4A2 /* AnswerCardController.swift in Sources */,
+				FCD39FF93F5984FACE362E05 /* SelectionRewritePanelController.swift in Sources */,
 				AF951C606C924327F463010F /* AnswerCardView.swift in Sources */,
+				B870E28350C3F6614AD2A235 /* SelectionRewritePopupView.swift in Sources */,
 				31C32EACD8D491295C3A9B7D /* AnswerCoordinator.swift in Sources */,
 				17F4D22EF6C54706197A8585 /* AnswerDraftEngine.swift in Sources */,
 				B7BD82D5CFDD0DD0043C7AE0 /* AnswerPromptRenderer.swift in Sources */,
@@ -5372,7 +5382,9 @@
 				72672FBC57236EF484340659 /* ActivationIndicatorController.swift in Sources */,
 				102E1EDC04636AFB607A8249 /* ActiveSuggestionSession.swift in Sources */,
 				0AAE8AFA1CE1EC35A63F5ED8 /* AnswerCardController.swift in Sources */,
+				70F71661076A0E8687946860 /* SelectionRewritePanelController.swift in Sources */,
 				890C586336FE3B7D5765BBE7 /* AnswerCardView.swift in Sources */,
+				90F04165C104F48BDE74BFAD /* SelectionRewritePopupView.swift in Sources */,
 				D7A6DBAC9CEE69DA7A86AEB0 /* AnswerCoordinator.swift in Sources */,
 				6FE39CA30AD9A5ED657B4C58 /* AnswerDraftEngine.swift in Sources */,
 				A454C137324ADE4B4B7DBE2C /* AnswerPromptRenderer.swift in Sources */,
