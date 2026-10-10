@@ -58,9 +58,13 @@ final class LocalRewriteProvider: RewriteProviding {
         // A rewrite can be several sentences; autocomplete's stop at the first sentence end would cut it.
         options.sentenceStopMinimumTokens = .max
         options.stopSequences = RewritePromptBuilder.baseStopSequences
+        let relay = PartialRelay(deliver: onPartial)
+        // Stop delivery on every exit, including a thrown error, so no partial can arrive after
+        // this function has returned.
+        defer { relay.finish() }
         let output = try await runtimeManager.generate(
             prompt: RewritePromptBuilder.basePrompt(request), options: options,
-            onPartialRawText: { text in Task { @MainActor in onPartial(text) } }
+            onPartialRawText: { text in relay.send(text) }
         )
         return output.text
     }
@@ -68,5 +72,43 @@ final class LocalRewriteProvider: RewriteProviding {
     /// About 1.5× the selection's tokens (≈4 characters per token) plus a margin, capped.
     static func tokenBudget(_ request: RewriteRequest) -> Int {
         min(800, request.selection.count * 3 / 8 + 48)
+    }
+}
+
+/// Delivers streamed partials to the main actor in order and never after the rewrite has
+/// returned. The runtime calls back off the main actor; each partial carries a sequence number,
+/// and the main-actor side drops any partial older than the newest delivered, and all partials
+/// once `finish()` ran.
+final class PartialRelay: @unchecked Sendable {
+    private let lock = NSLock()
+    private var nextSequence = 0
+    private var deliveredSequence = -1
+    private var finished = false
+    private let deliver: @MainActor (String) -> Void
+
+    init(deliver: @escaping @MainActor (String) -> Void) { self.deliver = deliver }
+
+    /// Called from the runtime's callback thread.
+    func send(_ text: String) {
+        lock.lock()
+        let sequence = nextSequence
+        nextSequence += 1
+        lock.unlock()
+        Task { @MainActor in self.receive(text, sequence: sequence) }
+    }
+
+    @MainActor private func receive(_ text: String, sequence: Int) {
+        lock.lock()
+        let stale = finished || sequence <= deliveredSequence
+        if !stale { deliveredSequence = sequence }
+        lock.unlock()
+        if !stale { deliver(text) }
+    }
+
+    /// Stops delivery; called before the rewrite returns its final text.
+    func finish() {
+        lock.lock()
+        finished = true
+        lock.unlock()
     }
 }

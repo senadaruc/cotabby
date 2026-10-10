@@ -101,3 +101,37 @@ final class RewriteEngineTests: XCTestCase {
         }
     }
 }
+
+/// Collects what the relay delivered, on the main actor where the relay delivers.
+@MainActor
+private final class DeliveryLog {
+    private(set) var items: [String] = []
+    func append(_ text: String) { items.append(text) }
+}
+
+/// The relay keeps streamed partials ordered (latest wins) and delivers nothing after `finish()`.
+@MainActor
+final class PartialRelayTests: XCTestCase {
+    func test_relayDropsOlderPartials() async {
+        let log = DeliveryLog()
+        let relay = PartialRelay(deliver: { log.append($0) })
+        // Send from a background thread, like the llama runtime's callback.
+        await Task.detached { relay.send("a"); relay.send("ab"); relay.send("abc") }.value
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(log.items.last, "abc")
+        let lengths = log.items.map(\.count)
+        XCTAssertEqual(lengths, lengths.sorted(), "an older partial was delivered after a newer one")
+        XCTAssertEqual(Set(lengths).count, lengths.count, "a partial was delivered twice")
+    }
+
+    func test_relayDeliversNothingAfterFinish() async {
+        let log = DeliveryLog()
+        let relay = PartialRelay(deliver: { log.append($0) })
+        relay.send("x")
+        relay.finish()
+        relay.send("late")
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertFalse(log.items.contains("late"), "a partial was delivered after finish()")
+        XCTAssertTrue(log.items.isEmpty, "a partial sent before finish() was delivered after it")
+    }
+}
