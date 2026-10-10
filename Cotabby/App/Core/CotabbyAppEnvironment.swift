@@ -393,7 +393,8 @@ final class CotabbyAppEnvironment {
         let workController = SuggestionWorkController()
         // Constructed once at app scope so the underlying `NSSpellChecker` document tag survives
         // across coordinator state transitions instead of churning per keystroke.
-        let spellChecker = CurrentWordSpellChecker()
+        // Words the user kept after undoing an automatic fix persist in the app's preferences.
+        let spellChecker = CurrentWordSpellChecker(keptWordsDefaults: .standard)
         // No launch-time preload: a fully built index costs tens of MB resident for a feature that
         // is only consulted once the typo gate actually finds a misspelling, and the first
         // consultation triggers the same background build (`cachedIndexOrRequestLoad`) with the

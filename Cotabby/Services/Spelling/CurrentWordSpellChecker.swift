@@ -20,8 +20,23 @@ final class CurrentWordSpellChecker {
     /// avoids cross-contamination with whatever spellcheck state other apps have armed.
     private let documentTag: Int
 
-    init() {
+    /// Words the user restored after Cotabby fixed them automatically (see
+    /// `AutomaticCorrectionRevertMemory`), lowercased. They are never typos again: a product or
+    /// person's name the dictionary lacks ("Cribl") should not be "fixed" every time it is typed.
+    /// Kept here rather than in the system dictionary (`NSSpellChecker.learnWord`) so undoing one
+    /// of Cotabby's fixes changes no other app's spell checking.
+    private var keptWords: Set<String>
+    /// Where kept words persist across launches; `nil` keeps them for this run only, which tests use
+    /// so they never write to the app's real preferences.
+    private let keptWordsDefaults: UserDefaults?
+    static let keptWordsDefaultsKey = "cotabbyKeptSpellingWords"
+    /// Bound on the stored list, so it cannot grow without limit over years of use.
+    static let keptWordsCapacity = 500
+
+    init(keptWordsDefaults: UserDefaults? = nil) {
         documentTag = NSSpellChecker.uniqueSpellDocumentTag()
+        self.keptWordsDefaults = keptWordsDefaults
+        keptWords = Set(keptWordsDefaults?.stringArray(forKey: Self.keptWordsDefaultsKey) ?? [])
         // We deliberately do not mutate `NSSpellChecker.shared` (e.g. forcing
         // `automaticallyIdentifiesLanguages`): that flag is app-global shared state, and overriding
         // it here would silently change behavior for any future text-checking context. We pass
@@ -35,7 +50,7 @@ final class CurrentWordSpellChecker {
     /// tokens like `I'm` where only part of the token is flagged, and on tokens that carry trailing
     /// punctuation (`nmae,`) where the flagged range stops short of the punctuation.
     func isTypo(_ word: String) -> Bool {
-        guard !word.isEmpty else { return false }
+        guard !word.isEmpty, !keptWords.contains(word.lowercased()) else { return false }
         let misspelledRange = NSSpellChecker.shared.checkSpelling(
             of: word,
             startingAt: 0,
@@ -48,6 +63,15 @@ final class CurrentWordSpellChecker {
             return false
         }
         return misspelledRange.length == (word as NSString).length
+    }
+
+    /// Stops treating `word` as a typo, in any capitalization, from now on and after relaunch.
+    func keepWord(_ word: String) {
+        let key = word.lowercased()
+        guard !key.isEmpty, keptWords.insert(key).inserted, let keptWordsDefaults else { return }
+        var stored = keptWordsDefaults.stringArray(forKey: Self.keptWordsDefaultsKey) ?? []
+        stored.append(key)
+        keptWordsDefaults.set(Array(stored.suffix(Self.keptWordsCapacity)), forKey: Self.keptWordsDefaultsKey)
     }
 
     /// True when `partialWord` is the beginning of at least one dictionary word: the user is still

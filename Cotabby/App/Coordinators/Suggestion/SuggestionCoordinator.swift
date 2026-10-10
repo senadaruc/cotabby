@@ -127,6 +127,8 @@ final class SuggestionCoordinator: ObservableObject {
     /// delayed stream presentation. Work IDs and cancellation protect it when typing resumes.
     var typingCadence = TypingCadence()
     var dismissalMemory = SuggestionDismissalMemory()
+    /// The words fixed automatically after Space, so one the user brings back is kept, not re-fixed.
+    var automaticCorrectionRevertMemory = AutomaticCorrectionRevertMemory()
     var delayedStreamPresentation: Task<Void, Never>?
 
     /// One ordinary on-device request may survive matching keys before it becomes visible.

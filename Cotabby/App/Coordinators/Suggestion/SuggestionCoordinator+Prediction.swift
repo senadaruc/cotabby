@@ -644,6 +644,9 @@ extension SuggestionCoordinator {
             )
             return true
         case let .applyCorrection(word, correctedWord):
+            if keepRestoredWord(word, rawContext: rawContext, workID: workID) {
+                return false
+            }
             applyAutomaticCorrection(
                 typoWord: word,
                 correctedWord: correctedWord,
@@ -686,6 +689,32 @@ extension SuggestionCoordinator {
         return spellChecker.bestCorrection(for: word) == nil
             ? .uncorrectableTypo
             : .correctableTypo
+    }
+
+    /// True when the user brought back a word Cotabby fixed at this same spot: they undid the fix.
+    /// The word is then kept as written and never treated as a typo again (see
+    /// `AutomaticCorrectionRevertMemory`), and the caller continues with a normal completion.
+    private func keepRestoredWord(_ word: String, rawContext: FocusedInputSnapshot, workID: UInt64) -> Bool {
+        guard let textBeforeWord = AutomaticCorrectionRevertMemory.textBeforeWord(
+                  word, delimiter: " ", in: rawContext.precedingText
+              ),
+              automaticCorrectionRevertMemory.isRestoration(
+                  of: word, textBeforeWord: textBeforeWord, fieldKey: Self.correctionFieldKey(rawContext)
+              )
+        else { return false }
+        spellChecker.keepWord(word)
+        logStage(
+            "typo-auto-correction-reverted",
+            workID: workID,
+            message: "Kept a word the user restored after an automatic correction."
+        )
+        return true
+    }
+
+    /// Identifies the field for correction memory. Stable while the field resizes, like
+    /// `focusedInputIdentityKey`, and readable from the raw snapshot without building a context.
+    private static func correctionFieldKey(_ context: FocusedInputSnapshot) -> String {
+        "\(context.bundleIdentifier)|\(context.processIdentifier)|\(context.elementIdentifier)"
     }
 
     /// Replaces a completed typo after Space without creating a visible correction session.
@@ -738,6 +767,13 @@ extension SuggestionCoordinator {
             return
         }
 
+        if let textBeforeWord = AutomaticCorrectionRevertMemory.textBeforeWord(
+            typoWord, delimiter: " ", in: rawContext.precedingText
+        ) {
+            automaticCorrectionRevertMemory.recordCorrection(
+                of: typoWord, textBeforeWord: textBeforeWord, fieldKey: Self.correctionFieldKey(rawContext)
+            )
+        }
         focusModel.invalidateTransientCaretCaches()
         cancelPredictionWork()
         clearSuggestion(clearDiagnostics: false)

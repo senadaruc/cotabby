@@ -239,6 +239,33 @@ final class CurrentWordSpellCheckerTests: XCTestCase {
         }
     }
 
+    func test_keptWordIsNoLongerATypoInAnyCase() throws {
+        let checker = makeChecker()
+        try XCTSkipUnless(checker.isTypo("cribl"), "This machine's dictionary already knows the probe word")
+
+        checker.keepWord("Cribl")
+
+        XCTAssertFalse(checker.isTypo("cribl"))
+        XCTAssertFalse(checker.isTypo("Cribl"))
+        XCTAssertTrue(checker.isTypo("qqqqzzzzqq"), "Keeping one word must not silence the checker")
+    }
+
+    func test_keptWordsPersistAcrossLaunchesWhenGivenDefaults() throws {
+        let suiteName = "CurrentWordSpellCheckerTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let first = CurrentWordSpellChecker(keptWordsDefaults: defaults)
+        Self.retainedCheckers.append(first)
+        try XCTSkipUnless(first.isTypo("cribl"), "This machine's dictionary already knows the probe word")
+
+        first.keepWord("cribl")
+        let relaunched = CurrentWordSpellChecker(keptWordsDefaults: defaults)
+        Self.retainedCheckers.append(relaunched)
+
+        XCTAssertFalse(relaunched.isTypo("cribl"))
+        XCTAssertEqual(defaults.stringArray(forKey: CurrentWordSpellChecker.keptWordsDefaultsKey), ["cribl"])
+    }
+
     func test_nativeCorrections_passesRankedGuessesThroughNeverNil() {
         let checker = makeChecker()
         let probeTag = NSSpellChecker.uniqueSpellDocumentTag()
