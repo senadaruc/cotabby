@@ -33,7 +33,7 @@ final class APIRewriteProvider: RewriteProviding {
         self.credentials = credentials
     }
 
-    deinit {}
+    nonisolated deinit {}
 
     /// Built fresh from the current preferences on every read, so a Settings edit takes effect on
     /// the next rewrite without a reload step. `try?` maps an invalid URL to nil, which reads as

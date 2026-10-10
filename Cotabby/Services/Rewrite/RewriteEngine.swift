@@ -1,0 +1,43 @@
+import Foundation
+
+/// File overview:
+/// Runs one rewrite on the provider the user chose in Settings → Rewrite, and returns text ready to
+/// replace the selection (`RewriteOutputCleaner`). It is also the last guard for memory: when the
+/// provider is the API and the user has not allowed sending memory there, the request's memory is
+/// dropped here, whatever the popup asked for, so a UI bug can never leak facts off the Mac.
+/// Built by `CotabbyAppEnvironment`, used by `SelectionRewriteCoordinator`.
+@MainActor
+final class RewriteEngine {
+    private let local: RewriteProviding
+    private let api: RewriteProviding
+    private let preferences: @MainActor () -> RewritePreferences
+
+    init(local: RewriteProviding, api: RewriteProviding, preferences: @escaping @MainActor () -> RewritePreferences) {
+        self.local = local
+        self.api = api
+        self.preferences = preferences
+    }
+
+    nonisolated deinit {}
+
+    var activeProvider: RewriteProviding { preferences().provider == .api ? api : local }
+
+    /// Whether memory may be part of a rewrite with the current provider.
+    var memoryAllowed: Bool {
+        let prefs = preferences()
+        return prefs.provider == .local || prefs.sendsMemoryToAPI
+    }
+
+    func rewrite(_ request: RewriteRequest, onPartial: @escaping @MainActor (String) -> Void) async throws -> String {
+        guard request.selection.count <= SelectionRewriteEligibility.maximumCharacters else { throw RewriteError.selectionTooLong }
+        let provider = activeProvider
+        guard provider.isAvailable else { throw RewriteError.noProvider }
+        let safeRequest = memoryAllowed ? request
+            : RewriteRequest(selection: request.selection, action: request.action, memory: .empty)
+        let raw = try await provider.rewrite(safeRequest, onPartial: onPartial)
+        guard let cleaned = RewriteOutputCleaner.clean(raw, selection: request.selection, action: request.action) else {
+            throw RewriteError.unusableOutput
+        }
+        return cleaned
+    }
+}
