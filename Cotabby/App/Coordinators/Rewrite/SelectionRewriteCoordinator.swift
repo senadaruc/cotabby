@@ -281,8 +281,10 @@ final class SelectionRewriteCoordinator {
         switch outcome {
         case .replace where output.paste(text):
             CotabbyLogger.app.info("Rewrite replaced", metadata: ["category": "rewrite", "characters": .stringConvertible(text.count)])
+            // `close()` clears the input the notice would anchor to, so its caret rect is read first.
+            let anchor = targetInput?.caretRect ?? .zero
             close()
-            verifyInserted(text, in: target)
+            verifyInserted(text, in: target, anchor: anchor)
         case .copyInstead(let reason):
             copyAndNotify(text, reason: reason)
         default:
@@ -294,9 +296,16 @@ final class SelectionRewriteCoordinator {
     /// paste silently; then the result goes to the clipboard so it is not lost. Checks a short
     /// prefix of the rewrite around the caret, up to 5 times over about a second, after the inserter
     /// has restored the user's clipboard (~0.3 s).
-    private func verifyInserted(_ text: String, in target: SelectionRewriteTarget) {
-        let probe = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(30))
-        guard !probe.isEmpty else { return }
+    ///
+    /// Hosts report the same text differently: some run paragraphs together or wrap lines, so line
+    /// breaks are collapsed to single spaces on both sides before comparing. A paste that landed right
+    /// at the caret shows up as the suffix of the text before the caret, which is checked first.
+    /// Only a miss in the same field after every poll copies and shows the notice.
+    private func verifyInserted(_ text: String, in target: SelectionRewriteTarget, anchor: CGRect) {
+        let flat = Self.collapsed(text)
+        let head = String(flat.prefix(30))
+        let tail = String(flat.suffix(30))
+        guard !head.isEmpty else { return }
         Task { [weak self] in
             for _ in 0..<5 {
                 try? await Task.sleep(nanoseconds: 200_000_000)
@@ -307,12 +316,35 @@ final class SelectionRewriteCoordinator {
                 guard let input = self.currentSnapshot().context,
                       SelectionRewriteTarget.fieldKey(for: input) == target.fieldKey
                 else { return }
-                if (input.precedingText + input.selectedText + input.trailingText).contains(probe) {
+                if Self.collapsed(input.precedingText).hasSuffix(tail)
+                    || Self.collapsed(input.precedingText + input.selectedText + input.trailingText).contains(head) {
                     return
                 }
             }
-            self?.output.copyToClipboard(text)
+            guard let self else { return }
+            self.output.copyToClipboard(text)
             CotabbyLogger.app.warning("Rewrite not seen in the field; copied to clipboard", metadata: ["category": "rewrite"])
+            self.showNotice("Couldn't confirm the replace — copied to clipboard.", anchor: anchor)
+        }
+    }
+
+    /// Every run of whitespace and line breaks becomes one space, and the ends are trimmed.
+    private static func collapsed(_ text: String) -> String {
+        text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+    }
+
+    /// A short notice in a fresh popup that does not take the keyboard, closed after 2.5 s. Used after
+    /// a successful paste, when no popup is left to reuse. Skipped when another popup is already open.
+    private func showNotice(_ reason: String, anchor: CGRect) {
+        guard model == nil else { return }
+        let notice = SelectionRewritePopupModel()
+        notice.phase = .notice(reason)
+        model = notice
+        presenter.showPopup(near: anchor, model: notice, takesKeyboard: false)
+        Task { [weak self, weak notice] in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard let self, let notice, self.model === notice else { return }
+            self.dismiss()
         }
     }
 

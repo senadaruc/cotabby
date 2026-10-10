@@ -306,6 +306,23 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         XCTAssertTrue(output.copied.isEmpty)
     }
 
+    func test_verifyMatchesAcrossCollapsedParagraphs() async {
+        let (_, presenter, output, runner, _) = make()
+        runner.result = "Hi Richard,\n\nthe 28th works."
+        // The selection names Richard and the 28th, so the rewrite is grounded and Replace stays on.
+        await send(snapshot(selected: "Hi Richard, the 28th works."))
+        presenter.buttonPress?()
+        presenter.popupModel?.onAction(.fixGrammar)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        presenter.popupModel?.onReplace()
+        try? await Task.sleep(nanoseconds: 30_000_000)
+        // The host shows the paragraphs run together, with no line break, right before the caret.
+        current = snapshot(selected: "", preceding: "Dear x Hi Richard, the 28th works.")
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        XCTAssertEqual(output.pasted, [runner.result])
+        XCTAssertTrue(output.copied.isEmpty)
+    }
+
     func test_doubleReplacePastesOnce() async {
         let (_, presenter, output, runner, _) = make()
         await send(snapshot(selected: draft))
