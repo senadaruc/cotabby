@@ -97,9 +97,15 @@ struct SelectionRewritePopupView: View {
     }
 
     /// `final` false means the text is still streaming in, so it is drawn dimmed.
+    /// The rewrite as plain wrapped text at its full height. Not a ScrollView: the panel sizes itself
+    /// to the view's fitting size, and a ScrollView has no ideal height, so the preview collapsed to
+    /// nothing and only its scroller showed (2026-10-10). A selection is at most 2,000 characters, and
+    /// the panel's placement keeps it on screen.
     private func preview(_ text: String, final: Bool) -> some View {
-        ScrollView { Text(text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
-            .frame(maxHeight: 180)
+        Text(text)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .foregroundStyle(final ? .primary : .secondary)
     }
 

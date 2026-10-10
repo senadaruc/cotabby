@@ -76,4 +76,27 @@ final class RewritePromptBuilderTests: XCTestCase {
         XCTAssertLessThan(prompt.user.count, 1_000)
         XCTAssertFalse(prompt.user.contains(String(repeating: "x", count: 300)))
     }
+    // MARK: - Language
+
+    func test_namedLanguageIsRequiredInTheRewrite() {
+        var request = RewriteRequest(selection: "selam beraber cigar iceriz wihiskey", action: .fixGrammar, memory: .empty)
+        request.language = "Turkish"
+        let prompt = RewritePromptBuilder.instructPrompt(request)
+        XCTAssertTrue(prompt.system.contains("The draft is written in Turkish."))
+        XCTAssertTrue(prompt.system.contains("never in another language"))
+    }
+
+    func test_customInstructionMayStillTranslate() {
+        var request = RewriteRequest(selection: "selam nasilsin", action: .custom("translate to English"), memory: .empty)
+        request.language = "Turkish"
+        let prompt = RewritePromptBuilder.instructPrompt(request)
+        XCTAssertTrue(prompt.system.contains("unless the instruction asks for another language"))
+        XCTAssertFalse(prompt.system.contains("never in another language"))
+    }
+
+    func test_basePromptNamesTheLanguage() {
+        var request = RewriteRequest(selection: "selam nasilsin", action: .rewrite, memory: .empty)
+        request.language = "Turkish"
+        XCTAssertTrue(RewritePromptBuilder.basePrompt(request).contains("Written in Turkish"))
+    }
 }

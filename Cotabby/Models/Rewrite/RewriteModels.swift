@@ -79,6 +79,9 @@ nonisolated struct RewriteRequest: Equatable, Sendable {
     let selection: String
     let action: RewriteAction
     let memory: RewriteMemoryContext
+    /// The selection's language by its English name ("Turkish"), when `RewriteLanguageDetector`
+    /// could tell; the prompt then requires it instead of hoping the model keeps the language.
+    var language: String? = nil
 }
 
 nonisolated enum RewriteError: LocalizedError, Equatable {

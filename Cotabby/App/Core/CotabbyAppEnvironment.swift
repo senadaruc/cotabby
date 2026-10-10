@@ -412,7 +412,8 @@ final class CotabbyAppEnvironment {
                     && !settings.disabledAppBundleIdentifiers.contains(bundleIdentifier)
             },
             hotkey: TranslationHotkeyTap(suppressionController: suppressionController),
-            keyTap: TemporaryKeyTap(suppressionController: suppressionController)
+            keyTap: TemporaryKeyTap(suppressionController: suppressionController),
+            writingLanguages: { [weak suggestionSettings] in suggestionSettings?.responseLanguages ?? [] }
         )
         let settingsCoordinator = SettingsCoordinator(
             appUpdateManager: appUpdateManager,

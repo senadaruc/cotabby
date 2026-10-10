@@ -42,7 +42,7 @@ nonisolated enum RewritePromptBuilder {
         var rules = [
             "You rewrite the user's own draft text.",
             actionLine(request.action),
-            "Write in the same language as the draft. Keep its meaning, names and numbers.",
+            languageRule(request) + " Keep its meaning, names and numbers.",
             "Return only the rewritten text: no quotes, no preface, no explanation."
         ]
         if !request.memory.isEmpty {
@@ -65,9 +65,21 @@ nonisolated enum RewritePromptBuilder {
         return InstructPrompt(system: rules.joined(separator: "\n"), user: user)
     }
 
+    /// Requires the detected language by name, since a generic "same language" rule let Apple's model
+    /// answer a Turkish draft in English. A custom instruction may still ask for another language
+    /// ("translate to English"), so it gets the softer form.
+    private static func languageRule(_ request: RewriteRequest) -> String {
+        guard let language = request.language else { return "Write in the same language as the draft." }
+        if case .custom = request.action {
+            return "The draft is written in \(language). Write in \(language) unless the instruction asks for another language."
+        }
+        return "The draft is written in \(language). Write the rewrite in \(language), never in another language."
+    }
+
     static func basePrompt(_ request: RewriteRequest) -> String {
         let example = baseExample(request.action)
-        var prompt = "Each draft below is rewritten. \(actionLine(request.action)) Same language, same meaning.\n\n"
+        let languageNote = request.language.map { "Written in \($0), same meaning." } ?? "Same language, same meaning."
+        var prompt = "Each draft below is rewritten. \(actionLine(request.action)) \(languageNote)\n\n"
         if !request.memory.facts.isEmpty {
             prompt += "Known facts: "
             prompt += request.memory.facts.map { trim($0.text, factCharacterLimit) }.joined(separator: " ")

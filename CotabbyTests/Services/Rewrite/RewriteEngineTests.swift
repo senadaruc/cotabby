@@ -100,6 +100,17 @@ final class RewriteEngineTests: XCTestCase {
             XCTAssertEqual(error as? RewriteError, .selectionTooLong)
         }
     }
+
+    func test_languageSurvivesMemoryStrippingForTheAPI() async throws {
+        var prefs = RewritePreferences.defaults
+        prefs.provider = .api
+        let (engine, _, api) = make(prefs)
+        var request = RewriteRequest(selection: draft, action: .rewrite, memory: memory)
+        request.language = "Turkish"
+        _ = try await engine.rewrite(request, onPartial: { _ in })
+        XCTAssertEqual(api.received.first?.language, "Turkish")
+        XCTAssertEqual(api.received.first?.memory, .empty)
+    }
 }
 
 /// Collects what the relay delivered, on the main actor where the relay delivers.
@@ -107,6 +118,7 @@ final class RewriteEngineTests: XCTestCase {
 private final class DeliveryLog {
     private(set) var items: [String] = []
     func append(_ text: String) { items.append(text) }
+
 }
 
 /// The relay keeps streamed partials ordered (latest wins) and delivers nothing after `finish()`.
@@ -134,4 +146,5 @@ final class PartialRelayTests: XCTestCase {
         XCTAssertFalse(log.items.contains("late"), "a partial was delivered after finish()")
         XCTAssertTrue(log.items.isEmpty, "a partial sent before finish() was delivered after it")
     }
+
 }

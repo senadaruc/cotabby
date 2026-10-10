@@ -32,8 +32,11 @@ final class RewriteEngine {
         guard request.selection.count <= SelectionRewriteEligibility.maximumCharacters else { throw RewriteError.selectionTooLong }
         let provider = activeProvider
         guard provider.isAvailable else { throw RewriteError.noProvider }
-        let safeRequest = memoryAllowed ? request
-            : RewriteRequest(selection: request.selection, action: request.action, memory: .empty)
+        var safeRequest = request
+        if !memoryAllowed {
+            safeRequest = RewriteRequest(selection: request.selection, action: request.action, memory: .empty)
+            safeRequest.language = request.language
+        }
         let raw = try await provider.rewrite(safeRequest, onPartial: onPartial)
         guard let cleaned = RewriteOutputCleaner.clean(raw, selection: request.selection, action: request.action) else {
             throw RewriteError.unusableOutput

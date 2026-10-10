@@ -84,7 +84,7 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
                              capability: selected.isEmpty ? .supported : .blocked("Text is currently selected."), context: input)
     }
 
-    private func make(prefs: RewritePreferences = .defaults)
+    private func make(prefs: RewritePreferences = .defaults, languages: [String] = [])
         -> (SelectionRewriteCoordinator, Presenter, Output, Runner, Memory) {
         let presenter = Presenter(), output = Output(), runner = Runner(), memory = Memory()
         subject = PassthroughSubject()
@@ -94,6 +94,7 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
             refreshFocus: {},
             presenter: presenter, output: output, engine: runner, memory: memory,
             preferences: { prefs }, isAppAllowed: { _ in true }, hotkey: nil, keyTap: nil,
+            writingLanguages: { languages },
             stableSelectionDelay: 0
         )
         let objects: [AnyObject] = [coordinator, presenter, output, runner, memory]
@@ -124,6 +125,16 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         let (_, presenter, _, _, _) = make()
         await send(snapshot(selected: draft))
         XCTAssertEqual(presenter.buttonFieldFrame, CGRect(x: 0, y: 0, width: 240, height: 32))
+    }
+
+    /// The request names the selection's language among the user's, so the model keeps it.
+    func test_requestNamesTheSelectionsLanguage() async {
+        let (_, presenter, _, runner, _) = make(languages: ["English", "Turkish"])
+        await send(snapshot(selected: "selam beraber cigar iceriz wihiskey"))
+        presenter.buttonPress?()
+        presenter.popupModel?.onAction(.fixGrammar)
+        try? await Task.sleep(nanoseconds: 30_000_000)
+        XCTAssertEqual(runner.requests.first?.language, "Turkish")
     }
 
     func test_buttonOffShowsNothingUntilShortcut() async {

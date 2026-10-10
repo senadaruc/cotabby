@@ -36,6 +36,8 @@ final class SelectionRewriteCoordinator {
     private let hotkey: TranslationHotkeyTap?
     private let keyTap: TemporaryKeyTap?
     private let stableSelectionDelay: UInt64
+    /// The languages the user declared in Settings → Writing, which limit language detection.
+    private let writingLanguages: @MainActor () -> [String]
 
     private var cancellables: Set<AnyCancellable> = []
     private var target: SelectionRewriteTarget?
@@ -72,6 +74,7 @@ final class SelectionRewriteCoordinator {
         isAppAllowed: @escaping @MainActor (String) -> Bool,
         hotkey: TranslationHotkeyTap?,
         keyTap: TemporaryKeyTap?,
+        writingLanguages: @escaping @MainActor () -> [String] = { [] },
         stableSelectionDelay: UInt64 = 250_000_000
     ) {
         self.snapshots = snapshots
@@ -85,6 +88,7 @@ final class SelectionRewriteCoordinator {
         self.isAppAllowed = isAppAllowed
         self.hotkey = hotkey
         self.keyTap = keyTap
+        self.writingLanguages = writingLanguages
         self.stableSelectionDelay = stableSelectionDelay
     }
 
@@ -249,8 +253,11 @@ final class SelectionRewriteCoordinator {
             }
             guard isCurrent() else { return }
             do {
+                var request = RewriteRequest(selection: input.selectedText, action: action, memory: context)
+                // Named in the prompt: Apple's model otherwise answered a Turkish draft in English.
+                request.language = RewriteLanguageDetector.language(of: input.selectedText, among: self.writingLanguages())
                 let text = try await self.engine.rewrite(
-                    RewriteRequest(selection: input.selectedText, action: action, memory: context),
+                    request,
                     onPartial: { partial in
                         guard isCurrent(), case .generating = model.phase else { return }
                         model.phase = .generating(partial)
