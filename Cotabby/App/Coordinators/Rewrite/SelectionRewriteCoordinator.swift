@@ -204,6 +204,7 @@ final class SelectionRewriteCoordinator {
         }
         model.onRefine = { [weak self] length in self?.refine(length) }
         model.onReplace = { [weak self] in self?.replace() }
+        model.onReplaceAnyway = { [weak self] in self?.replace(acceptingChanges: true) }
         model.onCopy = { [weak self] in self?.copyPreview() }
         model.onClose = { [weak self] in self?.dismiss() }
         if input.selectedText.count > SelectionRewriteEligibility.maximumCharacters {
@@ -295,6 +296,9 @@ final class SelectionRewriteCoordinator {
                 // A refinement may keep what the earlier result said, so both texts count as the user's.
                 let ownText = draft.map { input.selectedText + "\n" + $0 } ?? input.selectedText
                 let unsupported = AnswerGroundingPolicy.unsupportedSpecifics(in: text, facts: facts, question: ownText)
+                model.changeWarning = RewriteChangeWarning.message(
+                    selection: ownText, rewrite: text, unsupported: unsupported, usedMemory: !facts.isEmpty
+                )
                 model.phase = .preview(text: text, unsupported: unsupported)
             } catch is CancellationError {
                 return
@@ -310,18 +314,21 @@ final class SelectionRewriteCoordinator {
 
     // MARK: - Replace and copy
 
-    /// Starts Replace. Guarded synchronously so a stale or ungrounded preview never starts the flow;
-    /// `isReplacing` is set here, before the task runs, so no focus snapshot slips in between.
-    private func replace() {
+    /// Starts Replace. Guarded synchronously so a stale preview never starts the flow; `isReplacing`
+    /// is set here, before the task runs, so no focus snapshot slips in between. A preview whose
+    /// rewrite changed a name or number the user wrote replaces only with `acceptingChanges`: the
+    /// popup's "Replace anyway", never plain Replace or Return.
+    private func replace(acceptingChanges: Bool = false) {
         // `!isReplacing` makes a double Return or double click a no-op while the first Replace is in flight.
-        guard !isReplacing, let model, target != nil, case .preview(_, let unsupported) = model.phase, unsupported.isEmpty else { return }
+        guard !isReplacing, let model, target != nil, case .preview(_, let unsupported) = model.phase,
+              unsupported.isEmpty || acceptingChanges else { return }
         isReplacing = true
         Task { @MainActor in await self.performReplace() }
     }
 
     private func performReplace() async {
         defer { isReplacing = false }
-        guard let model, let target, case .preview(let text, let unsupported) = model.phase, unsupported.isEmpty else { return }
+        guard let model, let target, case .preview(let text, _) = model.phase else { return }
         let wasTyping = presenter.isPopupKey
         presenter.hideAll()
         if wasTyping {

@@ -270,6 +270,21 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         XCTAssertTrue(output.pasted.isEmpty)
     }
 
+    /// A changed name or number needs a deliberate click: plain Replace (and Return) stays off,
+    /// "Replace anyway" pastes, and the warning says what changed.
+    func test_replaceAnywayPastesDespiteTheWarning() async {
+        let (_, presenter, output, runner, _) = make()
+        runner.result = "Please let me know if the dates work for you and Arnaud."
+        await send(snapshot(selected: draft))
+        presenter.buttonPress?()
+        presenter.popupModel?.onAction(.friendly)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertEqual(presenter.popupModel?.changeWarning, "The rewrite adds “Arnaud”, which isn't in your text.")
+        presenter.popupModel?.onReplaceAnyway()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(output.pasted, [runner.result])
+    }
+
     func test_pasteTheHostIgnoredIsCopied() async {
         let (_, presenter, output, runner, _) = make()
         await send(snapshot(selected: draft))

@@ -37,6 +37,10 @@ final class SelectionRewritePopupModel: ObservableObject {
     // owner and wires each one once. The view never holds a reference back to the coordinator.
     var onAction: (RewriteAction) -> Void = { _ in }
     var onReplace: () -> Void = {}
+    /// Replaces even though the rewrite changed a name or number the user wrote (see `changeWarning`).
+    var onReplaceAnyway: () -> Void = {}
+    /// What the rewrite changed that the user should check before replacing; nil when nothing did.
+    @Published var changeWarning: String?
     var onCopy: () -> Void = {}
     var onRetry: () -> Void = {}
     /// Shorter / Longer on the preview: reshape the result on screen, keeping its tone.
@@ -121,13 +125,18 @@ struct SelectionRewritePopupView: View {
         VStack(alignment: .leading, spacing: 8) {
             preview(text, final: true)
             if !unsupported.isEmpty {
-                // Replace is disabled when the rewrite introduced names or facts the user never
-                // wrote; Copy stays available so the user can still take the text by hand.
-                Text("Not in your text or memory: \(unsupported.joined(separator: ", ")). Replace is off; Copy still works.")
+                // The rewrite changed a name or number the user wrote: say what, and let them decide.
+                // "Replace anyway" is a deliberate click; Return does not trigger it.
+                Text(model.changeWarning ?? "The rewrite changed: \(unsupported.joined(separator: ", ")).")
                     .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             HStack {
-                Button("Replace") { model.onReplace() }.keyboardShortcut(.defaultAction).disabled(!unsupported.isEmpty)
+                if unsupported.isEmpty {
+                    Button("Replace") { model.onReplace() }.keyboardShortcut(.defaultAction)
+                } else {
+                    Button("Replace anyway") { model.onReplaceAnyway() }
+                }
                 Button("Copy") { model.onCopy() }
                 Button("Retry") { model.onRetry() }
                 Spacer()
