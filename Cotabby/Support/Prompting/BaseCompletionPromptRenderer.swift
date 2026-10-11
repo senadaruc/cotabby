@@ -128,13 +128,21 @@ enum BaseCompletionPromptRenderer {
         let prefix = kept.first { $0.name == "prefix" }?.content ?? ""
         let preface = kept.filter { $0.name != "prefix" }.map(\.content)
 
+        // An email reply's addressee, written as the "To:" header a reply carries right above its
+        // body. The quoted message under the caret greets the user ("Hi Senad/Dominique") and the
+        // user's notes sign with their name, so without it "Dear " completed to the user's own name.
+        // Replaying the logged Outlook prompt on the shipped Gemma E4B (greedy, 2026-10-11): "Dear ",
+        // "Hi " and "Dea" all gave "Senad" before and "Anderson" with this line. The same fact as a
+        // "Replying to:" label on the surface line, or a relabelled quote, changed nothing: the
+        // name has to sit next to the salutation.
+        let addresseeHeader = surfaceContext?.replyingTo.map { "To: \($0)\n\n" } ?? ""
         guard !preface.isEmpty else {
             // No context to condition on: hand the model the bare text and let it continue.
-            return prefix
+            return addresseeHeader + prefix
         }
         // A blank line separates the conditioning preface from the live text without a label the
         // model could copy. The prefix remains the final bytes of the prompt.
-        return preface.joined(separator: "\n") + "\n\n" + prefix
+        return preface.joined(separator: "\n") + "\n\n" + addresseeHeader + prefix
     }
 
     /// Surface metadata is one optional section; its representation does not affect budgeting.

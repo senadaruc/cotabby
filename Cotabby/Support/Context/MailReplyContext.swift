@@ -108,6 +108,34 @@ nonisolated enum MailReplyContext {
         QuotedReplyParser.quotedSubject(in: trailingText)
     }
 
+    /// Who the reply is addressed to: the sender of the newest quoted message ("From: Anderson Lau
+    /// <anderson.lau@imperum.io>" → "Anderson Lau"). Nil when there is no quote, the header names no
+    /// sender, or the sender is the user (a follow-up to their own mail goes to someone else).
+    ///
+    /// Why: without it the model saw the user's name everywhere (the quoted "Hi Senad/Dominique",
+    /// the notes' "Best regards, Senad") and no one else's as the addressee, so "Dear " in a reply
+    /// to Anderson Lau completed to "Senad," (2026-10-11).
+    static func replyRecipient(in trailingText: String, userName: String?) -> String? {
+        guard let sender = QuotedReplyParser.quotedMessage(in: trailingText)?.sender?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            // A bare address is no name to greet, and the model would copy it into the salutation.
+            !sender.isEmpty, !sender.contains("@")
+        else { return nil }
+        if let userName, names(sender, as: userName) { return nil }
+        return sender
+    }
+
+    /// True when every word of `userName` appears in `sender`, ignoring case and diacritics, so
+    /// "Senad" and "Senad Aruc" both match a header that says "Senad Aruc".
+    private static func names(_ sender: String, as userName: String) -> Bool {
+        let words: (String) -> Set<String> = { text in
+            Set(text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+                .split(whereSeparator: { !$0.isLetter }).map(String.init))
+        }
+        let userWords = words(userName)
+        return !userWords.isEmpty && userWords.isSubset(of: words(sender))
+    }
+
     /// Outlook titles its main window after the open folder ("Inbox • All Accounts", "Sent Items •
     /// senad@imperum.io"). An inline reply there has no window of its own, so that title names a
     /// mailbox, not a conversation, and must not be matched against conversation titles.
