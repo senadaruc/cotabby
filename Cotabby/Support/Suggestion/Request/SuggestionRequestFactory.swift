@@ -113,7 +113,10 @@ enum SuggestionRequestFactory {
                 applicationName: context.applicationName,
                 windowTitle: surfaceWindowTitle,
                 focusedURLString: context.focusedURLString,
-                fieldPlaceholder: context.fieldPlaceholder
+                fieldPlaceholder: context.fieldPlaceholder,
+                replyingTo: MailReplyContext.isMail(bundleIdentifier: context.bundleIdentifier)
+                    ? MailReplyContext.replyRecipient(in: context.trailingText, userName: userName)
+                    : nil
             )
             : nil
         // Typing history stays on this Mac. The provider already returns nothing for the endpoint

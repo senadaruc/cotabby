@@ -36,6 +36,57 @@ final class MailReplyContextTests: XCTestCase {
         XCTAssertNil(MailReplyContext.quotedSubject(in: tail))
     }
 
+    // MARK: - Recipient
+
+    /// Outlook's quoted header when the user replies to someone else (measured 2026-10-11).
+    private let replyToAndersonTail = """
+
+
+    From: Anderson Lau <anderson.lau@imperum.io>
+    Date: Sunday, 11 October 2026 at 12:35
+    To: Senad Aruc <senad@imperum.io>; Dominique Meurisse <dme@imperum.io>
+    Subject: Clarification required
+
+    Hi Senad/Dominique,
+
+    I have several questions/concerns that I'd like to have addressed.
+    """
+
+    func test_theRecipientIsTheQuotedMessagesSender() {
+        XCTAssertEqual(MailReplyContext.replyRecipient(in: replyToAndersonTail, userName: "Senad"), "Anderson Lau")
+        XCTAssertEqual(MailReplyContext.replyRecipient(in: replyToAndersonTail, userName: nil), "Anderson Lau")
+        XCTAssertEqual(
+            MailReplyContext.replyRecipient(in: "On 7 Oct 2026, at 16:14, Ayşe Yılmaz <a@x.com> wrote:\n> Hi", userName: "Senad"),
+            "Ayşe Yılmaz"
+        )
+    }
+
+    func test_noRecipientForTheUsersOwnMailABareAddressOrNoQuote() {
+        // A follow-up to the user's own message goes to someone else; naming the user is the bug.
+        XCTAssertNil(MailReplyContext.replyRecipient(in: outlookReplyTail, userName: "Senad"))
+        XCTAssertNil(MailReplyContext.replyRecipient(in: outlookReplyTail, userName: "senad aruc"))
+        XCTAssertNil(MailReplyContext.replyRecipient(in: "From: <a@x.com>\nSubject: Hi\n\nHello there", userName: nil))
+        XCTAssertNil(MailReplyContext.replyRecipient(in: "the rest of my own paragraph", userName: "Senad"))
+    }
+
+    func test_anOutlookReplyPromptNamesWhoItIsAddressedTo() {
+        let context = CotabbyTestFixtures.focusedInputContext(
+            bundleIdentifier: "com.microsoft.Outlook", precedingText: "Dear ",
+            trailingText: replyToAndersonTail, windowTitle: "Inbox • All Accounts"
+        )
+        let settings = CotabbyTestFixtures.settingsSnapshot(selectedEngine: .llamaOpenSource, userName: "Senad")
+        let prompt = SuggestionRequestFactory.buildRequest(context: context, settings: settings, configuration: .standard)
+            .request.prompt
+        XCTAssertTrue(prompt.hasSuffix("\n\nTo: Anderson Lau\n\nDear "), prompt)
+
+        // Outside mail the trailing text is the user's own paragraph, never an addressee.
+        let notes = CotabbyTestFixtures.focusedInputContext(
+            bundleIdentifier: "com.apple.TextEdit", precedingText: "Dear ", trailingText: replyToAndersonTail
+        )
+        XCTAssertFalse(SuggestionRequestFactory.buildRequest(context: notes, settings: settings, configuration: .standard)
+            .request.prompt.contains("To: Anderson Lau"))
+    }
+
     // MARK: - Budgets and titles
 
     func test_mailAppsCarryTheQuotedThreadOtherAppsKeepTheDefault() {
