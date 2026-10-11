@@ -375,7 +375,7 @@ struct FocusSnapshotResolver {
     }
 
     /// Why a field Cotabby can read is still one it must not complete in, or nil when it may: a
-    /// secure field, one of Mail's header rows, or a field with text selected.
+    /// secure field, one of Mail's header rows, a sign-in or search box, or a field with text selected.
     private static func blockedReason(
         for candidate: AXFocusCandidate,
         bundleIdentifier: String,
@@ -397,19 +397,36 @@ struct FocusSnapshotResolver {
             return MailHeaderFieldDetector.blockedReason
         }
 
-        // Email, username, phone and code boxes: four attribute reads, only for single-line fields.
-        if CredentialFieldDetector.mightBeCredentialField(role: candidate.role),
-           CredentialFieldDetector.isCredentialField(
-               role: candidate.role,
-               labels: [
-                   AXHelper.stringValue(for: kAXTitleAttribute as CFString, on: candidate.element),
-                   AXHelper.stringValue(for: kAXDescriptionAttribute as CFString, on: candidate.element),
-                   AXHelper.stringValue(for: kAXPlaceholderValueAttribute as CFString, on: candidate.element)
-               ],
-               domIdentifier: AXHelper.stringValue(for: "AXDOMIdentifier" as CFString, on: candidate.element),
-               text: candidate.textValue
-           ) {
-            return CredentialFieldDetector.blockedReason
+        // Sign-in boxes and search boxes are both single-line fields recognized from what they say
+        // about themselves: four attribute reads, made once for both checks. A browser's address bar
+        // is browser chrome (no DOM attributes) and stays supported even though it searches.
+        let isBrowserChrome = BrowserAppDetector.isBrowser(bundleIdentifier: bundleIdentifier)
+            && !candidate.vendsDOMAttributes
+        let mightBeCredential = CredentialFieldDetector.mightBeCredentialField(role: candidate.role)
+        let mightBeSearch = SearchFieldDetector.mightBeSearchField(role: candidate.role, isBrowserChrome: isBrowserChrome)
+        if mightBeCredential || mightBeSearch {
+            let labels = [
+                AXHelper.stringValue(for: kAXTitleAttribute as CFString, on: candidate.element),
+                AXHelper.stringValue(for: kAXDescriptionAttribute as CFString, on: candidate.element),
+                AXHelper.stringValue(for: kAXPlaceholderValueAttribute as CFString, on: candidate.element)
+            ]
+            let domIdentifier = AXHelper.stringValue(for: "AXDOMIdentifier" as CFString, on: candidate.element)
+            // Email, username, phone and code boxes.
+            if mightBeCredential, CredentialFieldDetector.isCredentialField(
+                role: candidate.role, labels: labels, domIdentifier: domIdentifier, text: candidate.textValue
+            ) {
+                return CredentialFieldDetector.blockedReason
+            }
+            // Search boxes take a query, not prose.
+            if mightBeSearch, SearchFieldDetector.isSearchField(
+                role: candidate.role,
+                subrole: candidate.subrole,
+                labels: labels,
+                domIdentifier: domIdentifier,
+                isBrowserChrome: isBrowserChrome
+            ) {
+                return SearchFieldDetector.blockedReason
+            }
         }
 
         guard selection.length > 0 else { return nil }
