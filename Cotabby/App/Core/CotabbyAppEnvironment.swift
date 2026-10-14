@@ -26,7 +26,7 @@ final class CotabbyAppEnvironment {
     /// `startMLXEngine()` (called by AppDelegate outside the test host) starts their work.
     let mlxToolchainProvisioner: MLXToolchainProvisioner
     let mlxServerManager: MLXServerManager
-    /// The second, on-demand MLX server that Rewrite with MLX uses (an instruct model).
+    /// The second, on-demand MLX server that Rewrite with MLX uses (on autocomplete's MLX model).
     let mlxRewriteServer: MLXRewriteServerController
     let menuResourceMonitor: MenuResourceMonitor
     let mlxModelDownloader: MLXModelDownloader
@@ -425,7 +425,7 @@ final class CotabbyAppEnvironment {
         // memory gathered from the conversation in focus. Shares the inserter and llama runtime.
         // Built once here: the same store and credential instances feed the Settings pane and the engine.
         let rewritePreferences = RewritePreferencesStore(
-            isAppleIntelligenceAvailable: foundationModelAvailabilityService.isAvailable
+            appleIntelligence: foundationModelAvailabilityService.state
         )
         // One Keychain item per cloud service, so switching services keeps every key.
         let rewriteCredentials = RewriteCredentialVault()
@@ -711,6 +711,12 @@ final class CotabbyAppEnvironment {
             }
             .store(in: &cancellables)
 
+        // A stored "local" Rewrite choice is migrated only on a definitive Apple Intelligence answer;
+        // right after login the model is often "still preparing", so keep listening for it.
+        foundationModelAvailabilityService.$state
+            .sink { [weak rewritePreferences] state in rewritePreferences?.noteAppleIntelligence(state) }
+            .store(in: &cancellables)
+
         // Update the AX polling timer whenever the user changes the poll interval setting.
         suggestionSettings.$focusPollIntervalMilliseconds
             .removeDuplicates()
@@ -936,16 +942,25 @@ final class CotabbyAppEnvironment {
             }
             .store(in: &cancellables)
 
-        // The on-demand rewrite server serves autocomplete's MLX model: switching the rewrite
-        // provider or changing that model stops it (the next rewrite restarts it on the new model).
-        Publishers.CombineLatest(rewritePreferences.$preferences.map(\.provider), suggestionSettings.$mlxModelID)
-            .removeDuplicates { $0 == $1 }
-            .dropFirst()
-            .sink { [weak self] _ in
-                guard let self else { return }
-                Task { await self.mlxRewriteServer.stop() }
-            }
-            .store(in: &cancellables)
+        // The on-demand rewrite server serves autocomplete's MLX model, and only while autocomplete
+        // is not on MLX (otherwise rewrites share autocomplete's server). Stop it whenever what it
+        // is for changes: the resolved rewrite provider, autocomplete moving to or from MLX, or
+        // that model (the next rewrite restarts it).
+        Publishers.CombineLatest3(
+            rewritePreferences.$preferences.map(\.provider),
+            suggestionSettings.$selectedEngine,
+            suggestionSettings.$mlxModelID
+        )
+        .map { provider, engine, model in
+            (RewriteProviderResolver.resolve(provider, autocompleteEngine: engine), engine == .mlx, model)
+        }
+        .removeDuplicates { $0 == $1 }
+        .dropFirst()
+        .sink { [weak self] _ in
+            guard let self else { return }
+            Task { await self.mlxRewriteServer.stop() }
+        }
+        .store(in: &cancellables)
 
         // One pure decision from every input; each change is applied in order, so a quick
         // engine switch and switch-back cannot reach the manager out of order.

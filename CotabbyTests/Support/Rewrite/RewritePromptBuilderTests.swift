@@ -144,9 +144,23 @@ final class RewritePromptBuilderTests: XCTestCase {
         XCTAssertTrue(system.contains("Keep the same tone: warm and caring, for a family member."))
     }
 
-    func test_completionTokenBudgetIsTwiceTheSelectionClampedTo64And512() {
-        XCTAssertEqual(RewritePromptBuilder.completionTokenBudget(selection: "hi"), 64)
-        XCTAssertEqual(RewritePromptBuilder.completionTokenBudget(selection: String(repeating: "a", count: 400)), 200)
-        XCTAssertEqual(RewritePromptBuilder.completionTokenBudget(selection: String(repeating: "a", count: 4000)), 512)
+    func test_completionTokenBudgetMatchesTheInProcessBudgetAndCapsAt800() {
+        func budget(_ count: Int, _ action: RewriteAction = .rewrite) -> Int {
+            RewritePromptBuilder.completionTokenBudget(
+                for: RewriteRequest(selection: String(repeating: "a", count: count), action: action, memory: .empty))
+        }
+        XCTAssertEqual(budget(2), 48)
+        XCTAssertEqual(budget(800), 800 * 3 / 8 + 48)
+        XCTAssertEqual(budget(4000), 800, "a long selection is not cut at 512")
+    }
+
+    func test_longerGetsTwiceTheEstimatedTokensClampedTo64And800() {
+        func budget(_ count: Int) -> Int {
+            RewritePromptBuilder.completionTokenBudget(
+                for: RewriteRequest(selection: String(repeating: "a", count: count), action: .longer, memory: .empty))
+        }
+        XCTAssertEqual(budget(2), 64)
+        XCTAssertEqual(budget(400), 200)
+        XCTAssertEqual(budget(4000), 800)
     }
 }

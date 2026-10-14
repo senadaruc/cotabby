@@ -441,7 +441,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .translationEnabled: return "Translate incoming messages and offer replies in the chat's language."
         case .translationApps: return "Apps whose chats are translated."
         case .translationLanguages: return "Which languages translate on this Mac, and how."
-        case .rewriteProvider: return "Choose Cotabby's local models or your API model for rewriting."
+        case .rewriteProvider: return "Rewrite with the engine autocomplete uses, another local engine, or your API model."
         case .rewriteMemory: return "Let rewrites use facts and your style from memory."
         case .rewriteButton: return "Show a button when you select text, or use ⌃⌥R."
         case .memoryService: return "Remember chat and mail history on this Mac for suggestions."
@@ -637,7 +637,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .translationLanguages:
             return ["translation languages", "apple translation", "download languages", "offline translation"]
         case .rewriteProvider:
-            return ["rewrite", "rephrase", "api", "openai", "cloud", "model", "polish"]
+            return ["rewrite", "rephrase", "api", "openai", "cloud", "model", "polish", "mlx", "apple intelligence", "endpoint", "ollama", "open source"]
         case .rewriteMemory:
             return ["memory", "facts", "style", "rewrite"]
         case .rewriteButton:

@@ -75,7 +75,7 @@ final class RewriteEngine {
         guard request.selection.count <= SelectionRewriteEligibility.maximumCharacters else { throw RewriteError.selectionTooLong }
         let provider = activeProvider
         guard provider.isAvailable else {
-            if let reason = provider.unavailableReason { throw RewriteError.mlxUnavailable(reason) }
+            if let reason = provider.unavailableReason { throw RewriteError.unavailable(reason) }
             throw RewriteError.noProvider
         }
         var safeRequest = request

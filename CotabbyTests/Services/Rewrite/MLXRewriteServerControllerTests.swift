@@ -75,7 +75,7 @@ final class MLXRewriteServerControllerTests: XCTestCase {
             _ = try await controller.readyConfiguration(modelID: modelA)
             XCTFail("expected an error")
         } catch {
-            XCTAssertEqual(error as? RewriteError, .mlxUnavailable(MLXUnavailableReason.notInstalled.message))
+            XCTAssertEqual(error as? RewriteError, .unavailable(MLXUnavailableReason.notInstalled.message))
         }
         XCTAssertTrue(launcher.launches.isEmpty)
     }
@@ -86,7 +86,7 @@ final class MLXRewriteServerControllerTests: XCTestCase {
             _ = try await controller.readyConfiguration(modelID: modelA)
             XCTFail("expected an error")
         } catch {
-            XCTAssertEqual(error as? RewriteError, .mlxUnavailable(MLXUnavailableReason.modelNotDownloaded(MLXRepoID(modelA)!).message))
+            XCTAssertEqual(error as? RewriteError, .unavailable(MLXUnavailableReason.modelNotDownloaded(MLXRepoID(modelA)!).message))
         }
         XCTAssertTrue(launcher.launches.isEmpty)
         XCTAssertFalse(controller.canRun(modelID: modelA))
@@ -100,7 +100,7 @@ final class MLXRewriteServerControllerTests: XCTestCase {
             _ = try await controller.readyConfiguration(modelID: modelA)
             XCTFail("expected an error")
         } catch {
-            XCTAssertEqual(error as? RewriteError, .mlxUnavailable(MLXUnavailableReason.modelIncompatible(MLXRepoID(modelA)!, reason.message).message))
+            XCTAssertEqual(error as? RewriteError, .unavailable(MLXUnavailableReason.modelIncompatible(MLXRepoID(modelA)!, reason.message).message))
         }
         XCTAssertTrue(launcher.launches.isEmpty)
     }
@@ -132,7 +132,7 @@ final class MLXRewriteServerControllerTests: XCTestCase {
             _ = try await task.value
             XCTFail("expected an error")
         } catch {
-            guard case .mlxUnavailable = error as? RewriteError else { return XCTFail("wrong error \(error)") }
+            guard case .unavailable = error as? RewriteError else { return XCTFail("wrong error \(error)") }
         }
     }
 
@@ -269,7 +269,7 @@ final class MLXRewriteServerControllerTests: XCTestCase {
             _ = try await controller.readyConfiguration(modelID: "../../etc")
             XCTFail("expected an error")
         } catch {
-            XCTAssertEqual(error as? RewriteError, .mlxUnavailable(MLXUnavailableReason.noModel.message))
+            XCTAssertEqual(error as? RewriteError, .unavailable(MLXUnavailableReason.noModel.message))
         }
         XCTAssertTrue(launcher.launches.isEmpty)
     }

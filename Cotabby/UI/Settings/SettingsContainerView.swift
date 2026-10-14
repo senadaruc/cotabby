@@ -168,7 +168,11 @@ struct SettingsContainerView: View {
             TranslationPaneView(preferences: translationPreferences, service: translationService)
         case .rewrite:
             RewritePaneView(preferences: rewritePreferences, credentials: rewriteCredentials,
-                            modelList: rewriteModelList, engine: rewriteEngine, suggestionSettings: suggestionSettings)
+                            modelList: rewriteModelList, engine: rewriteEngine, suggestionSettings: suggestionSettings,
+                            mlxToolchainProvisioner: mlxToolchainProvisioner, mlxModelDownloader: mlxModelDownloader,
+                            mlxServerManager: mlxServerManager,
+                            foundationModelAvailabilityService: foundationModelAvailabilityService,
+                            runtimeModel: runtimeModel)
         case .context:
             ContextPaneView(suggestionSettings: suggestionSettings, typingHistory: typingHistoryStore)
         case .shortcuts:

@@ -13,6 +13,14 @@ struct RewritePaneView: View {
     let engine: RewriteEngine
     /// Observed so the "Same as autocomplete" row and the MLX note follow the autocomplete engine.
     @ObservedObject var suggestionSettings: SuggestionSettingsModel
+    // Everything a row's availability is computed from. `engine.provider(for:).isAvailable` reads
+    // plain state, so the pane must observe the sources itself: an "(Unavailable)" row then
+    // re-enables as soon as an MLX install or a model download finishes.
+    @ObservedObject var mlxToolchainProvisioner: MLXToolchainProvisioner
+    @ObservedObject var mlxModelDownloader: MLXModelDownloader
+    @ObservedObject var mlxServerManager: MLXServerManager
+    @ObservedObject var foundationModelAvailabilityService: FoundationModelAvailabilityService
+    @ObservedObject var runtimeModel: RuntimeBootstrapModel
 
     /// Models the service reported after "Load models"; empty until then.
     @State private var loadedModels: [String] = []
@@ -97,8 +105,8 @@ struct RewritePaneView: View {
                 }
                 .settingsItem(.rewriteMemory)
                 Toggle(isOn: Binding(get: { preferences.preferences.sendsMemoryToAPI }, set: preferences.setSendsMemoryToAPI)) {
-                    SettingsRowLabel(title: "Send Memory Facts to My API Model",
-                                     description: "Off: memory never leaves this Mac, and memory works only with the local model. On: facts and style examples go to your API model with the text.",
+                    SettingsRowLabel(title: "Send Memory Facts Off This Mac",
+                                     description: "Applies to an API model and to a Local Endpoint on your network or the internet. Off: memory is not used with them, and the text is sent without it. On: facts and style examples go to that model with the text. Apple Intelligence, Open Source, MLX and a Local Endpoint on this Mac always keep memory on this Mac.",
                                      systemImage: "icloud.and.arrow.up")
                 }
                 .disabled(![.api, .localEndpoint].contains(engine.resolvedKind))

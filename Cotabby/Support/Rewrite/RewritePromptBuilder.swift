@@ -33,11 +33,13 @@ nonisolated enum RewritePromptBuilder {
         min(800, request.selection.count * 3 / 8 + 48)
     }
 
-    /// The output budget for a base-model (completions) rewrite on an endpoint or MLX server, which
-    /// unlike the in-process llama path has no other length limit: twice the selection's estimated
-    /// tokens (about 4 characters each) so a longer rewrite fits, clamped to 64...512.
-    static func completionTokenBudget(selection: String) -> Int {
-        min(512, max(64, selection.count / 4 * 2))
+    /// The output budget for a base-model (completions) rewrite on an endpoint or MLX server, whose
+    /// only length limit is this number. It matches the in-process budget (`tokenBudget`, capped at
+    /// 800 so a long selection is not cut); Longer adds room to expand, at twice the selection's
+    /// estimated tokens (about 4 characters each), clamped to 64...800.
+    static func completionTokenBudget(for request: RewriteRequest) -> Int {
+        guard request.action == .longer else { return tokenBudget(request) }
+        return min(800, max(64, request.selection.count / 4 * 2))
     }
 
     static func actionLine(_ action: RewriteAction) -> String {

@@ -181,15 +181,15 @@ nonisolated enum RewriteError: LocalizedError, Equatable {
     case noProvider
     case unusableOutput
     case selectionTooLong
-    /// The MLX rewrite server cannot run or did not become ready; the text says why.
-    case mlxUnavailable(String)
+    /// The chosen provider cannot run (MLX not ready, no model, ...); the text says why.
+    case unavailable(String)
 
     var errorDescription: String? {
         switch self {
         case .noProvider: return "Set up a rewrite model in Settings → Rewrite."
         case .unusableOutput: return "Couldn't rewrite this — try again."
         case .selectionTooLong: return "Selection too long to rewrite."
-        case .mlxUnavailable(let reason): return reason
+        case .unavailable(let reason): return reason
         }
     }
 }
