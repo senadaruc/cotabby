@@ -22,6 +22,11 @@ final class CotabbyAppEnvironment {
     let permissionGuidanceController: PermissionGuidanceController
     let suggestionSettings: SuggestionSettingsModel
     let openAICompatibleConnectionModel: OpenAICompatibleConnectionModel
+    /// MLX engine services, created once and kept for the app's lifetime. Settings observes them;
+    /// `startMLXEngine()` (called by AppDelegate outside the test host) starts their work.
+    let mlxToolchainProvisioner: MLXToolchainProvisioner
+    let mlxServerManager: MLXServerManager
+    let mlxModelDownloader: MLXModelDownloader
     let foundationModelAvailabilityService: FoundationModelAvailabilityService
     let powerSourceMonitor: PowerSourceMonitor
     /// Process-lifetime Low Power Mode observer shared with suggestion orchestration.
@@ -70,6 +75,9 @@ final class CotabbyAppEnvironment {
     let focusDebugOverlayController: FocusDebugOverlayController?
 
     private var cancellables = Set<AnyCancellable>()
+    /// Serializes `apply(_:)` calls to the MLX server manager: each new task awaits the previous
+    /// one, so a quick engine switch and switch-back reach the manager in order.
+    private var mlxApplyChain: Task<Void, Never>?
 
     init() {
         CotabbyLogger.app.info("Building dependency graph")
@@ -90,6 +98,10 @@ final class CotabbyAppEnvironment {
         let openAICompatibleConnectionModel = OpenAICompatibleConnectionModel(
             client: openAICompatibleClient
         )
+        let mlxPaths = MLXPaths.standard()
+        let mlxToolchainProvisioner = MLXToolchainProvisioner.live(paths: mlxPaths)
+        let mlxServerManager = MLXServerManager.live(paths: mlxPaths)
+        let mlxModelDownloader = MLXModelDownloader.live()
         let foundationModelAvailabilityService = FoundationModelAvailabilityService()
         let powerSourceMonitor = PowerSourceMonitor()
         let lowPowerModeMonitor = LowPowerModeMonitor()
@@ -294,7 +306,14 @@ final class CotabbyAppEnvironment {
             endpointModelNameProvider: { [weak suggestionSettings] in
                 suggestionSettings?.openAICompatibleModelName.nonEmpty
             },
-            profileStore: modelProfileStore
+            profileStore: modelProfileStore,
+            mlxEngine: OpenAICompatibleSuggestionEngine.mlx(
+                client: openAICompatibleClient,
+                serverManager: mlxServerManager
+            ),
+            mlxModelNameProvider: { [weak suggestionSettings] in
+                suggestionSettings?.mlxModelID.nonEmpty
+            }
         )
         router.conditionsProvider = { [weak performanceConditionsMonitor] in
             performanceConditionsMonitor?.conditions
@@ -584,6 +603,9 @@ final class CotabbyAppEnvironment {
         self.permissionGuidanceController = permissionGuidanceController
         self.suggestionSettings = suggestionSettings
         self.openAICompatibleConnectionModel = openAICompatibleConnectionModel
+        self.mlxToolchainProvisioner = mlxToolchainProvisioner
+        self.mlxServerManager = mlxServerManager
+        self.mlxModelDownloader = mlxModelDownloader
         self.foundationModelAvailabilityService = foundationModelAvailabilityService
         self.powerSourceMonitor = powerSourceMonitor
         self.lowPowerModeMonitor = lowPowerModeMonitor
@@ -808,6 +830,72 @@ final class CotabbyAppEnvironment {
                 self.openAICompatibleConnectionModel.invalidate()
             }
             .store(in: &cancellables)
+    }
+
+    /// Starts MLX housekeeping once services start; never inside the XCTest host, where a stored
+    /// MLX selection must not launch Python. Order matters: a server orphaned by an earlier crash
+    /// is stopped before the toolchain check and cache scan, whose results then drive the server.
+    func startMLXEngine() {
+        Task { [weak self] in
+            guard let self else { return }
+            await self.mlxServerManager.cleanUpOrphan()
+            await self.mlxToolchainProvisioner.refresh()
+            await self.mlxModelDownloader.refreshCache(toolchain: self.mlxToolchainProvisioner.state.toolchain)
+        }
+        observeMLXEngine()
+    }
+
+    private func observeMLXEngine() {
+        // The toolchain's Python decides which architectures count as usable, so rescan the
+        // cache whenever a different install becomes ready (or goes away).
+        mlxToolchainProvisioner.$state
+            .map(\.toolchain)
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] toolchain in
+                guard let self else { return }
+                Task { await self.mlxModelDownloader.refreshCache(toolchain: toolchain) }
+            }
+            .store(in: &cancellables)
+
+        // Choosing MLX with no model picks a downloaded one, preferring the curated list.
+        Publishers.CombineLatest(suggestionSettings.$selectedEngine, mlxModelDownloader.$cachedModels)
+            .sink { [weak self] engine, cached in
+                guard let self, engine == .mlx, self.suggestionSettings.mlxModelID.isEmpty,
+                      let cached, let pick = MLXModelCatalog.defaultSelection(cached: cached)
+                else { return }
+                self.suggestionSettings.setMLXModelID(pick.value)
+            }
+            .store(in: &cancellables)
+
+        // One pure decision from every input; each change is applied in order, so a quick
+        // engine switch and switch-back cannot reach the manager out of order.
+        Publishers.CombineLatest4(
+            suggestionSettings.$selectedEngine,
+            suggestionSettings.$mlxModelID,
+            suggestionSettings.$mlxPromptCacheBytes,
+            Publishers.CombineLatest(mlxToolchainProvisioner.$state, mlxModelDownloader.$cachedModels)
+        )
+        .map { engine, modelID, cacheBytes, toolchainAndCache in
+            MLXServerDesireResolver.desire(
+                engine: engine,
+                isAppleSilicon: MLXHardware.isAppleSilicon,
+                toolchain: toolchainAndCache.0,
+                modelID: modelID,
+                cachedModels: toolchainAndCache.1,
+                promptCacheBytes: cacheBytes
+            )
+        }
+        .removeDuplicates()
+        .sink { [weak self] desire in
+            guard let self else { return }
+            let previous = self.mlxApplyChain
+            self.mlxApplyChain = Task { [weak self] in
+                await previous?.value
+                await self?.mlxServerManager.apply(desire)
+            }
+        }
+        .store(in: &cancellables)
     }
 }
 

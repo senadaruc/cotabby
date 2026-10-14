@@ -562,3 +562,22 @@ nonisolated struct MLXHTTPReadinessProbe: MLXReadinessProbing {
         guard status == 200 else { throw MLXServerError.warmUpFailed(statusCode: status) }
     }
 }
+
+extension OpenAICompatibleSuggestionEngine {
+    /// The MLX engine: the shared OpenAI-compatible client pointed at Cotabby's own server. The
+    /// configuration is read per request, so a request made while the server is loading or
+    /// failed throws `.unavailable` with the reason at once: no HTTP, and no fallback engine.
+    static func mlx(client: OpenAICompatibleAPIClient, serverManager: MLXServerManager) -> OpenAICompatibleSuggestionEngine {
+        OpenAICompatibleSuggestionEngine(
+            client: client,
+            configurationProvider: { [weak serverManager] in
+                guard let serverManager else {
+                    throw SuggestionClientError.unavailable("MLX is not running.")
+                }
+                return try serverManager.readyConfiguration
+            },
+            apiKeyProvider: { nil },
+            backend: .mlx
+        )
+    }
+}

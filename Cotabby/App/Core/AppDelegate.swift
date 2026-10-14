@@ -177,6 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         applyLaunchAtLoginDefaultIfNeeded()
         startRuntimeIfPreferredEngineRequiresIt()
+        environment.startMLXEngine()
         focusModel.start()
         inputMonitor.start()
         appUpdateManager.start()
@@ -280,6 +281,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         inputMonitor.stop()
         focusModel.stop()
 
+        // Waits at most 3 s for mlx_lm.server to exit (SIGKILL after that), so quitting Cotabby
+        // never leaves a Python process holding the model's memory.
+        environment.mlxServerManager.shutdownSync(timeoutSeconds: 3)
         runtimeModel.shutdownSync(timeoutSeconds: 1.5)
     }
 
