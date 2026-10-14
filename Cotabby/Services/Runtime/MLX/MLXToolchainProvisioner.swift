@@ -55,12 +55,22 @@ final class MLXToolchainProvisioner: ObservableObject {
     }
 
     /// Re-checks the install places unless an install is running (its own completion re-checks).
+    /// `.checking` is published only when there is no toolchain yet. While MLX runs, a transient
+    /// `.checking` would turn the server desire into "stopped" and kill the live server, so a
+    /// rescan keeps the old state until the new result is known, and publishes it only if changed.
     func refresh() async {
         guard activeInstall == nil else { return }
-        state = .checking
+        if state.toolchain == nil { state = .checking }
         let located = await locate()
         guard activeInstall == nil else { return }
-        state = located
+        if located != state { state = located }
+    }
+
+    /// The rescan every "it may have changed" moment runs (pane opened, MLX selected, Retry): re-detect
+    /// the toolchain, then re-list the model cache against the toolchain's supported architectures.
+    func rescan(models downloader: MLXModelDownloader) async {
+        await refresh()
+        await downloader.refreshCache(toolchain: state.toolchain)
     }
 
     /// First candidate with a parseable launcher and a version at or above the minimum wins. A
@@ -111,7 +121,15 @@ final class MLXToolchainProvisioner: ObservableObject {
         let running = activeInstall?.task
         running?.cancel()
         await running?.value
-        try? fileManager.removeItem(at: paths.root)
+        // Tens of thousands of files: delete off the main actor, whose run loop serves the key taps.
+        let root = paths.root
+        let manager = fileManager
+        await Task.detached(priority: .utility) {
+            guard manager.fileExists(atPath: root.path) else { return }
+            do { try manager.removeItem(at: root) } catch {
+                CotabbyLogger.runtime.error("Removing MLX install failed: \(error.localizedDescription)")
+            }
+        }.value
         CotabbyLogger.runtime.info("Removed Cotabby's MLX install")
         let located = await locate()
         // An install started during the re-check owns the state now; do not overwrite it.

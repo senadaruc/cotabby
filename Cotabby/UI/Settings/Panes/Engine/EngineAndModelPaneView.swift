@@ -81,6 +81,11 @@ struct EngineAndModelPaneView: View {
         }
         .onAppear {
             foundationModelAvailabilityService.refresh()
+            // Detection is otherwise launch-only; another tool may have installed or removed
+            // mlx-lm or a model since.
+            if suggestionSettings.selectedEngine == .mlx {
+                Task { await mlxToolchainProvisioner.rescan(models: mlxModelDownloader) }
+            }
 
             suggestionSettings.initializePowerProfiles(
                 currentEngine: suggestionSettings.selectedEngine,

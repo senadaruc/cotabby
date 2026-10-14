@@ -218,7 +218,7 @@ final class MLXModelDownloader: ObservableObject {
 
         switch outcome {
         case .success(let result) where result.status == 0:
-            download = nil
+            // Cleared after the rescan below, once we know the model is actually usable.
             CotabbyLogger.runtime.info("MLX model downloaded", metadata: ["model": .string(repoID.value)])
         case .success(let result):
             download = MLXDownloadState(
@@ -232,6 +232,18 @@ final class MLXModelDownloader: ObservableObject {
         }
         downloadTask = nil
         await refreshCache(toolchain: toolchain)
+        // A finished download that the rescan does not list is one the installed mlx-lm cannot run
+        // (its architecture is unsupported); clearing the card silently would look like a no-op.
+        if case .success(let result) = outcome, result.status == 0, download?.repoID == repoID {
+            if cachedModels?.contains(where: { $0.repoID == repoID }) == true {
+                download = nil
+            } else {
+                download = MLXDownloadState(
+                    repoID: repoID, fraction: 1,
+                    failure: "Downloaded, but the installed mlx-lm cannot run this model type.",
+                    isActive: false)
+            }
+        }
     }
 
     private func loadSupportedTypes(python: URL) async -> Set<String>? {

@@ -132,6 +132,7 @@ struct SettingsContainerView: View {
                 foundationModelAvailabilityService: foundationModelAvailabilityService,
                 runtimeModel: runtimeModel,
                 openAICompatibleConnectionModel: openAICompatibleConnectionModel,
+                mlxServerManager: mlxServerManager,
                 attentionCategories: attentionCategories
             )
         case .general:

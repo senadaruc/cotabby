@@ -10,9 +10,12 @@ nonisolated enum MLXToolchainRules {
     static let minimumVersion = "0.32.0"
     static let pinnedVersion = "0.32.0"
 
-    /// Prints the installed mlx-lm version. Run with `python -I` so user site-packages and
-    /// PYTHON* variables cannot change what is imported.
-    static let versionProbeScript = "import sys, mlx_lm; sys.stdout.write(mlx_lm.__version__)"
+    /// Prints the installed mlx-lm version from package metadata. Importing `mlx_lm` itself loads
+    /// MLX and its heavy dependencies (seconds), which made the probe slow enough to re-run only
+    /// at launch; reading `importlib.metadata` is milliseconds. Run with `python -I` so user
+    /// site-packages and PYTHON* variables cannot change what is found.
+    static let versionProbeScript =
+        "import sys, importlib.metadata as m; sys.stdout.write(m.version('mlx-lm'))"
 
     /// Prints a JSON list of every `model_type` the installed mlx-lm can load: its model modules
     /// plus the remapped aliases (for example `mistral` loads through `llama`).
@@ -96,6 +99,8 @@ nonisolated enum MLXToolchainRules {
         environment["UV_CACHE_DIR"] = paths.cacheDirectory.path
         environment["UV_NO_CONFIG"] = "1"
         environment["UV_PYTHON_PREFERENCE"] = "only-managed"
+        // Compile bytecode at install time so the first server start does not pay for it.
+        environment["UV_COMPILE_BYTECODE"] = "1"
         return environment
     }
 
@@ -125,6 +130,8 @@ nonisolated enum MLXToolchainRules {
         var environment = sanitizedEnvironment(base)
         environment.removeValue(forKey: "HF_HUB_OFFLINE")
         environment["HF_HUB_DISABLE_TELEMETRY"] = "1"
+        // Progress bars would flood the captured stderr with carriage-return redraws.
+        environment["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
         return environment
     }
 

@@ -79,7 +79,12 @@ extension EngineAndModelPaneView {
         case .ready(let toolchain):
             HStack(spacing: 8) {
                 if case .failed = mlxServerManager.state {
-                    Button("Retry") { Task { await mlxServerManager.retry() } }
+                    Button("Retry") {
+                        Task {
+                            await mlxToolchainProvisioner.rescan(models: mlxModelDownloader)
+                            await mlxServerManager.retry()
+                        }
+                    }
                 }
                 if toolchain.isCotabbyInstall {
                     Button("Remove MLX…", role: .destructive) { showsMLXRemoveConfirmation = true }

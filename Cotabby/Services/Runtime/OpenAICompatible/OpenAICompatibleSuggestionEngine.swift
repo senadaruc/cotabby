@@ -176,6 +176,8 @@ final class OpenAICompatibleSuggestionEngine: SuggestionGenerating {
     /// coordinator's cancellable prediction task. Typing again can therefore discard stale
     /// autocomplete work without aborting the model load that future requests need.
     func prewarm(for _: SuggestionRequest) async {
+        // The Ollama preload path is endpoint-only; the MLX instance warms up in its server manager.
+        guard backend == .endpoint else { return }
         do {
             let configuration = try configurationProvider()
             guard configuration.defaultOllamaGenerateURL != nil else { return }

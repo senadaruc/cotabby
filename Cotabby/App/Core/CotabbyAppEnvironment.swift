@@ -842,8 +842,7 @@ final class CotabbyAppEnvironment {
         Task { [weak self] in
             guard let self else { return }
             await self.mlxServerManager.cleanUpOrphan()
-            await self.mlxToolchainProvisioner.refresh()
-            await self.mlxModelDownloader.refreshCache(toolchain: self.mlxToolchainProvisioner.state.toolchain)
+            await self.mlxToolchainProvisioner.rescan(models: self.mlxModelDownloader)
         }
         observeMLXEngine()
     }
@@ -858,6 +857,18 @@ final class CotabbyAppEnvironment {
             .sink { [weak self] toolchain in
                 guard let self else { return }
                 Task { await self.mlxModelDownloader.refreshCache(toolchain: toolchain) }
+            }
+            .store(in: &cancellables)
+
+        // Switching to MLX re-detects, so a toolchain or model changed by another tool since
+        // launch is noticed before the desire is resolved from stale state.
+        suggestionSettings.$selectedEngine
+            .removeDuplicates()
+            .dropFirst() // the launch value is covered by startMLXEngine's own rescan
+            .filter { $0 == .mlx }
+            .sink { [weak self] _ in
+                guard let self else { return }
+                Task { await self.mlxToolchainProvisioner.rescan(models: self.mlxModelDownloader) }
             }
             .store(in: &cancellables)
 

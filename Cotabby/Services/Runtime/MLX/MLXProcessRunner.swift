@@ -35,6 +35,8 @@ nonisolated final class MLXOutputCollector: @unchecked Sendable {
     private var stdout = Data()
     private var stderrLines: [String] = []
     private var partialStderrLine = ""
+    /// Cap on an unterminated stderr fragment (keeps the last bytes).
+    private static let partialLineLimit = 8 * 1024
     private var stdoutClosed = false
     private var stderrClosed = false
 
@@ -57,9 +59,11 @@ nonisolated final class MLXOutputCollector: @unchecked Sendable {
     func appendStderr(_ data: Data) {
         guard !data.isEmpty else { return }
         lock.withLock {
+            // `\r` separates lines too: progress redraws (tqdm) overwrite one line with carriage
+            // returns and would otherwise grow a single "line" without bound.
             partialStderrLine += String(decoding: data, as: UTF8.self)
-            var lines = partialStderrLine.components(separatedBy: "\n")
-            partialStderrLine = lines.removeLast()
+            var lines = partialStderrLine.components(separatedBy: CharacterSet(charactersIn: "\r\n"))
+            partialStderrLine = String(lines.removeLast().suffix(Self.partialLineLimit))
             stderrLines.append(contentsOf: lines.filter { !$0.isEmpty })
             if stderrLines.count > tailLines { stderrLines.removeFirst(stderrLines.count - tailLines) }
         }

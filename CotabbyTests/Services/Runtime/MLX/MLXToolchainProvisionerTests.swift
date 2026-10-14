@@ -1,3 +1,4 @@
+import Combine
 import CryptoKit
 import XCTest
 @testable import Cotabby
@@ -46,6 +47,21 @@ final class MLXToolchainProvisionerTests: XCTestCase {
         let state = await makeProvisioner(versions: ["/own/python": "0.32.0", "/uv/python": "0.33.0"]).locate()
         XCTAssertEqual(state.toolchain?.pythonExecutable.path, "/own/python")
         XCTAssertEqual(state.toolchain?.isCotabbyInstall, true)
+    }
+
+    /// A rescan while MLX runs must not flash `.checking`: that would turn the server desire into
+    /// "stopped" and kill the live server.
+    func test_refreshFromReadyNeverPublishesChecking() async throws {
+        try script(at: paths.ownServerExecutable, python: "/own/python")
+        let provisioner = makeProvisioner(versions: ["/own/python": "0.32.0"])
+        await provisioner.refresh()
+        XCTAssertNotNil(provisioner.state.toolchain)
+        var seen: [MLXToolchainState] = []
+        let cancellable = provisioner.$state.sink { seen.append($0) }
+        await provisioner.refresh()
+        cancellable.cancel()
+        XCTAssertFalse(seen.contains(.checking), "saw \(seen)")
+        XCTAssertNotNil(provisioner.state.toolchain)
     }
 
     func test_externalUvInstallIsUsedWhenNoOwnInstall() async throws {

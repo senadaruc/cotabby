@@ -43,6 +43,9 @@ nonisolated struct MLXPaths: Equatable, Sendable {
         self.root = root
     }
 
+    /// `~/Library/Application Support/<CFBundleName>/MLX`. The folder is keyed by `CFBundleName`
+    /// so the Dev and release apps (different names) get separate installs and cannot delete or
+    /// overwrite each other's toolchain.
     static func standard(bundle: Bundle = .main) -> MLXPaths {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
@@ -214,6 +217,9 @@ nonisolated struct MLXToolchain: Equatable, Sendable {
     let isCotabbyInstall: Bool
 }
 
+/// The steps of Cotabby's own MLX install, in order. The installer reports the current one so the
+/// Settings pane can say what is happening during a multi-minute wait; the provisioner publishes it
+/// inside `MLXToolchainState.installing`.
 nonisolated enum MLXInstallPhase: String, Equatable, Sendable {
     case downloadingUV
     case verifyingUV

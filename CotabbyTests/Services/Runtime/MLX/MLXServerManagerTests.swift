@@ -153,16 +153,17 @@ final class MLXServerManagerTests: XCTestCase {
         XCTAssertEqual(launcher.launches.count, 3, "no restarts after failing")
     }
 
-    func test_failuresSpreadOverMoreThanTwoMinutesKeepRestarting() async {
+    func test_threeConsecutiveSlowFailuresFail() async {
         let manager = makeManager()
         await startReady(manager, launchA)
-        for index in 0..<4 {
+        for index in 0..<3 {
             clock += 121
             launcher.crash(index)
-            await waitUntil { self.launcher.launches.count == index + 2 }
+            if index < 2 { await waitUntil { self.launcher.launches.count == index + 2 } }
         }
-        XCTAssertEqual(sleeps, [.seconds(1), .seconds(5), .seconds(30), .seconds(30)])
-        XCTAssertEqual(manager.state, .starting(modelID: "mlx-community/a"))
+        await waitUntil { if case .failed = manager.state { return true } else { return false } }
+        XCTAssertEqual(sleeps, [.seconds(1), .seconds(5)])
+        XCTAssertEqual(launcher.launches.count, 3, "no restart after the third consecutive failure")
     }
 
     func test_retryAfterFailureStartsAgain() async {

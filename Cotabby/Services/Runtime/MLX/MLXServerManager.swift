@@ -133,6 +133,9 @@ final class MLXServerManager: ObservableObject {
     typealias Sleep = (Duration) async throws -> Void
 
     static let restartBackoff: [Duration] = [.seconds(1), .seconds(5), .seconds(30)]
+    /// Failure policy: restart after 1 s, 5 s, 30 s; give up (`failed`) after `failureLimit`
+    /// failures inside `failureWindow`, or after `failureLimit` consecutive failures regardless
+    /// of timing (a server that takes 60 s+ to fail each time never fills the window).
     static let failureWindow: TimeInterval = 120
     static let failureLimit = 3
     static let readinessTimeout: Duration = .seconds(120)
@@ -385,7 +388,9 @@ final class MLXServerManager: ObservableObject {
             "reason": .string(reason),
             "failures_in_window": .stringConvertible(recentFailures.count)
         ])
-        guard recentFailures.count < Self.failureLimit else {
+        // Two ways to give up: a burst (limit failures inside the window) or a slow loop (limit
+        // failures in a row without ever becoming ready, each attempt outlasting the window).
+        guard recentFailures.count < Self.failureLimit, consecutiveFailures < Self.failureLimit else {
             generation &+= 1
             state = .failed(reason: reason, logTail: logTail)
             return
@@ -529,8 +534,9 @@ final class MLXLiveRunningProcess: MLXRunningProcess {
     func stderrTail() -> [String] { output.stderrTail }
 }
 
-/// Polls `/v1/models` every 250 ms, then sends one 2-token completion for the exact model id so
-/// the weights load now, not on the user's first keystroke (about 6 s for Gemma 4 E4B).
+/// Polls `/v1/models` every 250 ms, then sends two streamed warm-up completions shaped like real
+/// suggestions for the exact model id, so the weights and Metal kernels load now, not on the
+/// user's first keystroke (about 6 s for Gemma 4 E4B).
 nonisolated struct MLXHTTPReadinessProbe: MLXReadinessProbing {
     func waitUntilReady(port: Int, modelID: String, timeout: Duration) async throws {
         let deadline = ContinuousClock.now + timeout

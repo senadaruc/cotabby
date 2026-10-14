@@ -112,6 +112,17 @@ final class MLXModelDownloaderTests: XCTestCase {
         XCTAssertEqual(downloader.download?.failure, "RepositoryNotFoundError: a/b")
     }
 
+    func test_finishedDownloadOfUnsupportedArchitectureReportsIt() async {
+        let downloader = makeDownloader(run: { [unowned self] _, arguments, _, _ in
+            if arguments.last == "a/b" { try self.writeCachedModel("a/b", type: "mamba_x") }
+            return MLXProcessResult(status: 0, stdout: "[\"gemma4\"]", stderrTail: [])
+        })
+        downloader.startDownload(MLXRepoID("a/b")!, toolchain: toolchain)
+        await waitUntil { downloader.download?.isActive == false }
+        XCTAssertEqual(downloader.download?.failure, "Downloaded, but the installed mlx-lm cannot run this model type.")
+        XCTAssertEqual(downloader.cachedModels?.isEmpty, true)
+    }
+
     func test_progressAndCancel() async throws {
         let downloader = makeDownloader(
             files: { _ in [HFRepoFile(path: "model.safetensors", size: 1000)] },

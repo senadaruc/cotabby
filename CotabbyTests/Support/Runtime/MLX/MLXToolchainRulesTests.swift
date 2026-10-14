@@ -67,6 +67,7 @@ final class MLXToolchainRulesTests: XCTestCase {
         let download = MLXToolchainRules.downloadEnvironment(base: base)
         XCTAssertNil(download["HF_HUB_OFFLINE"], "downloads must reach the network")
         XCTAssertEqual(download["HF_HUB_DISABLE_TELEMETRY"], "1")
+        XCTAssertEqual(download["HF_HUB_DISABLE_PROGRESS_BARS"], "1")
 
         let install = MLXToolchainRules.installEnvironment(paths: paths, base: base)
         XCTAssertEqual(install["UV_TOOL_DIR"], "/S/Cotabby/MLX/tools")
@@ -75,6 +76,7 @@ final class MLXToolchainRulesTests: XCTestCase {
         XCTAssertEqual(install["UV_CACHE_DIR"], "/S/Cotabby/MLX/cache")
         XCTAssertEqual(install["UV_NO_CONFIG"], "1")
         XCTAssertEqual(install["UV_PYTHON_PREFERENCE"], "only-managed")
+        XCTAssertEqual(install["UV_COMPILE_BYTECODE"], "1")
         XCTAssertNil(install["UV_INDEX_URL"], "a user's uv mirror setting must not redirect Cotabby's install")
         XCTAssertEqual(MLXToolchainRules.installArguments(), ["tool", "install", "mlx-lm==0.32.0", "--python", "3.12"])
     }

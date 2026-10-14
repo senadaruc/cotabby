@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let suggestionSettings: SuggestionSettingsModel
     let foundationModelAvailabilityService: FoundationModelAvailabilityService
     let powerSourceMonitor: PowerSourceMonitor
+    let mlxServerManager: MLXServerManager
     let suggestionCoordinator: SuggestionCoordinator
     let inlineCommandCoordinator: InlineCommandCoordinator
     let welcomeCoordinator: WelcomeCoordinator
@@ -58,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         suggestionSettings = environment.suggestionSettings
         foundationModelAvailabilityService = environment.foundationModelAvailabilityService
         powerSourceMonitor = environment.powerSourceMonitor
+        mlxServerManager = environment.mlxServerManager
         suggestionCoordinator = environment.suggestionCoordinator
         inlineCommandCoordinator = environment.inlineCommandCoordinator
         welcomeCoordinator = environment.welcomeCoordinator
