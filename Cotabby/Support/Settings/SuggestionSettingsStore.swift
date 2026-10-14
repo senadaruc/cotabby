@@ -131,6 +131,8 @@ struct SuggestionSettingsStore {
     private static let openAICompatibleBaseURLDefaultsKey = "cotabbyOpenAICompatibleBaseURL"
     private static let openAICompatibleModelNameDefaultsKey = "cotabbyOpenAICompatibleModelName"
     private static let openAICompatibleAPIModeDefaultsKey = "cotabbyOpenAICompatibleAPIMode"
+    private static let mlxModelDefaultsKey = "cotabbyMLXModel"
+    private static let mlxPromptCacheBytesDefaultsKey = "cotabbyMLXPromptCacheBytes"
     private static let selectedWordCountPresetDefaultsKey = "cotabbySelectedWordCountPreset"
     private static let usingCustomWordCountRangeDefaultsKey = "cotabbyUsingCustomWordCountRange"
     private static let customWordCountLowWordsDefaultsKey = "cotabbyCustomWordCountLowWords"
@@ -204,6 +206,17 @@ struct SuggestionSettingsStore {
     private static let pluggedInEngineDefaultsKey = "cotabbyPluggedInEngine"
     private static let pluggedInModelFilenameDefaultsKey = "cotabbyPluggedInModelFilename"
     private static let pluggedInEndpointModelNameDefaultsKey = "cotabbyPluggedInEndpointModelName"
+    private static let batteryMLXModelDefaultsKey = "cotabbyBatteryMLXModel"
+    private static let pluggedInMLXModelDefaultsKey = "cotabbyPluggedInMLXModel"
+
+    /// 1 GiB holds the two prompt caches mlx_lm.server keeps for Cotabby's few-thousand-token
+    /// prompts, while stopping a long session from growing the server without bound (the removed
+    /// Python memory sidecar is the cautionary tale).
+    static let defaultMLXPromptCacheBytes = 1 << 30
+
+    static func clampedMLXPromptCacheBytes(_ bytes: Int) -> Int {
+        min(max(bytes, 256 << 20), 8 << 30)
+    }
 
     /// Every persisted-preference key this store owns, in one place so `resetToDefaults` clears the
     /// full set. App state that is deliberately *not* a preference lives under other keys and is
@@ -232,6 +245,8 @@ struct SuggestionSettingsStore {
         openAICompatibleBaseURLDefaultsKey,
         openAICompatibleModelNameDefaultsKey,
         openAICompatibleAPIModeDefaultsKey,
+        mlxModelDefaultsKey,
+        mlxPromptCacheBytesDefaultsKey,
         selectedWordCountPresetDefaultsKey,
         usingCustomWordCountRangeDefaultsKey,
         customWordCountLowWordsDefaultsKey,
@@ -291,7 +306,9 @@ struct SuggestionSettingsStore {
         batteryEndpointModelNameDefaultsKey,
         pluggedInEngineDefaultsKey,
         pluggedInModelFilenameDefaultsKey,
-        pluggedInEndpointModelNameDefaultsKey
+        pluggedInEndpointModelNameDefaultsKey,
+        batteryMLXModelDefaultsKey,
+        pluggedInMLXModelDefaultsKey
     ]
 
     // MARK: - Load
@@ -356,6 +373,10 @@ struct SuggestionSettingsStore {
             .string(forKey: Self.openAICompatibleAPIModeDefaultsKey)
             .flatMap(OpenAICompatibleAPIMode.init(rawValue:))
             ?? .chatCompletions
+        let resolvedMLXModelID = userDefaults.string(forKey: Self.mlxModelDefaultsKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let resolvedMLXPromptCacheBytes = (userDefaults.object(forKey: Self.mlxPromptCacheBytesDefaultsKey) as? Int)
+            .map(Self.clampedMLXPromptCacheBytes) ?? Self.defaultMLXPromptCacheBytes
         let resolvedWordCountPreset: SuggestionWordCountPreset = {
             let storedRaw = userDefaults.string(forKey: Self.selectedWordCountPresetDefaultsKey)
             // Migrate the retired "3-7" raw value to its replacement "4-7" so users who picked
@@ -589,6 +610,8 @@ struct SuggestionSettingsStore {
         let resolvedPluggedInModelFilename = userDefaults.string(forKey: Self.pluggedInModelFilenameDefaultsKey) ?? ""
         let resolvedPluggedInEndpointModelName = userDefaults
             .string(forKey: Self.pluggedInEndpointModelNameDefaultsKey) ?? ""
+        let resolvedBatteryMLXModelID = userDefaults.string(forKey: Self.batteryMLXModelDefaultsKey) ?? ""
+        let resolvedPluggedInMLXModelID = userDefaults.string(forKey: Self.pluggedInMLXModelDefaultsKey) ?? ""
 
         let data = SuggestionSettingsData(
             general: SuggestionGeneralSettings(
@@ -613,7 +636,11 @@ struct SuggestionSettingsStore {
                 pluggedInModelFilename: resolvedPluggedInModelFilename,
                 pluggedInEndpointModelName: resolvedPluggedInEndpointModelName,
                 isAppleLanguageFallbackEnabled: resolvedAppleLanguageFallbackEnabled,
-                keepsFallbackModelLoaded: resolvedKeepsFallbackModelLoaded
+                keepsFallbackModelLoaded: resolvedKeepsFallbackModelLoaded,
+                mlxModelID: resolvedMLXModelID,
+                mlxPromptCacheBytes: resolvedMLXPromptCacheBytes,
+                batteryMLXModelID: resolvedBatteryMLXModelID,
+                pluggedInMLXModelID: resolvedPluggedInMLXModelID
             ),
             completion: SuggestionCompletionSettings(
                 selectedWordCountPreset: resolvedWordCountPreset,
@@ -777,6 +804,10 @@ struct SuggestionSettingsStore {
         savePluggedInEngine(data.pluggedInEngine)
         savePluggedInModelFilename(data.pluggedInModelFilename)
         savePluggedInEndpointModelName(data.pluggedInEndpointModelName)
+        saveMLXModelID(data.mlxModelID)
+        saveMLXPromptCacheBytes(data.mlxPromptCacheBytes)
+        saveBatteryMLXModelID(data.batteryMLXModelID)
+        savePluggedInMLXModelID(data.pluggedInMLXModelID)
 
         // The custom indicator icon feature was removed; scrub any previously-persisted PNG so
         // users who picked one in an older build get the default cat icon back automatically.
@@ -900,6 +931,22 @@ struct SuggestionSettingsStore {
 
     func saveOpenAICompatibleAPIMode(_ mode: OpenAICompatibleAPIMode) {
         userDefaults.set(mode.rawValue, forKey: Self.openAICompatibleAPIModeDefaultsKey)
+    }
+
+    func saveMLXModelID(_ modelID: String) {
+        userDefaults.set(modelID, forKey: Self.mlxModelDefaultsKey)
+    }
+
+    func saveMLXPromptCacheBytes(_ bytes: Int) {
+        userDefaults.set(bytes, forKey: Self.mlxPromptCacheBytesDefaultsKey)
+    }
+
+    func saveBatteryMLXModelID(_ modelID: String) {
+        userDefaults.set(modelID, forKey: Self.batteryMLXModelDefaultsKey)
+    }
+
+    func savePluggedInMLXModelID(_ modelID: String) {
+        userDefaults.set(modelID, forKey: Self.pluggedInMLXModelDefaultsKey)
     }
 
     func saveAppleLanguageFallbackEnabled(_ enabled: Bool) {

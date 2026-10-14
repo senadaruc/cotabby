@@ -218,7 +218,8 @@ enum SuggestionRequestFactory {
         case .appleIntelligence:
             maxCharacters = configuration.maxPrefixCharactersFoundationModel
             maxWords = configuration.maxPrefixWordsFoundationModel
-        case .llamaOpenSource:
+        case .llamaOpenSource, .mlx:
+            // MLX serves the same base model family on the same prompt, so it shares the budget.
             maxCharacters = configuration.maxPrefixCharacters
             maxWords = configuration.maxPrefixWords
         case .openAICompatible:
@@ -341,7 +342,7 @@ enum SuggestionRequestFactory {
         switch selectedEngine {
         case .appleIntelligence:
             return FoundationModelPromptRenderer.promptPreview(for: request)
-        case .llamaOpenSource:
+        case .llamaOpenSource, .mlx:
             return request.prompt
         case .openAICompatible:
             return request.prompt

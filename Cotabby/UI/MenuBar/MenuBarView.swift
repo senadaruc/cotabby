@@ -383,6 +383,8 @@ struct MenuBarView: View {
                     profile = .llama(filename: runtimeModel.selectedModelFilename ?? "")
                 case .openAICompatible:
                     profile = .openAICompatible(modelName: suggestionSettings.openAICompatibleModelName)
+                case .mlx:
+                    profile = .mlx(modelID: suggestionSettings.mlxModelID)
                 }
                 applyProfileForCurrentPowerSource(profile)
             }

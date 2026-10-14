@@ -312,6 +312,7 @@ final class CotabbyAppEnvironment {
                 case .appleIntelligence: modelName = "Apple Intelligence"
                 case .llamaOpenSource: modelName = runtimeManager?.currentModelFilename ?? "Llama"
                 case .openAICompatible: modelName = suggestionSettings?.openAICompatibleModelName.nonEmpty ?? "Local Endpoint"
+                case .mlx: modelName = suggestionSettings?.mlxModelID.nonEmpty ?? "MLX"
                 }
                 return modelName.map { GenerationStats.modelKey(engine: engine, modelName: $0) }
             }
@@ -702,6 +703,8 @@ final class CotabbyAppEnvironment {
             suggestionSettings.$pluggedInEngine.map { _ in () }.eraseToAnyPublisher(),
             suggestionSettings.$pluggedInModelFilename.map { _ in () }.eraseToAnyPublisher(),
             suggestionSettings.$pluggedInEndpointModelName.map { _ in () }.eraseToAnyPublisher(),
+            suggestionSettings.$batteryMLXModelID.map { _ in () }.eraseToAnyPublisher(),
+            suggestionSettings.$pluggedInMLXModelID.map { _ in () }.eraseToAnyPublisher(),
             runtimeModel.$availableModels.map { _ in () }.eraseToAnyPublisher()
         ]
 
@@ -762,6 +765,10 @@ final class CotabbyAppEnvironment {
             guard !modelName.isEmpty else { return }
             suggestionSettings.setOpenAICompatibleModelName(modelName)
             suggestionSettings.selectEngine(.openAICompatible)
+        case .mlx(let modelID):
+            guard !modelID.isEmpty else { return }
+            suggestionSettings.setMLXModelID(modelID)
+            suggestionSettings.selectEngine(.mlx)
         }
     }
 

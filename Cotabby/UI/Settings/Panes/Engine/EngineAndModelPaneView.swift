@@ -64,6 +64,8 @@ struct EngineAndModelPaneView: View {
                 openSourceSections
             case .openAICompatible:
                 openAICompatibleSections
+            case .mlx:
+                mlxSections
             }
         }
         .onAppear {
@@ -72,7 +74,8 @@ struct EngineAndModelPaneView: View {
             suggestionSettings.initializePowerProfiles(
                 currentEngine: suggestionSettings.selectedEngine,
                 currentModelFilename: runtimeModel.selectedModelFilename,
-                currentEndpointModelName: suggestionSettings.openAICompatibleModelName
+                currentEndpointModelName: suggestionSettings.openAICompatibleModelName,
+                currentMLXModelID: suggestionSettings.mlxModelID
             )
 
             lmStudioModelsURL = BundledRuntimeLocator.lmStudioModelsDirectoryIfAvailable()

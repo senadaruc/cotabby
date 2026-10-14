@@ -22,6 +22,7 @@ final class SuggestionEngineRouterRoutingTests: XCTestCase {
         let metrics: PerformanceMetricsStore
         let quality: SuggestionQualityMetricsStore
         let profiles: ModelPerformanceProfileStore
+        let mlx: ScriptedEngine
     }
 
     @MainActor
@@ -82,6 +83,7 @@ final class SuggestionEngineRouterRoutingTests: XCTestCase {
         let llama = ScriptedEngine()
         let endpoint = ScriptedEngine()
         let quality = SuggestionQualityMetricsStore(userDefaults: defaults)
+        let mlx = ScriptedEngine()
         let router = SuggestionEngineRouter(
             suggestionSettings: settings,
             foundationModelEngine: foundation,
@@ -91,7 +93,9 @@ final class SuggestionEngineRouterRoutingTests: XCTestCase {
             llamaModelNameProvider: { llamaModelName },
             openAICompatibleEngine: endpoint,
             endpointModelNameProvider: { "endpoint-model" },
-            profileStore: profiles
+            profileStore: profiles,
+            mlxEngine: mlx,
+            mlxModelNameProvider: { "mlx-community/m" }
         )
         Self.retained.append(contentsOf: [router, settings, metrics, quality, profiles] as [AnyObject])
         return Rig(
@@ -102,8 +106,53 @@ final class SuggestionEngineRouterRoutingTests: XCTestCase {
             endpoint: endpoint,
             metrics: metrics,
             quality: quality,
-            profiles: profiles
+            profiles: profiles,
+            mlx: mlx
         )
+    }
+
+    /// MLX is a loopback server Cotabby runs itself: requests carrying typing history or memory
+    /// go to it unchanged (unlike the endpoint), and the result is keyed as mlx|<repo>.
+    func test_mlxRoutesToMLXEngineAndKeepsHistory() async throws {
+        let rig = makeRig(engine: .mlx)
+        let request = CotabbyTestFixtures.suggestionRequest(
+            historyExamples: ["Best regards, Senad"],
+            memorySnippets: ["Dominique asked about the POC."]
+        )
+
+        let result = try await rig.router.generateSuggestion(for: request)
+
+        XCTAssertEqual(rig.mlx.requests.count, 1)
+        XCTAssertEqual(rig.mlx.requests.first?.historyExamples, ["Best regards, Senad"])
+        XCTAssertTrue(rig.endpoint.requests.isEmpty)
+        XCTAssertTrue(rig.llama.requests.isEmpty)
+        XCTAssertNil(result.suppressionReason)
+        XCTAssertEqual(result.stats?.modelKey, "mlx|mlx-community/m")
+    }
+
+    func test_mlxWithoutAnEngineIsUnavailableNotFallback() async {
+        let defaults = makeDefaults()
+        let settings = SuggestionSettingsModel(configuration: .standard, userDefaults: defaults)
+        settings.selectEngine(.mlx)
+        let llama = ScriptedEngine()
+        let router = SuggestionEngineRouter(
+            suggestionSettings: settings,
+            foundationModelEngine: ScriptedEngine(),
+            llamaEngine: llama,
+            performanceMetricsStore: PerformanceMetricsStore(userDefaults: defaults),
+            qualityMetricsStore: SuggestionQualityMetricsStore(userDefaults: defaults),
+            llamaModelNameProvider: { nil }
+        )
+        Self.retained.append(contentsOf: [router, settings] as [AnyObject])
+        do {
+            _ = try await router.generateSuggestion(for: CotabbyTestFixtures.suggestionRequest())
+            XCTFail("Expected unavailable")
+        } catch SuggestionClientError.unavailable(let message) {
+            XCTAssertEqual(message, "Set up MLX in Settings → Engine & Model.")
+        } catch {
+            XCTFail("Unexpected \(error)")
+        }
+        XCTAssertTrue(llama.requests.isEmpty, "MLX never falls back to another engine")
     }
 
     // MARK: - Performance learning

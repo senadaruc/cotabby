@@ -11,6 +11,7 @@ enum SuggestionEngineKind: String, CaseIterable, Equatable, Hashable, Sendable, 
     case appleIntelligence
     case llamaOpenSource
     case openAICompatible
+    case mlx
 
     var id: String { rawValue }
 
@@ -22,6 +23,8 @@ enum SuggestionEngineKind: String, CaseIterable, Equatable, Hashable, Sendable, 
             return "Open Source"
         case .openAICompatible:
             return "Local Endpoint"
+        case .mlx:
+            return "MLX"
         }
     }
 
@@ -36,9 +39,12 @@ enum SuggestionEngineKind: String, CaseIterable, Equatable, Hashable, Sendable, 
             return "cpu.fill"
         case .openAICompatible:
             return "network"
+        case .mlx:
+            return "bolt.fill"
         }
     }
 
+    /// MLX has its own Settings section; the GGUF model list does not apply to it.
     var supportsLocalModelManagement: Bool {
         switch self {
         case .appleIntelligence:
@@ -47,19 +53,46 @@ enum SuggestionEngineKind: String, CaseIterable, Equatable, Hashable, Sendable, 
             return true
         case .openAICompatible:
             return false
+        case .mlx:
+            return false
         }
     }
 
+    /// Whether a request to this engine stays on this Mac. Gates private context: typing history,
+    /// conversation memory, the document tail, and the wide on-device screen budget. MLX speaks
+    /// HTTP, but only to a 127.0.0.1 server Cotabby launched itself, so it is on-device.
+    var isOnDevice: Bool {
+        switch self {
+        case .appleIntelligence, .llamaOpenSource, .mlx:
+            return true
+        case .openAICompatible:
+            return false
+        }
+    }
+
+    /// Whether Cotabby may start generations the user has not asked for yet: predict-ahead while
+    /// typing and speculative continuation after an accept. Both rely on the in-process runtimes'
+    /// cheap cancellation. An HTTP server keeps decoding an abandoned request until its next token
+    /// write fails, so speculative traffic to the endpoint or MLX is mostly wasted GPU time.
+    var allowsSpeculativeGeneration: Bool {
+        switch self {
+        case .appleIntelligence, .llamaOpenSource:
+            return true
+        case .openAICompatible, .mlx:
+            return false
+        }
+    }
 }
 
 /// A per-power-source suggestion configuration: which engine to use and, for the local llama engine,
-/// which downloaded model file. Apple Intelligence carries no model file because the OS owns the
-/// model. Used by the power-based switching feature to pick an engine + model per power state, and as
-/// the single selection tag for the per-state pickers in Settings.
+/// which downloaded model file, and for MLX, which Hugging Face repo id. Apple Intelligence carries no
+/// model file because the OS owns the model. Used by the power-based switching feature to pick an
+/// engine + model per power state, and as the single selection tag for the per-state pickers in Settings.
 enum PowerProfile: Equatable, Hashable {
     case appleIntelligence
     case llama(filename: String)
     case openAICompatible(modelName: String)
+    case mlx(modelID: String)
 
     /// The engine this profile selects. Settings persists engine + filename separately, so this is
     /// the bridge from those two stored fields to a single picker selection (and back).
@@ -71,6 +104,8 @@ enum PowerProfile: Equatable, Hashable {
             return .llamaOpenSource
         case .openAICompatible:
             return .openAICompatible
+        case .mlx:
+            return .mlx
         }
     }
 }

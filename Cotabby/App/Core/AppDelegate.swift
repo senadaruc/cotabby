@@ -405,9 +405,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // The user chose to keep the fallback model ready, so an unsupported language gets a
             // suggestion without first waiting several seconds for the model to load.
             runtimeModel.startIfNeeded()
-        case .appleIntelligence, .openAICompatible:
+        case .appleIntelligence, .openAICompatible, .mlx:
             // Switching away must release Metal buffers and the mapped GGUF. Otherwise an Ollama
             // user still pays the duplicate memory cost the external endpoint is meant to avoid.
+            // MLX loads its own copy of the weights in mlx_lm.server, so the llama model must not
+            // stay resident beside it.
             runtimeModel.stop()
         }
     }
