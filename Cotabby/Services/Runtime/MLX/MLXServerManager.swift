@@ -260,6 +260,9 @@ final class MLXServerManager: ObservableObject {
             usleep(50_000)
         }
         for process in processes where process.isRunning { process.forceKill() }
+        // The pid files go last: if Cotabby is killed during the wait above, the next launch's
+        // orphan sweep still has a record of every server that may be alive.
+        for manager in managers { manager.pidFile.remove() }
     }
 
     /// First half of a blocking stop: invalidates pending work, sends SIGTERM, and returns the
@@ -270,7 +273,6 @@ final class MLXServerManager: ObservableObject {
         readinessTask?.cancel()
         restartTask?.cancel()
         desired = .stopped
-        pidFile.remove()
         state = .idle
         let stopping = stoppingProcess
         let running = current?.process

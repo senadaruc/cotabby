@@ -10,6 +10,7 @@ final class RewriteEngineTests: XCTestCase {
     @MainActor
     private final class StubProvider: RewriteProviding {
         var isAvailable = true
+        var unavailableReason: String?
         var sendsOffDevice: Bool
         var output = "Please let me know if the dates work for you."
         private(set) var received: [RewriteRequest] = []
@@ -37,6 +38,20 @@ final class RewriteEngineTests: XCTestCase {
         let engine = RewriteEngine(local: local, api: api, mlx: mlx, preferences: { prefs })
         Self.retained.append(contentsOf: [engine, local, api, mlx] as [AnyObject])
         return (engine, local, api, mlx)
+    }
+
+    func test_unavailableMLXThrowsItsOwnReason() async {
+        var prefs = RewritePreferences.defaults
+        prefs.provider = .mlx
+        let (engine, _, _, mlx) = makeWithMLX(prefs)
+        mlx.isAvailable = false
+        mlx.unavailableReason = "Install MLX in Settings → Engine & Model."
+        do {
+            _ = try await engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: .empty), onPartial: { _ in })
+            XCTFail("expected an error")
+        } catch {
+            XCTAssertEqual(error as? RewriteError, .mlxUnavailable("Install MLX in Settings → Engine & Model."))
+        }
     }
 
     func test_mlxProviderIsChosenAndKeepsMemory() async throws {

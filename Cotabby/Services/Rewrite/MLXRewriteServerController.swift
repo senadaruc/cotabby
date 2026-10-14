@@ -37,6 +37,8 @@ final class MLXRewriteServerController {
     /// SIGTERM grace (the same reason the autocomplete pipeline has `mlxApplyChain`).
     private var applyChain: Task<Void, Never>?
     private var idleTask: Task<Void, Never>?
+    /// Rewrites between `beginUse()` and `endUse()`. The idle timer never stops a busy server.
+    private var inFlight = 0
     private var isShutDown = false
 
     init(
@@ -81,22 +83,33 @@ final class MLXRewriteServerController {
         return false
     }
 
+    /// Why a rewrite on `modelID` cannot start a server, or nil when it can.
+    func unavailableReason(modelID: String) -> String? {
+        switch desire(modelID: modelID) {
+        case .running: return nil
+        case .unavailable(let reason): return reason.message
+        case .stopped: return "MLX is still being checked. Try again in a moment."
+        }
+    }
+
     /// Starts (or reuses) the server for `modelID` and returns its endpoint once it is ready.
     /// Throws `RewriteError.mlxUnavailable` with the reason when it cannot run, fails, or does not
-    /// become ready in time. Nothing is launched when the resolver says it cannot run.
-    func readyConfiguration(modelID: String) async throws -> OpenAICompatibleEndpointConfiguration {
+    /// become ready in time. Nothing is launched when the resolver says it cannot run. A server
+    /// that already failed is retried: a rewrite is the user explicitly trying again.
+    func readyConfiguration(modelID rawModelID: String) async throws -> OpenAICompatibleEndpointConfiguration {
         guard !isShutDown else { throw RewriteError.mlxUnavailable("Cotabby is quitting.") }
-        let wanted = desire(modelID: modelID)
-        switch wanted {
-        case .unavailable(let reason):
-            throw RewriteError.mlxUnavailable(reason.message)
-        case .stopped:
-            // The resolver holds back while the install or the first cache scan is in progress.
-            throw RewriteError.mlxUnavailable("MLX is still being checked. Try again in a moment.")
-        case .running:
-            break
+        // The id is compared with what the server reports, so use the validated, trimmed form.
+        guard let repoID = MLXRepoID(rawModelID) else {
+            throw RewriteError.mlxUnavailable(MLXUnavailableReason.noModel.message)
         }
-        await enqueue(wanted)
+        let modelID = repoID.value
+        let wanted = desire(modelID: modelID)
+        if let reason = unavailableReason(modelID: modelID) { throw RewriteError.mlxUnavailable(reason) }
+        await enqueue { await $0.apply(wanted) }
+        // The same desire again changes nothing in the manager, so a failed server needs retry().
+        if case .failed = manager.state {
+            await enqueue { await $0.retry() }
+        }
 
         var waited: Duration = .zero
         while true {
@@ -120,12 +133,29 @@ final class MLXRewriteServerController {
         }
     }
 
-    /// Marks a rewrite as using the server and restarts the idle countdown.
-    func noteUse() {
+    /// A rewrite starts: the server counts as busy and the idle countdown is paused.
+    func beginUse() {
+        inFlight += 1
+        idleTask?.cancel()
+        idleTask = nil
+    }
+
+    /// A rewrite ended (however it ended). The idle window counts from the last one finishing.
+    func endUse() {
+        inFlight = max(0, inFlight - 1)
+        if inFlight == 0 { armIdleTimer() }
+    }
+
+    /// Stops the server after `idleTimeout`; a timer that wakes while a rewrite is in flight
+    /// waits another window instead of stopping.
+    private func armIdleTimer() {
         idleTask?.cancel()
         guard !isShutDown else { return }
         idleTask = Task { [weak self, sleep, idleTimeout] in
-            guard (try? await sleep(idleTimeout)) != nil, !Task.isCancelled else { return }
+            while true {
+                guard (try? await sleep(idleTimeout)) != nil, !Task.isCancelled, let self else { return }
+                if self.inFlight == 0 { break }
+            }
             await self?.stop()
         }
     }
@@ -133,7 +163,7 @@ final class MLXRewriteServerController {
     func stop() async {
         idleTask?.cancel()
         idleTask = nil
-        await enqueue(.stopped)
+        await enqueue { await $0.apply(.stopped) }
     }
 
     /// Blocking stop for the app's termination path. `AppDelegate` prefers
@@ -152,11 +182,11 @@ final class MLXRewriteServerController {
         idleTask = nil
     }
 
-    private func enqueue(_ desire: MLXServerDesire) async {
+    private func enqueue(_ work: @escaping @MainActor (MLXServerManager) async -> Void) async {
         let previous = applyChain
         let task = Task { [manager] in
             await previous?.value
-            await manager.apply(desire)
+            await work(manager)
         }
         applyChain = task
         await task.value

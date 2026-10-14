@@ -28,11 +28,14 @@ final class RewritePreferencesStore: ObservableObject {
         static let fixesMistakes = "cotabbyRewriteFixesMistakes"
     }
 
-    init(userDefaults: UserDefaults = .standard) {
+    init(userDefaults: UserDefaults = .standard, isAppleSilicon: Bool = MLXHardware.isAppleSilicon) {
         self.userDefaults = userDefaults
         let defaults = RewritePreferences.defaults
         var loaded = defaults
         loaded.provider = userDefaults.string(forKey: Key.provider).flatMap(RewriteProviderKind.init(rawValue:)) ?? defaults.provider
+        // MLX needs Apple Silicon; a stored choice (e.g. synced settings) falls back to local so
+        // the picker always has a matching entry.
+        if loaded.provider == .mlx, !isAppleSilicon { loaded.provider = .local }
         loaded.apiBaseURL = userDefaults.string(forKey: Key.apiBaseURL) ?? defaults.apiBaseURL
         loaded.modelsByProvider = userDefaults.dictionary(forKey: Key.modelsByProvider) as? [String: String] ?? [:]
         if let stored = userDefaults.string(forKey: Key.cloudProvider).flatMap(RewriteCloudProvider.init(rawValue:)) {

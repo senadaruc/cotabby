@@ -11,8 +11,14 @@ protocol RewriteProviding: AnyObject {
     var isAvailable: Bool { get }
     /// Whether the text leaves this Mac (a LAN or public host), for the popup's disclosure.
     var sendsOffDevice: Bool { get }
+    /// Why `isAvailable` is false, in words for the popup; nil when the provider has no specific reason.
+    var unavailableReason: String? { get }
     /// Runs the rewrite. `onPartial` receives the cumulative raw text while it streams.
     func rewrite(_ request: RewriteRequest, onPartial: @escaping @MainActor (String) -> Void) async throws -> String
+}
+
+extension RewriteProviding {
+    var unavailableReason: String? { nil }
 }
 
 /// Rewrites through the user's cloud service: Claude through Anthropic's Messages API

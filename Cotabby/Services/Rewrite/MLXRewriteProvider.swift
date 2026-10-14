@@ -35,14 +35,16 @@ final class MLXRewriteProvider: RewriteProviding {
     /// the resolver would launch it.
     var isAvailable: Bool { controller.canRun(modelID: preferences().mlxModelID) }
     var sendsOffDevice: Bool { false }
+    var unavailableReason: String? { controller.unavailableReason(modelID: preferences().mlxModelID) }
 
     func rewrite(_ request: RewriteRequest, onPartial: @escaping @MainActor (String) -> Void) async throws -> String {
         let modelID = preferences().mlxModelID
-        // The popup would otherwise sit on "Rewriting…" for the whole start-up.
-        if case .ready = controller.manager.state {} else { onPartial(Self.loadingNote) }
-        controller.noteUse()
-        // Restart the idle countdown when the rewrite ends too, so a long one is not cut off.
-        defer { controller.noteUse() }
+        // Always sent first: the popup would otherwise sit on "Rewriting…" for the whole start-up,
+        // and the first streamed token replaces it. It is never part of the returned text.
+        onPartial(Self.loadingNote)
+        // Counted as in flight so the idle timer cannot stop the server under a running rewrite.
+        controller.beginUse()
+        defer { controller.endUse() }
         let configuration = try await controller.readyConfiguration(modelID: modelID)
         let prompt = RewritePromptBuilder.instructPrompt(request)
         return try await client.streamChat(

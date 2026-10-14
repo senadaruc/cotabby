@@ -157,7 +157,8 @@ final class MLXRewriteServerControllerTests: XCTestCase {
         async let configuration = controller.readyConfiguration(modelID: modelA)
         await becomeReady()
         _ = try await configuration
-        controller.noteUse()
+        controller.beginUse()
+        controller.endUse()
         await waitUntil { gate.count >= 1 }
         XCTAssertEqual(launcher.launches[0].process.terminateCount, 0)
         gate.releaseAll()
@@ -173,9 +174,11 @@ final class MLXRewriteServerControllerTests: XCTestCase {
         async let configuration = controller.readyConfiguration(modelID: modelA)
         await becomeReady()
         _ = try await configuration
-        controller.noteUse()
+        controller.beginUse()
+        controller.endUse()
         await waitUntil { gate.count >= 1 }
-        controller.noteUse()
+        controller.beginUse()
+        controller.endUse()
         // The first timer was cancelled; releasing it must not stop the server (its task is cancelled
         // by then, so the stale wake-up is ignored).
         gate.releaseAll()
@@ -212,5 +215,68 @@ final class MLXRewriteServerControllerTests: XCTestCase {
         } catch {
             XCTAssertEqual(launcher.launches.count, 1)
         }
+    }
+
+    func test_aFailedServerIsRetriedByTheNextRewrite() async throws {
+        let controller = makeController()
+        let failing = Task { try await controller.readyConfiguration(modelID: modelA) }
+        await waitUntil { self.probe.waiting >= 1 }
+        for index in 0..<3 {
+            launcher.crash(index)
+            if index < 2 { await waitUntil { self.launcher.launches.count == index + 2 } }
+        }
+        _ = await failing.result
+        guard case .failed = manager.state else { return XCTFail("expected failed, got \(manager.state)") }
+        let launchesBefore = launcher.launches.count
+        async let retry = controller.readyConfiguration(modelID: modelA)
+        await waitUntil { self.launcher.launches.count == launchesBefore + 1 }
+        // The crashed launches' readiness waits are still pending in the fake; their generations are
+        // stale, so resolving them is ignored. The newest wait is the last one.
+        await waitUntil { self.probe.waiting >= 4 }
+        while probe.waiting > 1 { probe.succeedNext() }
+        probe.succeedNext()
+        let ready = try await retry
+        XCTAssertEqual(ready.modelName, modelA)
+    }
+
+    func test_idleTimerWaitsWhileARewriteIsInFlight() async throws {
+        let gate = SleepGate()
+        let controller = makeController(sleep: { duration in
+            if duration >= .seconds(60) { await gate.pause() } else { await Task.yield() }
+        })
+        async let configuration = controller.readyConfiguration(modelID: modelA)
+        await becomeReady()
+        _ = try await configuration
+        controller.beginUse()
+        controller.endUse()
+        await waitUntil { gate.count >= 1 }
+        // A second rewrite begins while the timer is pending: the timer is cancelled and re-armed
+        // only when that rewrite ends, so a long rewrite is never stopped under itself.
+        controller.beginUse()
+        gate.releaseAll()
+        await Task.yield()
+        await Task.yield()
+        if case .ready = manager.state {} else { XCTFail("stopped during a rewrite: \(manager.state)") }
+        controller.endUse()
+        await waitUntil { gate.count >= 1 }
+        gate.releaseAll()
+        await waitUntil { self.manager.state == .idle }
+    }
+
+    func test_invalidStoredModelIdFailsAtOnce() async {
+        let controller = makeController()
+        do {
+            _ = try await controller.readyConfiguration(modelID: "../../etc")
+            XCTFail("expected an error")
+        } catch {
+            XCTAssertEqual(error as? RewriteError, .mlxUnavailable(MLXUnavailableReason.noModel.message))
+        }
+        XCTAssertTrue(launcher.launches.isEmpty)
+    }
+
+    func test_unavailableReasonExplainsWhyAndIsNilWhenRunnable() {
+        XCTAssertNil(makeController().unavailableReason(modelID: modelA))
+        XCTAssertEqual(makeController(toolchain: .notInstalled).unavailableReason(modelID: modelA),
+                       MLXUnavailableReason.notInstalled.message)
     }
 }

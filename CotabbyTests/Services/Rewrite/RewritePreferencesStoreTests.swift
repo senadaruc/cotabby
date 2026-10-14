@@ -117,4 +117,10 @@ final class RewritePreferencesStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.preferences.mlxModelID, "mlx-community/other-it")
         XCTAssertEqual(defaults.string(forKey: "cotabbyRewriteMLXModel"), "mlx-community/other-it")
     }
+
+    func test_storedMLXProviderFallsBackToLocalWithoutAppleSilicon() {
+        defaults.set("mlx", forKey: "cotabbyRewriteProvider")
+        XCTAssertEqual(RewritePreferencesStore(userDefaults: defaults, isAppleSilicon: false).preferences.provider, .local)
+        XCTAssertEqual(RewritePreferencesStore(userDefaults: defaults, isAppleSilicon: true).preferences.provider, .mlx)
+    }
 }
