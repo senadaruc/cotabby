@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 @testable import Cotabby
 
@@ -15,6 +16,8 @@ final class MLXServerManagerTests: XCTestCase {
         executable: URL(fileURLWithPath: "/mlx/bin/mlx_lm.server"), modelID: "mlx-community/a", promptCacheBytes: 1 << 30)
     private let launchB = MLXServerLaunch(
         executable: URL(fileURLWithPath: "/mlx/bin/mlx_lm.server"), modelID: "mlx-community/b", promptCacheBytes: 1 << 30)
+    private let launchC = MLXServerLaunch(
+        executable: URL(fileURLWithPath: "/mlx/bin/mlx_lm.server"), modelID: "mlx-community/c", promptCacheBytes: 1 << 30)
 
     override func setUp() {
         super.setUp()
@@ -31,18 +34,24 @@ final class MLXServerManagerTests: XCTestCase {
         super.tearDown()
     }
 
-    private func makeManager() -> MLXServerManager {
+    /// `sleep` overrides the recording, yielding sleep. A sleep that never returns keeps a restart
+    /// pending, which lets a test freeze the state between a crash and its restart.
+    private func makeManager(
+        sleep: MLXServerManager.Sleep? = nil,
+        verifyListener: @escaping (Int32, Int) -> Bool = { _, _ in true }
+    ) -> MLXServerManager {
         let manager = MLXServerManager(
             paths: paths,
             launcher: launcher,
             probe: probe,
             pickPort: { 50123 },
-            sleep: { [unowned self] duration in
+            sleep: sleep ?? { [unowned self] duration in
                 self.sleeps.append(duration)
                 await Task.yield()
             },
             now: { [unowned self] in self.clock },
-            baseEnvironment: ["HOME": "/Users/u", "PYTHONPATH": "/evil"]
+            baseEnvironment: ["HOME": "/Users/u", "PYTHONPATH": "/evil"],
+            verifyListener: verifyListener
         )
         Self.retained.append(manager)
         return manager
@@ -236,6 +245,123 @@ final class MLXServerManagerTests: XCTestCase {
     func test_loopbackPortIsUsable() throws {
         let port = try MLXLoopbackPort.next()
         XCTAssertTrue((1024...65535).contains(port))
+    }
+
+    /// Review fix 1: a crash clears `current` while the probe is still suspended. The probe's later
+    /// success must not publish `.ready` for a process that no longer exists.
+    func test_lateReadinessAfterACrashIsIgnored() async {
+        let manager = makeManager(sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
+        await manager.apply(.running(launchA))
+        await waitUntil { self.probe.waiting == 1 }
+        launcher.crash(0)
+        probe.succeedNext()
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(manager.state, .starting(modelID: "mlx-community/a"))
+        XCTAssertEqual(launcher.launches.count, 1, "the restart is still pending, so nothing relaunched")
+    }
+
+    /// Review fix 2: stopping A waits out its grace period. Meanwhile C starts and writes its pid.
+    /// A's late cleanup must leave C's pid file alone.
+    func test_stoppingAnOldServerKeepsTheNewServersPidFile() async {
+        launcher.exitsOnTerminate = false
+        let gate = SleepGate()
+        let manager = makeManager(sleep: { _ in await gate.pause() })
+        await startReady(manager, launchA)
+        let stopping = Task { await manager.apply(.running(launchB)) }
+        await waitUntil { gate.count == 1 }
+        // A is frozen inside its grace period. C takes over, then A exits and its cleanup runs.
+        await manager.apply(.running(launchC))
+        launcher.launches[0].process.isRunning = false
+        gate.releaseAll()
+        await stopping.value
+
+        XCTAssertEqual(launcher.launches.count, 2, "B was superseded before it launched")
+        XCTAssertEqual(launcher.launches[1].arguments[1], "mlx-community/c")
+        XCTAssertEqual(MLXServerPIDFile(url: paths.serverPIDFile).read(), launcher.launches[1].process.processIdentifier)
+    }
+
+    /// Review fix 3: the pid file names the live server, so orphan cleanup must not treat it as one.
+    func test_orphanCleanupLeavesTheCurrentServersPidFile() async {
+        let manager = makeManager()
+        await startReady(manager, launchA)
+        var signals: [Int32] = []
+        await manager.cleanUpOrphan(
+            isAlive: { _ in true },
+            arguments: { _ in ["/p/python", "/x/MLX/bin/mlx_lm.server", "--host", "127.0.0.1"] },
+            signal: { _, signal in signals.append(signal) })
+        XCTAssertEqual(signals, [])
+        XCTAssertEqual(MLXServerPIDFile(url: paths.serverPIDFile).read(), 1000)
+    }
+
+    /// Review fix 4: app quit during a stop must still reach the process being stopped.
+    func test_shutdownSyncKillsAServerThatIsStillStopping() async {
+        launcher.exitsOnTerminate = false
+        let gate = SleepGate()
+        let manager = makeManager(sleep: { _ in await gate.pause() })
+        await startReady(manager, launchA)
+        let stopping = Task { await manager.apply(.stopped) }
+        await waitUntil { gate.count == 1 }
+        manager.shutdownSync(timeoutSeconds: 0.05)
+        XCTAssertEqual(launcher.launches[0].process.killCount, 1, "only shutdown can kill it: the stop is frozen")
+        gate.releaseAll()
+        await stopping.value
+        XCTAssertEqual(launcher.launches[0].process.killCount, 1, "the resumed stop does not kill it twice")
+        XCTAssertEqual(manager.state, .idle)
+    }
+
+    /// Review fix 6: a readiness answer from a process that does not own the port is refused.
+    func test_readinessFromAForeignListenerIsRejected() async {
+        let manager = makeManager(verifyListener: { _, _ in false })
+        await manager.apply(.running(launchA))
+        await waitUntil { self.probe.waiting == 1 }
+        probe.succeedNext()
+        await waitUntil { self.launcher.launches[0].process.terminateCount == 1 }
+        XCTAssertFalse(isReady(manager))
+        XCTAssertEqual(manager.state, .starting(modelID: "mlx-community/a"), "a restart follows the failure")
+    }
+
+    /// Proves the libproc port check against a real socket this test process owns.
+    func test_ownsTCPSocketFindsOurOwnListener() throws {
+        let listener = socket(AF_INET, SOCK_STREAM, 0)
+        XCTAssertGreaterThanOrEqual(listener, 0)
+        defer { close(listener) }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = 0
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let bound = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(listener, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        XCTAssertEqual(bound, 0)
+        XCTAssertEqual(listen(listener, 1), 0)
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        _ = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(listener, $0, &length) }
+        }
+        let port = Int(UInt16(bigEndian: address.sin_port))
+
+        XCTAssertTrue(MLXProcessInspector.ownsTCPSocket(pid: getpid(), port: port))
+        XCTAssertFalse(MLXProcessInspector.ownsTCPSocket(pid: getpid(), port: port == 1 ? 2 : 1))
+    }
+}
+
+/// Holds each stop-grace sleep until the test releases it, so a stop can be frozen mid-grace.
+@MainActor
+final class SleepGate {
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    var count: Int { waiting.count }
+
+    func pause() async {
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    func releaseAll() {
+        let released = waiting
+        waiting = []
+        released.forEach { $0.resume() }
     }
 }
 

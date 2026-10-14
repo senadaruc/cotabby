@@ -96,6 +96,32 @@ nonisolated enum MLXProcessInspector {
         guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return nil }
         return MLXToolchainRules.parseProcArgs(Array(buffer.prefix(size)))
     }
+
+    /// True when `pid` has a TCP socket whose local port is `port`. libproc lists a process's file
+    /// descriptors; each socket descriptor is then asked for its details. Kernel ports come back in
+    /// network byte order, so they are swapped before comparing.
+    static func ownsTCPSocket(pid: Int32, port: Int) -> Bool {
+        // First call sizes the list, second call fills it. The fd count can change in between, so
+        // only the entries the second call reports are read.
+        let listSize = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
+        guard listSize > 0 else { return false }
+        var descriptors = [proc_fdinfo](
+            repeating: proc_fdinfo(), count: Int(listSize) / MemoryLayout<proc_fdinfo>.stride)
+        let filled = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, &descriptors, listSize)
+        guard filled > 0 else { return false }
+        let count = Int(filled) / MemoryLayout<proc_fdinfo>.stride
+        for descriptor in descriptors.prefix(count) where descriptor.proc_fdtype == UInt32(PROX_FDTYPE_SOCKET) {
+            var info = socket_fdinfo()
+            let size = Int32(MemoryLayout<socket_fdinfo>.size)
+            // A descriptor can close between the list and this call; a short read means no answer.
+            guard proc_pidfdinfo(pid, descriptor.proc_fd, PROC_PIDFDSOCKETINFO, &info, size) == size,
+                  info.psi.soi_kind == SOCKINFO_TCP
+            else { continue }
+            let localPort = Int(UInt16(bigEndian: UInt16(truncatingIfNeeded: info.psi.soi_proto.pri_tcp.tcpsi_ini.insi_lport)))
+            if localPort == port { return true }
+        }
+        return false
+    }
 }
 
 /// The state machine around one `mlx_lm.server` child. It is owned by `CotabbyAppEnvironment` (one
@@ -128,9 +154,15 @@ final class MLXServerManager: ObservableObject {
     private let now: () -> Date
     private let pidFile: MLXServerPIDFile
     private let baseEnvironment: [String: String]
+    /// Answers "does this pid own a TCP socket on this port?" before `.ready` is published. The
+    /// port was only probed, not reserved, so another local program may have taken it.
+    private let verifyListener: (Int32, Int) -> Bool
 
     private var desired: MLXServerDesire = .stopped
     private var current: RunningServer?
+    /// The process a stop is waiting on right now (inside its SIGTERM grace). `current` is already
+    /// nil by then, so `shutdownSync` needs this reference to still reach it.
+    private var stoppingProcess: (any MLXRunningProcess)?
     private var generation: UInt64 = 0
     private var readinessTask: Task<Void, Never>?
     private var restartTask: Task<Void, Never>?
@@ -146,7 +178,8 @@ final class MLXServerManager: ObservableObject {
         pickPort: @escaping () throws -> Int = MLXLoopbackPort.next,
         sleep: @escaping Sleep = { try await Task.sleep(for: $0) },
         now: @escaping () -> Date = Date.init,
-        baseEnvironment: [String: String] = ProcessInfo.processInfo.environment
+        baseEnvironment: [String: String] = ProcessInfo.processInfo.environment,
+        verifyListener: @escaping (Int32, Int) -> Bool = MLXProcessInspector.ownsTCPSocket(pid:port:)
     ) {
         self.launcher = launcher
         self.probe = probe
@@ -155,6 +188,7 @@ final class MLXServerManager: ObservableObject {
         self.now = now
         self.pidFile = MLXServerPIDFile(url: paths.serverPIDFile)
         self.baseEnvironment = baseEnvironment
+        self.verifyListener = verifyListener
     }
 
     static func live(paths: MLXPaths) -> MLXServerManager {
@@ -215,14 +249,19 @@ final class MLXServerManager: ObservableObject {
             pidFile.remove()
             state = .idle
         }
-        guard let running = current else { return }
+        // A server already being stopped has had its SIGTERM sent; it only needs the wait and the
+        // SIGKILL fallback, so it is not terminated a second time.
+        let stopping = stoppingProcess
+        let running = current?.process
         current = nil
-        running.process.terminate()
+        running?.terminate()
         let deadline = Date().addingTimeInterval(timeoutSeconds)
-        while running.process.isRunning, Date() < deadline {
+        while [running, stopping].contains(where: { $0?.isRunning == true }), Date() < deadline {
             usleep(50_000)
         }
-        if running.process.isRunning { running.process.forceKill() }
+        for process in [running, stopping] {
+            if let process, process.isRunning { process.forceKill() }
+        }
     }
 
     /// Terminates a server left running by an earlier Cotabby that crashed or was force-quit.
@@ -234,9 +273,10 @@ final class MLXServerManager: ObservableObject {
         signal: @escaping (Int32, Int32) -> Void = { pid, signal in _ = kill(pid, signal) }
     ) async {
         guard let pid = pidFile.read() else { return }
+        // The file names the live server when one is running; that record belongs to it, not to an orphan.
+        guard current?.process.processIdentifier != pid else { return }
         pidFile.remove()
-        guard current?.process.processIdentifier != pid,
-              isAlive(pid),
+        guard isAlive(pid),
               let processArguments = arguments(pid),
               MLXToolchainRules.isOurServer(arguments: processArguments)
         else { return }
@@ -285,7 +325,18 @@ final class MLXServerManager: ObservableObject {
         readinessTask = Task { [weak self, probe] in
             do {
                 try await probe.waitUntilReady(port: port, modelID: launch.modelID, timeout: Self.readinessTimeout)
-                guard let self, self.generation == launchGeneration else { return }
+                // A crash or stop can land while the probe is suspended. Its exit clears `current`
+                // without bumping `generation`, so the identity check is what stops a dead server
+                // from being published as ready.
+                guard let self, self.generation == launchGeneration, !Task.isCancelled,
+                      self.current?.process === process else { return }
+                guard self.verifyListener(process.processIdentifier, port) else {
+                    await self.failCurrent(
+                        generation: launchGeneration,
+                        reason: "Another program answered on MLX's port."
+                    )
+                    return
+                }
                 self.consecutiveFailures = 0
                 self.state = .ready(port: port, modelID: launch.modelID)
                 CotabbyLogger.runtime.info("MLX server ready", metadata: [
@@ -320,8 +371,8 @@ final class MLXServerManager: ObservableObject {
         guard let running = current else { return }
         let tail = running.process.stderrTail()
         current = nil
-        await Self.terminate(running.process, sleep: sleep)
-        pidFile.remove()
+        await terminateTracked(running.process)
+        removePIDFile(ownedBy: running.process.processIdentifier)
         guard generation == failedGeneration, desired == .running(running.launch) else { return }
         recordFailure(running.launch, reason: reason, logTail: tail)
     }
@@ -365,9 +416,22 @@ final class MLXServerManager: ObservableObject {
         }
         current = nil
         state = .stopping
-        await Self.terminate(running.process, sleep: sleep)
-        pidFile.remove()
+        await terminateTracked(running.process)
+        removePIDFile(ownedBy: running.process.processIdentifier)
         CotabbyLogger.runtime.info("MLX server stopped", metadata: ["model": .string(running.launch.modelID)])
+    }
+
+    /// Runs `terminate` while keeping the process visible to `shutdownSync`.
+    private func terminateTracked(_ process: any MLXRunningProcess) async {
+        stoppingProcess = process
+        await Self.terminate(process, sleep: sleep)
+        if stoppingProcess === process { stoppingProcess = nil }
+    }
+
+    /// Removes the pid file only while it still names `pid`. A stop waits up to 3 s, and a newer
+    /// `start` may have written its own pid into the same file during that wait.
+    private func removePIDFile(ownedBy pid: Int32) {
+        if pidFile.read() == pid { pidFile.remove() }
     }
 
     private static func terminate(_ process: any MLXRunningProcess, sleep: Sleep) async {
@@ -467,7 +531,7 @@ final class MLXLiveRunningProcess: MLXRunningProcess {
 
 /// Polls `/v1/models` every 250 ms, then sends one 2-token completion for the exact model id so
 /// the weights load now, not on the user's first keystroke (about 6 s for Gemma 4 E4B).
-struct MLXHTTPReadinessProbe: MLXReadinessProbing {
+nonisolated struct MLXHTTPReadinessProbe: MLXReadinessProbing {
     func waitUntilReady(port: Int, modelID: String, timeout: Duration) async throws {
         let deadline = ContinuousClock.now + timeout
         let base = URL(string: "http://127.0.0.1:\(port)/v1")!
