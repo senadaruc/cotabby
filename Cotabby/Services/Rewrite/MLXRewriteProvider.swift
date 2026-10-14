@@ -47,12 +47,21 @@ final class MLXRewriteProvider: RewriteProviding {
         defer { controller.endUse() }
         let configuration = try await controller.readyConfiguration(modelID: modelID)
         let prompt = RewritePromptBuilder.instructPrompt(request)
-        return try await client.streamChat(
-            configuration: configuration,
-            apiKey: nil,
-            messages: [.init(role: "system", content: prompt.system), .init(role: "user", content: prompt.user)],
-            timeout: Self.timeout,
-            onPartialRawText: onPartial
-        )
+        do {
+            return try await client.streamChat(
+                configuration: configuration,
+                apiKey: nil,
+                messages: [.init(role: "system", content: prompt.system), .init(role: "user", content: prompt.user)],
+                timeout: Self.timeout,
+                onPartialRawText: onPartial
+            )
+        } catch let error as OpenAICompatibleClientError {
+            // A dead generator answers 404/500 while the process stays up; have the manager restart it.
+            if let reason = MLXGeneratorFailure.reason(for: error), let port = configuration.baseURL.port {
+                controller.manager.reportBroken(port: port, reason: reason)
+                throw RewriteError.mlxUnavailable("MLX is restarting…")
+            }
+            throw error
+        }
     }
 }

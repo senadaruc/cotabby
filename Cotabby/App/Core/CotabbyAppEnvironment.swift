@@ -108,7 +108,7 @@ final class CotabbyAppEnvironment {
         // The rewrite server is a second manager with its own pid file, so the launch-time orphan
         // sweep and the two stop paths can tell the two processes apart.
         let mlxRewriteServer = MLXRewriteServerController(
-            manager: MLXServerManager.live(paths: mlxPaths, pidFileURL: mlxPaths.rewriteServerPIDFile),
+            manager: MLXServerManager.live(paths: mlxPaths, pidFileURL: mlxPaths.rewriteServerPIDFile, label: "rewrite"),
             toolchain: { [weak mlxToolchainProvisioner] in mlxToolchainProvisioner?.state ?? .checking },
             cachedModels: { [weak mlxModelDownloader] in mlxModelDownloader?.cachedModels },
             rejectedModels: { [weak mlxModelDownloader] in mlxModelDownloader?.rejectedModels ?? [:] }

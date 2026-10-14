@@ -197,8 +197,9 @@ final class MLXServerManager: ObservableObject {
         self.verifyListener = verifyListener
     }
 
-    static func live(paths: MLXPaths, pidFileURL: URL? = nil) -> MLXServerManager {
-        MLXServerManager(paths: paths, launcher: MLXLiveProcessLauncher(), probe: MLXHTTPReadinessProbe(),
+    /// `label` names this server in `mlx-server.log` ("autocomplete" or "rewrite").
+    static func live(paths: MLXPaths, pidFileURL: URL? = nil, label: String = "autocomplete") -> MLXServerManager {
+        MLXServerManager(paths: paths, launcher: MLXLiveProcessLauncher(label: label), probe: MLXHTTPReadinessProbe(),
                          pidFileURL: pidFileURL)
     }
 
@@ -383,6 +384,37 @@ final class MLXServerManager: ObservableObject {
                       logTail: running.process.stderrTail())
     }
 
+    /// A request showed that the server's generator died while the process stayed up (mlx_lm answers
+    /// 404 "generation thread died" and `/v1/models` keeps working), so the exit callback never
+    /// fires. This restarts it through the normal failure path: backoff 1 s / 5 s / 30 s, and
+    /// `failed` after three. Only a report for the live, ready server's port counts; a late report
+    /// from a request to an old port, or one made while the server is already restarting, is
+    /// ignored. Dozens of in-flight requests fail together, so everything that must happen once
+    /// (clearing `current`, leaving `.ready`) happens synchronously before the first suspension.
+    func reportBroken(port: Int, reason: String) {
+        guard let running = current, running.port == port, case .ready = state else { return }
+        let failedGeneration = generation
+        let tail = running.process.stderrTail()
+        // Clearing `current` makes the process's own exit callback a no-op; `.starting` makes new
+        // requests fail fast with "loading" instead of hitting the broken server.
+        current = nil
+        state = .starting(modelID: running.launch.modelID)
+        CotabbyLogger.runtime.error("MLX generator stopped working", metadata: [
+            "reason": .string(reason),
+            "port": .stringConvertible(port),
+            "log_tail": .string(tail.joined(separator: "\n"))
+        ])
+        Task { [weak self] in
+            guard let self else { return }
+            await self.terminateTracked(running.process)
+            self.removePIDFile(ownedBy: running.process.processIdentifier)
+            // A stop, model change or shutdown can land during the SIGTERM grace; it owns the
+            // state then, so no failure is recorded for a server the user no longer wants.
+            guard self.generation == failedGeneration, self.desired == .running(running.launch) else { return }
+            self.recordFailure(running.launch, reason: "MLX's generator stopped working: \(reason)", logTail: tail)
+        }
+    }
+
     /// Readiness failed: the process is still up but useless. Kill it, then count a failure.
     private func failCurrent(generation failedGeneration: UInt64, reason: String) async {
         guard let running = current else { return }
@@ -466,8 +498,19 @@ final class MLXServerManager: ObservableObject {
 
 // MARK: - Live process and probe
 
-/// Starts the real `mlx_lm.server` with stdout discarded and the stderr tail kept for errors.
+/// Starts the real `mlx_lm.server` with stdout discarded. Its stderr is kept two ways: a tail in
+/// memory for the failure message, and the full stream appended to `mlx-server.log` so a failure
+/// can still be diagnosed afterwards. `label` names the server ("autocomplete" or "rewrite") in the
+/// log's header line.
 final class MLXLiveProcessLauncher: MLXProcessLaunching {
+    private let label: String
+    private let logWriter: MLXServerLogWriter
+
+    init(label: String = "autocomplete", logWriter: MLXServerLogWriter = .shared) {
+        self.label = label
+        self.logWriter = logWriter
+    }
+
     func launch(
         executable: URL,
         arguments: [String],
@@ -475,7 +518,7 @@ final class MLXLiveProcessLauncher: MLXProcessLaunching {
         onExit: @escaping @MainActor (Int32) -> Void
     ) throws -> any MLXRunningProcess {
         // The exit arrives on a background thread; hop to the main actor for the manager.
-        let (process, output) = Self.configuredProcess(
+        let (process, output, stderr) = Self.configuredProcess(
             executable: executable,
             arguments: arguments,
             environment: environment,
@@ -484,6 +527,13 @@ final class MLXLiveProcessLauncher: MLXProcessLaunching {
             }
         )
         try process.run()
+        // The header needs the pid, so the reader starts after `run()`; the pipe buffers whatever
+        // the server wrote in between.
+        logWriter.writeHeader(
+            label: label, pid: process.processIdentifier,
+            model: Self.value(after: "--model", in: arguments) ?? "?",
+            port: Int(Self.value(after: "--port", in: arguments) ?? "") ?? 0)
+        Self.startReading(stderr, into: output, log: logWriter)
         return MLXLiveRunningProcess(process: process, output: output)
     }
 
@@ -495,7 +545,7 @@ final class MLXLiveProcessLauncher: MLXProcessLaunching {
         arguments: [String],
         environment: [String: String],
         onExit: @escaping @Sendable (Int32) -> Void
-    ) -> (Process, MLXOutputCollector) {
+    ) -> (Process, MLXOutputCollector, Pipe) {
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
@@ -504,20 +554,32 @@ final class MLXLiveProcessLauncher: MLXProcessLaunching {
         process.standardOutput = FileHandle.nullDevice
         let stderr = Pipe()
         process.standardError = stderr
-        let output = MLXOutputCollector(tailLines: 20)
-        // At EOF the handler is called with empty data, and it keeps being called until it is removed.
-        // Removing it there and recording the close matches `MLXProcessRunner`.
-        stderr.fileHandleForReading.readabilityHandler = { handle in
+        // Raw lines are kept generously (300) because the filter below drops access-log lines and
+        // disconnect tracebacks, which are most of what the server prints.
+        let output = MLXOutputCollector(tailLines: 300)
+        process.terminationHandler = { finished in onExit(finished.terminationStatus) }
+        return (process, output, stderr)
+    }
+
+    /// Drains stderr off the main actor: each chunk goes to the in-memory collector and the log file.
+    /// At EOF the handler is called with empty data, and it keeps being called until it is removed.
+    /// Removing it there and recording the close matches `MLXProcessRunner`.
+    nonisolated private static func startReading(_ pipe: Pipe, into output: MLXOutputCollector, log: MLXServerLogWriter) {
+        pipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
                 handle.readabilityHandler = nil
                 output.markStderrClosed()
             } else {
                 output.appendStderr(data)
+                log.write(data)
             }
         }
-        process.terminationHandler = { finished in onExit(finished.terminationStatus) }
-        return (process, output)
+    }
+
+    nonisolated private static func value(after flag: String, in arguments: [String]) -> String? {
+        guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else { return nil }
+        return arguments[index + 1]
     }
 }
 
@@ -545,7 +607,7 @@ final class MLXLiveRunningProcess: MLXRunningProcess {
         if process.isRunning { kill(process.processIdentifier, SIGKILL) }
     }
 
-    func stderrTail() -> [String] { output.stderrTail }
+    func stderrTail() -> [String] { MLXServerLogFilter.relevantTail(output.stderrTail, limit: 20) }
 }
 
 /// Polls `/v1/models` every 250 ms, then sends two streamed warm-up completions shaped like real
@@ -652,7 +714,10 @@ extension OpenAICompatibleSuggestionEngine {
                 return try serverManager.readyConfiguration
             },
             apiKeyProvider: { nil },
-            backend: .mlx
+            backend: .mlx,
+            onServerBroken: { [weak serverManager] port, reason in
+                serverManager?.reportBroken(port: port, reason: reason)
+            }
         )
     }
 }

@@ -81,6 +81,26 @@ final class MLXRewriteProviderTests: XCTestCase {
         XCTAssertEqual(partials.last, "Fixed text.")
     }
 
+    func test_a404FromTheRewriteServerReportsItBroken() async throws {
+        let rig = makeRig()
+        MLXRewriteStubURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!, Data())
+        }
+        async let result = rig.provider.rewrite(
+            RewriteRequest(selection: "fixd", action: .fixOnly, memory: .empty), onPartial: { _ in })
+        await waitUntil { rig.probe.waiting >= 1 }
+        rig.probe.succeedNext()
+        do {
+            _ = try await result
+            XCTFail("expected an error")
+        } catch {
+            XCTAssertEqual(error as? RewriteError, .mlxUnavailable("MLX is restarting…"))
+        }
+        // reportBroken terminated the ready server and queued a restart with the 1 s backoff.
+        await waitUntil { rig.launcher.launches.count == 2 }
+        XCTAssertEqual(rig.launcher.launches[0].process.terminateCount, 1)
+    }
+
     func test_unavailableServerThrowsWithoutAnyHTTPTraffic() async {
         let rig = makeRig(toolchain: .notInstalled)
         do {

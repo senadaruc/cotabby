@@ -23,17 +23,22 @@ final class OpenAICompatibleSuggestionEngine: SuggestionGenerating {
     /// Owned for the engine's lifetime so focus-scoped warmup calls share one in-flight model load.
     private let preloadWorkController = OllamaPreloadWorkController()
     private let backend: Backend
+    /// MLX only: told the port and a short reason when a request shows the server's generator died
+    /// (see `MLXGeneratorFailure`). The endpoint backend never calls it.
+    private let onServerBroken: (@MainActor (Int, String) -> Void)?
 
     init(
         client: OpenAICompatibleAPIClient,
         configurationProvider: @escaping @MainActor () throws -> OpenAICompatibleEndpointConfiguration,
         apiKeyProvider: @escaping @MainActor () throws -> String?,
-        backend: Backend = .endpoint
+        backend: Backend = .endpoint,
+        onServerBroken: (@MainActor (Int, String) -> Void)? = nil
     ) {
         self.client = client
         self.configurationProvider = configurationProvider
         self.apiKeyProvider = apiKeyProvider
         self.backend = backend
+        self.onServerBroken = onServerBroken
     }
 
     func generateSuggestion(for request: SuggestionRequest) async throws -> SuggestionResult {
@@ -49,8 +54,11 @@ final class OpenAICompatibleSuggestionEngine: SuggestionGenerating {
             "engine": .string(backend.logLabel)
         ]
         let startTime = Date()
+        // Set once the configuration resolves, so the catch below knows which server failed.
+        var serverPort: Int?
         do {
             let configuration = try configurationProvider()
+            serverPort = configuration.baseURL.port
             let apiKey = try apiKeyProvider()
             let partialHandler: (@MainActor (String) -> Void)?
             if let onPartial {
@@ -135,6 +143,15 @@ final class OpenAICompatibleSuggestionEngine: SuggestionGenerating {
         } catch let error as URLError where error.code == .cancelled {
             CotabbyLogger.suggestion.debug("Endpoint request cancelled", metadata: metadata)
             throw SuggestionClientError.cancelled
+        } catch let error as OpenAICompatibleClientError
+            where backend == .mlx && MLXGeneratorFailure.reason(for: error) != nil {
+            // Our own loopback server only answers like this when its generator died. The manager
+            // restarts it; this request fails now with the reason instead of a generic error.
+            if let serverPort, let reason = MLXGeneratorFailure.reason(for: error) {
+                CotabbyLogger.suggestion.error("MLX generator failed: \(reason)", metadata: metadata)
+                onServerBroken?(serverPort, reason)
+            }
+            throw SuggestionClientError.unavailable("MLX is restarting…")
         } catch let error as SuggestionClientError {
             // The MLX configuration provider reports "server not ready" this way, already phrased
             // for the user; wrapping it again would turn it into a generic generation failure.

@@ -497,3 +497,118 @@ final class MLXFakeProbe: MLXReadinessProbing {
     func succeedNext() { pending.removeFirst().resume() }
     func failNext() { pending.removeFirst().resume(throwing: MLXServerError.readinessTimedOut) }
 }
+
+// MARK: - reportBroken (generator died while the process stayed up)
+
+@MainActor
+final class MLXServerManagerBrokenGeneratorTests: XCTestCase {
+    private static var retained: [AnyObject] = []
+    private var root: URL!
+    private var launcher: MLXFakeLauncher!
+    private var probe: MLXFakeProbe!
+    private var sleeps: [Duration] = []
+    private let launch = MLXServerLaunch(
+        executable: URL(fileURLWithPath: "/mlx/bin/mlx_lm.server"), modelID: "mlx-community/a", promptCacheBytes: 1 << 30)
+
+    override func setUp() {
+        super.setUp()
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("mlx-broken-\(UUID().uuidString)")
+        launcher = MLXFakeLauncher()
+        probe = MLXFakeProbe()
+        sleeps = []
+        Self.retained.append(contentsOf: [launcher!, probe!] as [AnyObject])
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: root)
+        super.tearDown()
+    }
+
+    private func makeManager() -> MLXServerManager {
+        let manager = MLXServerManager(
+            paths: MLXPaths(root: root), launcher: launcher, probe: probe, pickPort: { 50123 },
+            sleep: { [unowned self] duration in self.sleeps.append(duration); await Task.yield() },
+            now: { Date(timeIntervalSince1970: 1_000_000) }, baseEnvironment: [:],
+            verifyListener: { _, _ in true })
+        Self.retained.append(manager)
+        return manager
+    }
+
+    private func isReady(_ manager: MLXServerManager) -> Bool {
+        if case .ready = manager.state { return true }
+        return false
+    }
+
+    private func startReady(_ manager: MLXServerManager) async {
+        await manager.apply(.running(launch))
+        await waitUntil { self.probe.waiting >= 1 }
+        probe.succeedNext()
+        await waitUntil { self.isReady(manager) }
+    }
+
+    private func becomeReadyAgain(_ manager: MLXServerManager, launches: Int) async {
+        await waitUntil { self.launcher.launches.count == launches }
+        await waitUntil { self.probe.waiting >= 1 }
+        probe.succeedNext()
+        await waitUntil { self.isReady(manager) }
+    }
+
+    func test_reportBrokenTerminatesAndRelaunchesAfterOneSecond() async {
+        let manager = makeManager()
+        await startReady(manager)
+        manager.reportBroken(port: 50123, reason: "HTTP 404")
+        await waitUntil { self.launcher.launches.count == 2 }
+        XCTAssertEqual(launcher.launches[0].process.terminateCount, 1)
+        XCTAssertEqual(sleeps.first, .seconds(1))
+        XCTAssertEqual(MLXServerPIDFile(url: MLXPaths(root: root).serverPIDFile).read(), 1001)
+        // The old process's exit callback must not count a second failure.
+        launcher.launches[0].onExit(15)
+        for _ in 0..<5 { await Task.yield() }
+        XCTAssertEqual(launcher.launches.count, 2)
+    }
+
+    func test_thirdReportFailsWithTheReasonAndTail() async {
+        let manager = makeManager()
+        await startReady(manager)
+        manager.reportBroken(port: 50123, reason: "HTTP 404")
+        await becomeReadyAgain(manager, launches: 2)
+        manager.reportBroken(port: 50123, reason: "HTTP 404")
+        await becomeReadyAgain(manager, launches: 3)
+        launcher.launches[2].process.tail = ["mlx_lm.server generation thread died: boom"]
+        manager.reportBroken(port: 50123, reason: "HTTP 404")
+        await waitUntil { if case .failed = manager.state { return true } else { return false } }
+        XCTAssertEqual(manager.state, .failed(
+            reason: "MLX's generator stopped working: HTTP 404",
+            logTail: ["mlx_lm.server generation thread died: boom"]))
+        XCTAssertEqual(sleeps.filter { $0 == .seconds(1) }.count, 2)
+    }
+
+    func test_aReportForAnotherPortIsIgnored() async {
+        let manager = makeManager()
+        await startReady(manager)
+        manager.reportBroken(port: 49999, reason: "HTTP 404")
+        for _ in 0..<5 { await Task.yield() }
+        XCTAssertTrue(isReady(manager))
+        XCTAssertEqual(launcher.launches[0].process.terminateCount, 0)
+    }
+
+    func test_aReportWhileStartingIsIgnored() async {
+        let manager = makeManager()
+        await manager.apply(.running(launch))
+        XCTAssertEqual(manager.state, .starting(modelID: "mlx-community/a"))
+        manager.reportBroken(port: 50123, reason: "HTTP 404")
+        for _ in 0..<5 { await Task.yield() }
+        XCTAssertEqual(launcher.launches[0].process.terminateCount, 0)
+        XCTAssertEqual(manager.state, .starting(modelID: "mlx-community/a"))
+    }
+
+    func test_aSecondReportDuringTheRestartDoesNotCountAgain() async {
+        let manager = makeManager()
+        await startReady(manager)
+        manager.reportBroken(port: 50123, reason: "HTTP 404")
+        manager.reportBroken(port: 50123, reason: "HTTP 404")
+        await waitUntil { self.launcher.launches.count == 2 }
+        XCTAssertEqual(launcher.launches[0].process.terminateCount, 1)
+        XCTAssertEqual(sleeps.filter { $0 == .seconds(1) }.count, 1)
+    }
+}
