@@ -60,8 +60,11 @@ final class MLXRewriteProvider: RewriteProviding {
             )
         } catch let error as OpenAICompatibleClientError {
             // A 404 may mean the generator died or just that this request failed; `/health` decides.
-            if let reason = MLXGeneratorFailure.reason(for: error), let port = configuration.baseURL.port,
-               await healthCheck(port) != .healthy {
+            if let reason = MLXGeneratorFailure.reason(for: error), let port = configuration.baseURL.port {
+                let health = await healthCheck(port)
+                // A cancelled rewrite says nothing about the server (see the engine's same guard).
+                if Task.isCancelled || health == .cancelled { throw CancellationError() }
+                guard health != .healthy else { throw error }
                 controller.manager.reportBroken(port: port, reason: reason)
                 throw RewriteError.mlxUnavailable("MLX is restarting…")
             }

@@ -154,7 +154,11 @@ final class OpenAICompatibleSuggestionEngine: SuggestionGenerating {
             guard let serverPort, let reason = MLXGeneratorFailure.reason(for: error) else {
                 throw SuggestionClientError.generationFailed(error.localizedDescription)
             }
-            guard await healthCheck(serverPort) != .healthy else {
+            let health = await healthCheck(serverPort)
+            // The user kept typing while the probe ran: its answer (a cancelled request looks like
+            // "unreachable") says nothing about the server, so never restart it for this.
+            if Task.isCancelled || health == .cancelled { throw SuggestionClientError.cancelled }
+            guard health != .healthy else {
                 CotabbyLogger.suggestion.error(
                     "MLX request failed but the server is healthy: \(reason)", metadata: metadata)
                 throw SuggestionClientError.generationFailed(error.localizedDescription)

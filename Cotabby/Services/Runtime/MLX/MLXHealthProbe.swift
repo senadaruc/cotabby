@@ -13,6 +13,8 @@ nonisolated enum MLXServerHealth: Equatable, Sendable {
     case generatorDead
     /// Refused, timed out or any other transport failure: the server is not answering at all.
     case unreachable
+    /// The probe itself was cancelled (the caller moved on). It says nothing about the server.
+    case cancelled
 }
 
 /// Injected into the engine and provider so tests answer without a socket.
@@ -30,8 +32,12 @@ nonisolated enum MLXHealthProbe {
             case 200: return .healthy
             default: return .unreachable
             }
+        } catch is CancellationError {
+            return .cancelled
+        } catch let error as URLError where error.code == .cancelled {
+            return .cancelled
         } catch {
-            return .unreachable
+            return Task.isCancelled ? .cancelled : .unreachable
         }
     }
 }

@@ -115,6 +115,33 @@ final class OpenAICompatibleSuggestionEngineTests: XCTestCase {
         XCTAssertEqual(reports, 0)
     }
 
+    func test_mlxBackend_cancelledDuringTheHealthProbeNeverReportsBroken() async {
+        let started = HealthProbeGate()
+        var reports = 0
+        EngineStubURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!, Data())
+        }
+        let probing = makeEngine(
+            baseURL: "http://127.0.0.1:50123/v1", mode: .completions, backend: .mlx,
+            onServerBroken: { _, _ in reports += 1 },
+            healthCheck: { _ in
+                started.open()
+                // Returns early when cancelled, and then claims "unreachable" like a cancelled URLSession call.
+                try? await Task.sleep(for: .seconds(10))
+                return .unreachable
+            })
+        let task = Task { try await probing.generateSuggestion(for: CotabbyTestFixtures.suggestionRequest()) }
+        await waitUntil { started.isOpen }
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("expected cancellation")
+        } catch {
+            guard case .cancelled? = error as? SuggestionClientError else { return XCTFail("\(error)") }
+        }
+        XCTAssertEqual(reports, 0)
+    }
+
     func test_mlxBackend_streamedGenerationThreadDiedReportsBroken() async {
         EngineStubURLProtocol.handler = { request in
             Self.sse(request, "data: {\"error\":{\"message\":\"generation thread died\"}}\n\n")
@@ -366,4 +393,12 @@ private final class EngineStubURLProtocol: URLProtocol {
     }
 
     override func stopLoading() {}
+}
+
+/// A flag a `@Sendable` health closure can raise and the test can poll.
+final class HealthProbeGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var opened = false
+    func open() { lock.withLock { opened = true } }
+    var isOpen: Bool { lock.withLock { opened } }
 }

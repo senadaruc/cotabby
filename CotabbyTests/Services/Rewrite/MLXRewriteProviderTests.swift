@@ -24,7 +24,8 @@ final class MLXRewriteProviderTests: XCTestCase {
 
     private func makeRig(
         toolchain: MLXToolchainState? = nil, cached: Bool = true,
-        health: MLXServerHealth = .generatorDead
+        health: MLXServerHealth = .generatorDead,
+        healthCheck: MLXHealthCheck? = nil
     ) -> Rig {
         let launcher = MLXFakeLauncher()
         let probe = MLXFakeProbe()
@@ -49,7 +50,7 @@ final class MLXRewriteProviderTests: XCTestCase {
         let client = OpenAICompatibleAPIClient(session: URLSession(configuration: configuration))
         var prefs = RewritePreferences.defaults
         prefs.provider = .mlx
-        let provider = MLXRewriteProvider(controller: controller, client: client, preferences: { prefs }, healthCheck: { _ in health })
+        let provider = MLXRewriteProvider(controller: controller, client: client, preferences: { prefs }, healthCheck: healthCheck ?? { _ in health })
         Self.retained.append(contentsOf: [launcher, probe, manager, controller, client, provider] as [AnyObject])
         return Rig(provider: provider, controller: controller, launcher: launcher, probe: probe)
     }
@@ -117,6 +118,35 @@ final class MLXRewriteProviderTests: XCTestCase {
     func test_a404WithAHealthyServerKeepsItAndFailsOnlyTheRewrite() async {
         let (rig, error) = await rewrite404(health: .healthy)
         XCTAssertEqual(error as? OpenAICompatibleClientError, .server(statusCode: 404))
+        for _ in 0..<5 { await Task.yield() }
+        XCTAssertEqual(rig.launcher.launches.count, 1)
+        XCTAssertEqual(rig.launcher.launches[0].process.terminateCount, 0)
+    }
+
+    func test_cancelledDuringTheHealthProbeNeverRestartsTheServer() async throws {
+        let gate = HealthProbeGate()
+        let rig = makeRig(healthCheck: { _ in
+            gate.open()
+            try? await Task.sleep(for: .seconds(10))
+            return .unreachable
+        })
+        MLXRewriteStubURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!, Data())
+        }
+        let task = Task {
+            try await rig.provider.rewrite(
+                RewriteRequest(selection: "fixd", action: .fixOnly, memory: .empty), onPartial: { _ in })
+        }
+        await waitUntil { rig.probe.waiting >= 1 }
+        rig.probe.succeedNext()
+        await waitUntil { gate.isOpen }
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("expected cancellation")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "\(error)")
+        }
         for _ in 0..<5 { await Task.yield() }
         XCTAssertEqual(rig.launcher.launches.count, 1)
         XCTAssertEqual(rig.launcher.launches[0].process.terminateCount, 0)
