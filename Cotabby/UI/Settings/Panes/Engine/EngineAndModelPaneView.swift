@@ -32,6 +32,8 @@ struct EngineAndModelPaneView: View {
     @State var mlxIsCheckingCustomRepo = false
     @State var pendingMLXDeletion: MLXModelOption?
     @State var showsMLXRemoveConfirmation = false
+    /// True while a model delete or an MLX remove runs; the taps that would conflict with it are disabled.
+    @State var mlxIsBusy = false
 
     var body: some View {
         SettingsPaneScaffold(callout: callout) {

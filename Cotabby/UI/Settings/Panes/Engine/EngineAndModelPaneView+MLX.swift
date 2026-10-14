@@ -34,7 +34,8 @@ extension EngineAndModelPaneView {
         .alert("Remove MLX?", isPresented: $showsMLXRemoveConfirmation) {
             Button("Remove", role: .destructive) {
                 Task {
-                    await mlxServerManager.apply(.stopped)
+                    mlxIsBusy = true
+                    defer { mlxIsBusy = false }
                     await mlxToolchainProvisioner.remove()
                 }
             }
@@ -82,6 +83,7 @@ extension EngineAndModelPaneView {
                 }
                 if toolchain.isCotabbyInstall {
                     Button("Remove MLX…", role: .destructive) { showsMLXRemoveConfirmation = true }
+                        .disabled(mlxIsBusy)
                 }
             }
         }
@@ -162,6 +164,7 @@ extension EngineAndModelPaneView {
                     .foregroundStyle(.green)
             } else {
                 Button("Use") { suggestionSettings.setMLXModelID(option.repoID.value) }
+                    .disabled(mlxIsBusy)
             }
             Button {
                 pendingMLXDeletion = option
@@ -169,6 +172,7 @@ extension EngineAndModelPaneView {
                 Image(systemName: "trash")
             }
             .buttonStyle(.borderless)
+            .disabled(mlxIsBusy)
             .help("Delete from the Hugging Face cache")
         } else if isDownloading {
             Button("Cancel") { mlxModelDownloader.cancelDownload() }
@@ -194,7 +198,7 @@ extension EngineAndModelPaneView {
                     .onChange(of: mlxCustomRepoDraft) { _, _ in mlxCustomValidation = nil }
                 Button("Check", action: checkMLXCustomRepo)
                     .disabled(mlxCustomRepoDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        || mlxIsCheckingCustomRepo)
+                        || mlxIsCheckingCustomRepo || mlxIsBusy)
                 if case .valid(let repoID, _) = mlxCustomValidation {
                     Button("Download") { startMLXDownload(repoID) }
                         .buttonStyle(.borderedProminent)
@@ -221,7 +225,7 @@ extension EngineAndModelPaneView {
                     get: { suggestionSettings.mlxPromptCacheBytes },
                     set: { suggestionSettings.setMLXPromptCacheBytes($0) }
                 )) {
-                    ForEach([512 << 20, 1 << 30, 2 << 30, 4 << 30], id: \.self) { bytes in
+                    ForEach(promptCacheOptions, id: \.self) { bytes in
                         Text(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .memory)).tag(bytes)
                     }
                 } label: {
@@ -237,10 +241,19 @@ extension EngineAndModelPaneView {
         }
     }
 
+    /// The four presets, plus the stored value when it is off-preset (the store clamps to
+    /// 256 MiB...8 GiB), so the menu always has a tag for the current selection.
+    private var promptCacheOptions: [Int] {
+        let presets = [512 << 20, 1 << 30, 2 << 30, 4 << 30]
+        let current = suggestionSettings.mlxPromptCacheBytes
+        return presets.contains(current) ? presets : (presets + [current]).sorted()
+    }
+
     // MARK: - Actions
 
     private var canStartMLXDownload: Bool {
         mlxToolchainProvisioner.state.toolchain != nil && mlxModelDownloader.download?.isActive != true
+            && !mlxIsBusy
     }
 
     func startMLXDownload(_ repoID: MLXRepoID) {
@@ -260,17 +273,14 @@ extension EngineAndModelPaneView {
         }
     }
 
-    /// Stops the server first when it is running the model being deleted (spec section 5), then
-    /// deletes. The rescan makes the server wiring report "model not downloaded".
+    /// Deletes the model from the cache and does not stop the server itself. The pipeline in
+    /// `CotabbyAppEnvironment` stops it when the cache rescan publishes without the model, which
+    /// keeps stops on the serialized, de-duplicated desire path. A running server keeps its
+    /// memory-mapped weights valid after the files are unlinked, so deleting first is safe.
     func deleteMLXModel(_ option: MLXModelOption) {
         Task {
-            switch mlxServerManager.state {
-            case .ready(_, let modelID) where modelID == option.repoID.value,
-                 .starting(let modelID) where modelID == option.repoID.value:
-                await mlxServerManager.apply(.stopped)
-            default:
-                break
-            }
+            mlxIsBusy = true
+            defer { mlxIsBusy = false }
             await mlxModelDownloader.delete(option.repoID, toolchain: mlxToolchainProvisioner.state.toolchain)
         }
     }
