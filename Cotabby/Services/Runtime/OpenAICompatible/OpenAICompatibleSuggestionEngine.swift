@@ -3,23 +3,37 @@ import Logging
 
 /// Adapts an OpenAI-compatible SSE stream to Cotabby's backend-independent suggestion contract.
 /// The HTTP client owns wire parsing; this type owns sampling, normalization, logging, and error
-/// mapping so the router never needs endpoint-specific behavior.
+/// mapping so the router never needs endpoint-specific behavior. One type serves two backends: the
+/// user's endpoint, and the loopback `mlx_lm.server` that the MLX engine runs (`Backend`).
 @MainActor
 final class OpenAICompatibleSuggestionEngine: SuggestionGenerating {
+    /// Which server this instance talks to. The endpoint instance sends only OpenAI's basics. The
+    /// MLX instance adds mlx_lm.server's sampling fields and ends the stream itself at a sentence
+    /// end, the way the llama runtime stops decoding (`DecodeStopPolicy`).
+    enum Backend: Equatable {
+        case endpoint
+        case mlx
+
+        var logLabel: String { self == .mlx ? "mlx" : "openai_compatible" }
+    }
+
     private let client: OpenAICompatibleAPIClient
     private let configurationProvider: @MainActor () throws -> OpenAICompatibleEndpointConfiguration
     private let apiKeyProvider: @MainActor () throws -> String?
     /// Owned for the engine's lifetime so focus-scoped warmup calls share one in-flight model load.
     private let preloadWorkController = OllamaPreloadWorkController()
+    private let backend: Backend
 
     init(
         client: OpenAICompatibleAPIClient,
         configurationProvider: @escaping @MainActor () throws -> OpenAICompatibleEndpointConfiguration,
-        apiKeyProvider: @escaping @MainActor () throws -> String?
+        apiKeyProvider: @escaping @MainActor () throws -> String?,
+        backend: Backend = .endpoint
     ) {
         self.client = client
         self.configurationProvider = configurationProvider
         self.apiKeyProvider = apiKeyProvider
+        self.backend = backend
     }
 
     func generateSuggestion(for request: SuggestionRequest) async throws -> SuggestionResult {
@@ -32,7 +46,7 @@ final class OpenAICompatibleSuggestionEngine: SuggestionGenerating {
     ) async throws -> SuggestionResult {
         let metadata: Logger.Metadata = [
             "request_id": .string(request.requestID),
-            "engine": .string("openai_compatible")
+            "engine": .string(backend.logLabel)
         ]
         let startTime = Date()
         do {
@@ -71,9 +85,11 @@ final class OpenAICompatibleSuggestionEngine: SuggestionGenerating {
                 options: OpenAICompatibleGenerationOptions(
                     maxPredictionTokens: request.maxPredictionTokens,
                     temperature: request.temperature,
-                    topP: request.topP
+                    topP: request.topP,
+                    mlx: backend == .mlx ? Self.mlxOptions(for: request) : nil
                 ),
-                onPartialRawText: partialHandler
+                onPartialRawText: partialHandler,
+                stopWhen: backend == .mlx ? Self.earlyStop(for: request) : nil
             )
             try Task.checkCancellation()
 
@@ -115,6 +131,10 @@ final class OpenAICompatibleSuggestionEngine: SuggestionGenerating {
         } catch let error as URLError where error.code == .cancelled {
             CotabbyLogger.suggestion.debug("Endpoint request cancelled", metadata: metadata)
             throw SuggestionClientError.cancelled
+        } catch let error as SuggestionClientError {
+            // The MLX configuration provider reports "server not ready" this way, already phrased
+            // for the user; wrapping it again would turn it into a generic generation failure.
+            throw error
         } catch let error as OpenAICompatibleEndpointError {
             throw SuggestionClientError.unavailable(error.localizedDescription)
         } catch {
@@ -127,6 +147,30 @@ final class OpenAICompatibleSuggestionEngine: SuggestionGenerating {
     }
 
     func resetCachedGenerationContext() async {}
+
+    /// Same sampling values the llama runtime uses, so MLX and Open Source condition alike.
+    private static func mlxOptions(for request: SuggestionRequest) -> MLXCompletionOptions {
+        MLXCompletionOptions(
+            topK: request.topK,
+            minP: request.minP,
+            repetitionPenalty: request.repetitionPenalty,
+            seed: request.randomSeed.map(Int.init),
+            stop: request.isMultiLineEnabled ? [] : ["\n"]
+        )
+    }
+
+    /// The llama runtime's stop rule applied to the streamed text: one SSE text event is about one
+    /// token, which is what `tokensGenerated` counts for the minimum-token guard.
+    private static func earlyStop(for request: SuggestionRequest) -> @MainActor (String, Int) -> Bool {
+        let minimumWords = request.wordRange?.lowWords ?? 0
+        return { accumulated, events in
+            DecodeStopPolicy.verdict(
+                accumulated: accumulated,
+                tokensGenerated: events,
+                minimumWords: minimumWords
+            ) != nil
+        }
+    }
 
     /// Best-effort Ollama cold-start work runs through a request that is independent from the
     /// coordinator's cancellable prediction task. Typing again can therefore discard stale

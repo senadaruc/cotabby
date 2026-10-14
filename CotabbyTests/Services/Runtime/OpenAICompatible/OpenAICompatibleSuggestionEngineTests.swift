@@ -27,6 +27,7 @@ final class OpenAICompatibleSuggestionEngineTests: XCTestCase {
             XCTAssertEqual(json["max_tokens"] as? Int, 8)
             XCTAssertEqual(json["temperature"] as? Double, 0.1)
             XCTAssertEqual(json["top_p"] as? Double, 0.7)
+            XCTAssertNil(json["top_k"])
             return Self.sse(request, "data: {\"choices\":[{\"text\":\" world\"}]}\n\ndata: [DONE]\n\n")
         }
         let engine = makeEngine(mode: .completions, apiKey: "key-123")
@@ -82,11 +83,76 @@ final class OpenAICompatibleSuggestionEngineTests: XCTestCase {
 
     // MARK: - Helpers
 
+    func test_mlxBackend_sendsMLXSamplingAndSingleLineStop() async throws {
+        EngineStubURLProtocol.handler = { request in
+            let json = try Self.jsonBody(request)
+            XCTAssertEqual(json["top_k"] as? Int, 20)
+            XCTAssertEqual(json["min_p"] as? Double, 0.08)
+            XCTAssertEqual(json["repetition_penalty"] as? Double, 1.05)
+            XCTAssertEqual(json["seed"] as? Int, 42)
+            XCTAssertEqual(json["stop"] as? [String], ["\n"])
+            return Self.sse(request, "data: {\"choices\":[{\"text\":\" world\"}]}\n\ndata: [DONE]\n\n")
+        }
+        let engine = makeEngine(mode: .completions, backend: .mlx)
+        let result = try await engine.generateSuggestion(for: CotabbyTestFixtures.suggestionRequest())
+        XCTAssertEqual(result.rawText, " world")
+    }
+
+    func test_mlxBackend_multiLineSendsNoStop() async throws {
+        EngineStubURLProtocol.handler = { request in
+            XCTAssertNil(try Self.jsonBody(request)["stop"])
+            return Self.sse(request, "data: {\"choices\":[{\"text\":\" world\"}]}\n\ndata: [DONE]\n\n")
+        }
+        let engine = makeEngine(mode: .completions, backend: .mlx)
+        _ = try await engine.generateSuggestion(
+            for: CotabbyTestFixtures.suggestionRequest(isMultiLineEnabled: true)
+        )
+    }
+
+    /// The llama runtime stops decoding at a sentence end; MLX gets the same rule by closing the
+    /// stream, which also makes mlx_lm.server stop on its next token write.
+    func test_mlxBackend_stopsAtTheFirstSentenceEnd() async throws {
+        EngineStubURLProtocol.handler = { request in
+            Self.sse(request,
+                "data: {\"choices\":[{\"text\":\" Thanks\"}]}\n\n" +
+                "data: {\"choices\":[{\"text\":\" for the report.\"}]}\n\n" +
+                "data: {\"choices\":[{\"text\":\" Next week\"}]}\n\n" +
+                "data: [DONE]\n\n")
+        }
+        let engine = makeEngine(mode: .completions, backend: .mlx)
+        let result = try await engine.generateSuggestion(for: CotabbyTestFixtures.suggestionRequest())
+        XCTAssertEqual(result.rawText, " Thanks for the report.")
+    }
+
+    func test_endpointBackend_doesNotStopEarly() async throws {
+        EngineStubURLProtocol.handler = { request in
+            Self.sse(request,
+                "data: {\"choices\":[{\"text\":\" Thanks for the report.\"}]}\n\n" +
+                "data: {\"choices\":[{\"text\":\" Next week\"}]}\n\n" +
+                "data: [DONE]\n\n")
+        }
+        let result = try await makeEngine(mode: .completions)
+            .generateSuggestion(for: CotabbyTestFixtures.suggestionRequest())
+        XCTAssertEqual(result.rawText, " Thanks for the report. Next week")
+    }
+
+    func test_mlxNotReady_throwsUnavailableWithoutNetwork() async {
+        let engine = makeEngine(
+            configuration: { throw SuggestionClientError.unavailable("MLX is starting the model…") },
+            backend: .mlx
+        )
+        await assertThrows(engine, .unavailable("MLX is starting the model…"))
+        XCTAssertTrue(EngineStubURLProtocol.requestedURLs.isEmpty)
+    }
+
+    /// Covers the MLX backend too: it reuses this engine and only changes the sampling fields and
+    /// the early stop, so the same stub server answers both.
     private func makeEngine(
         baseURL: String = OpenAICompatibleEndpointConfiguration.defaultBaseURLString,
         modelName: String = "local-model",
         mode: OpenAICompatibleAPIMode = .completions,
-        apiKey: String? = nil
+        apiKey: String? = nil,
+        backend: OpenAICompatibleSuggestionEngine.Backend = .endpoint
     ) -> OpenAICompatibleSuggestionEngine {
         makeEngine(
             configuration: {
@@ -96,13 +162,15 @@ final class OpenAICompatibleSuggestionEngineTests: XCTestCase {
                     apiMode: mode
                 )
             },
-            apiKey: apiKey
+            apiKey: apiKey,
+            backend: backend
         )
     }
 
     private func makeEngine(
         configuration: @escaping @MainActor () throws -> OpenAICompatibleEndpointConfiguration,
-        apiKey: String? = nil
+        apiKey: String? = nil,
+        backend: OpenAICompatibleSuggestionEngine.Backend = .endpoint
     ) -> OpenAICompatibleSuggestionEngine {
         let sessionConfiguration = URLSessionConfiguration.ephemeral
         sessionConfiguration.protocolClasses = [EngineStubURLProtocol.self]
@@ -110,7 +178,8 @@ final class OpenAICompatibleSuggestionEngineTests: XCTestCase {
         let engine = OpenAICompatibleSuggestionEngine(
             client: client,
             configurationProvider: configuration,
-            apiKeyProvider: { apiKey }
+            apiKeyProvider: { apiKey },
+            backend: backend
         )
         Self.retained.append(contentsOf: [client, engine] as [AnyObject])
         return engine
