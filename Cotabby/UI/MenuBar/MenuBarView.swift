@@ -23,6 +23,7 @@ struct MenuBarView: View {
     @ObservedObject var foundationModelAvailabilityService: FoundationModelAvailabilityService
     @ObservedObject var powerSourceMonitor: PowerSourceMonitor
     @ObservedObject var mlxServerManager: MLXServerManager
+    @ObservedObject var menuResourceMonitor: MenuResourceMonitor
     let appUpdateManager: AppUpdateManager
     let onOpenSettings: () -> Void
     let onReportFeedback: () -> Void
@@ -57,7 +58,10 @@ struct MenuBarView: View {
         .onAppear {
             permissionManager.refresh()
             runtimeModel.refreshAvailableModels()
+            menuResourceMonitor.start()
         }
+        // Sampling runs only while the popover is on screen.
+        .onDisappear { menuResourceMonitor.stop() }
     }
 
     // MARK: - Header
@@ -231,6 +235,15 @@ struct MenuBarView: View {
                     .pickerStyle(.menu)
                 }
 
+                // Live usage, refreshed only while this popover is visible (see `onAppear`).
+                if let summary = menuResourceMonitor.summary {
+                    Text(ResourceUsageSummary.menuLine(summary))
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                }
             }
         }
         .padding(.bottom, 12)

@@ -26,6 +26,7 @@ final class CotabbyAppEnvironment {
     /// `startMLXEngine()` (called by AppDelegate outside the test host) starts their work.
     let mlxToolchainProvisioner: MLXToolchainProvisioner
     let mlxServerManager: MLXServerManager
+    let menuResourceMonitor: MenuResourceMonitor
     let mlxModelDownloader: MLXModelDownloader
     let foundationModelAvailabilityService: FoundationModelAvailabilityService
     let powerSourceMonitor: PowerSourceMonitor
@@ -211,6 +212,16 @@ final class CotabbyAppEnvironment {
             sample.includesMLXServer = pid != nil
             return sample
         })
+        // Compact CPU/RAM/GPU line in the menu bar popover. It samples with its own baselines
+        // (`MenuResourceSampler`) so it cannot disturb the Performance pane's CPU deltas.
+        let menuResourceSampler = MenuResourceSampler()
+        let menuResourceMonitor = MenuResourceMonitor(
+            sample: { [weak mlxServerManager] in
+                let pid = MainActor.assumeIsolated { mlxServerManager?.runningProcessIdentifier }
+                return menuResourceSampler.sample(extraProcessID: pid)
+            },
+            onStop: { menuResourceSampler.reset() }
+        )
         // What the performance tuner has learned per model (speed, accepted lengths), and the
         // machine conditions it reacts to. Both are cheap until a request asks: the GPU is read at
         // most every few seconds, and only while tuning is on.
@@ -615,6 +626,7 @@ final class CotabbyAppEnvironment {
         self.openAICompatibleConnectionModel = openAICompatibleConnectionModel
         self.mlxToolchainProvisioner = mlxToolchainProvisioner
         self.mlxServerManager = mlxServerManager
+        self.menuResourceMonitor = menuResourceMonitor
         self.mlxModelDownloader = mlxModelDownloader
         self.foundationModelAvailabilityService = foundationModelAvailabilityService
         self.powerSourceMonitor = powerSourceMonitor

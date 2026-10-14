@@ -29,7 +29,15 @@ nonisolated enum SystemResourceSampler {
     /// `extraProcessIDs` are child processes whose CPU and memory are added to the totals (the MLX
     /// server does the model work that llama.cpp does inside this process, so leaving it out would
     /// make an MLX user's graph read near zero). A pid that no longer exists contributes nothing.
-    static func sample(extraProcessIDs: [Int32] = []) -> SystemResourceSample {
+    ///
+    /// `baseline` holds the per-pid CPU readings the next call measures against. The default is one
+    /// shared cache; a second periodic caller (the menu bar monitor) passes its own instance, because
+    /// two callers sharing one cache would each reset the other's baseline and read CPU over a
+    /// shortened, wrong window.
+    static func sample(
+        extraProcessIDs: [Int32] = [],
+        baseline previousCPUTime: PreviousCPUReadings = sharedBaseline
+    ) -> SystemResourceSample {
         var cpu = currentCPUPercent()
         var footprint = currentMemoryFootprint()
         let now = Date()
@@ -63,9 +71,9 @@ nonisolated enum SystemResourceSampler {
         return deltaNanoseconds / (elapsedSeconds * 1_000_000_000) * 100
     }
 
-    /// Last CPU reading per extra pid. Sampling happens on one timer, but a lock keeps the cache
-    /// valid if two stores ever sample at once.
-    private static let previousCPUTime = PreviousCPUReadings()
+    /// Default CPU baseline, used by the Performance pane's store. The lock keeps it valid if two
+    /// threads sample at once; separate callers should still use separate instances.
+    static let sharedBaseline = PreviousCPUReadings()
 
     private static let machTimebase: (numer: UInt32, denom: UInt32) = {
         var info = mach_timebase_info_data_t()
