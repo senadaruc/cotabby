@@ -27,6 +27,19 @@ nonisolated enum RewritePromptBuilder {
 
     static let baseStopSequences = ["\nDraft:", "\n\nDraft", "\n\n\n"]
 
+    /// The in-process (Apple Intelligence and llama) output budget: about 1.5x the selection's
+    /// tokens (about 4 characters per token) plus a margin, capped.
+    static func tokenBudget(_ request: RewriteRequest) -> Int {
+        min(800, request.selection.count * 3 / 8 + 48)
+    }
+
+    /// The output budget for a base-model (completions) rewrite on an endpoint or MLX server, which
+    /// unlike the in-process llama path has no other length limit: twice the selection's estimated
+    /// tokens (about 4 characters each) so a longer rewrite fits, clamped to 64...512.
+    static func completionTokenBudget(selection: String) -> Int {
+        min(512, max(64, selection.count / 4 * 2))
+    }
+
     static func actionLine(_ action: RewriteAction) -> String {
         switch action {
         case .fixOnly: return "Fix only spelling, grammar and punctuation mistakes; keep the wording."

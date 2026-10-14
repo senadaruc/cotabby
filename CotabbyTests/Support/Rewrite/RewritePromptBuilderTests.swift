@@ -143,4 +143,10 @@ final class RewritePromptBuilderTests: XCTestCase {
         XCTAssertTrue(system.contains(RewritePromptBuilder.actionLine(.shorter)))
         XCTAssertTrue(system.contains("Keep the same tone: warm and caring, for a family member."))
     }
+
+    func test_completionTokenBudgetIsTwiceTheSelectionClampedTo64And512() {
+        XCTAssertEqual(RewritePromptBuilder.completionTokenBudget(selection: "hi"), 64)
+        XCTAssertEqual(RewritePromptBuilder.completionTokenBudget(selection: String(repeating: "a", count: 400)), 200)
+        XCTAssertEqual(RewritePromptBuilder.completionTokenBudget(selection: String(repeating: "a", count: 4000)), 512)
+    }
 }

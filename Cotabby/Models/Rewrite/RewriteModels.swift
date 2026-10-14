@@ -38,10 +38,13 @@ nonisolated enum RewriteAction: Equatable, Hashable, Sendable {
     var alwaysUsesMemory: Bool { self == .longer }
 }
 
-/// Which model rewrites: Cotabby's own local models, an instruct model on a second MLX server, or
-/// the user's OpenAI-compatible API.
+/// What the user picked in Settings → Rewrite → Rewrite Model. Every local engine reuses the model
+/// already set up for autocomplete (there is no rewrite-only model); `sameAsAutocomplete` follows
+/// whichever engine autocomplete is on and is turned into one of the concrete cases by
+/// `RewriteProviderResolver`. Raw values are persisted, so `api` and `mlx` keep their old spelling;
+/// the old `local` is migrated by `RewritePreferencesStore`, not decoded here.
 nonisolated enum RewriteProviderKind: String, CaseIterable, Sendable {
-    case local, api, mlx
+    case sameAsAutocomplete, appleIntelligence, openSource, localEndpoint, mlx, api
 }
 
 /// The cloud services a rewrite can use with the user's own API key. Claude goes through Anthropic's
@@ -107,8 +110,6 @@ nonisolated struct RewritePreferences: Equatable, Sendable {
     var apiBaseURL: String
     /// The chosen model per service (by `RewriteCloudProvider.rawValue`), so switching keeps each choice.
     var modelsByProvider: [String: String]
-    /// The MLX chat model (Hugging Face repo id) the `mlx` provider runs on its own server.
-    var mlxModelID: String
     var usesMemoryByDefault: Bool
     /// The popup's "Fix spelling & grammar" tick box: every action except Fix only also corrects
     /// mistakes when it is on. Remembered between rewrites.
@@ -121,15 +122,11 @@ nonisolated struct RewritePreferences: Equatable, Sendable {
     var shortcutModifiers: UInt32
     var shortcutLabel: String
 
-    /// A small instruction-tuned model (~3 GB): rewrites need a chat model, not autocomplete's base model.
-    static let defaultMLXModelID = "mlx-community/gemma-4-e4b-it-4bit"
-
     static let defaults = RewritePreferences(
-        provider: .local,
+        provider: .sameAsAutocomplete,
         cloudProvider: .anthropic,
         apiBaseURL: "",
         modelsByProvider: [:],
-        mlxModelID: defaultMLXModelID,
         usesMemoryByDefault: false,
         fixesMistakes: true,
         sendsMemoryToAPI: false,

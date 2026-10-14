@@ -21,21 +21,37 @@ final class RewritePreferencesStore: ObservableObject {
         static let apiModelName = "cotabbyRewriteAPIModelName"
         static let cloudProvider = "cotabbyRewriteCloudProvider"
         static let modelsByProvider = "cotabbyRewriteModelsByProvider"
-        static let mlxModel = "cotabbyRewriteMLXModel"
+        /// Retired: rewrite used to have its own MLX model. It now reuses autocomplete's, so the key
+        /// is only removed.
+        static let legacyMLXModel = "cotabbyRewriteMLXModel"
         static let usesMemory = "cotabbyRewriteUsesMemory"
         static let sendsMemoryToAPI = "cotabbyRewriteSendsMemoryToAPI"
         static let showsButton = "cotabbyRewriteShowsButton"
         static let fixesMistakes = "cotabbyRewriteFixesMistakes"
     }
 
-    init(userDefaults: UserDefaults = .standard, isAppleSilicon: Bool = MLXHardware.isAppleSilicon) {
+    /// `isAppleIntelligenceAvailable` only matters once: a stored `local` (the old "Apple Intelligence
+    /// else Cotabby's model" choice) becomes whichever of the two it was actually running.
+    init(
+        userDefaults: UserDefaults = .standard,
+        isAppleSilicon: Bool = MLXHardware.isAppleSilicon,
+        isAppleIntelligenceAvailable: Bool = false
+    ) {
         self.userDefaults = userDefaults
         let defaults = RewritePreferences.defaults
         var loaded = defaults
-        loaded.provider = userDefaults.string(forKey: Key.provider).flatMap(RewriteProviderKind.init(rawValue:)) ?? defaults.provider
-        // MLX needs Apple Silicon; a stored choice (e.g. synced settings) falls back to local so
-        // the picker always has a matching entry.
-        if loaded.provider == .mlx, !isAppleSilicon { loaded.provider = .local }
+        let stored = userDefaults.string(forKey: Key.provider)
+        if stored == "local" {
+            // Written back so the choice stays put if Apple Intelligence availability changes later.
+            loaded.provider = isAppleIntelligenceAvailable ? .appleIntelligence : .openSource
+            userDefaults.set(loaded.provider.rawValue, forKey: Key.provider)
+        } else {
+            loaded.provider = stored.flatMap(RewriteProviderKind.init(rawValue:)) ?? defaults.provider
+        }
+        // MLX needs Apple Silicon; a stored choice (e.g. synced settings) falls back to the local
+        // llama path so the picker always has a matching entry.
+        if loaded.provider == .mlx, !isAppleSilicon { loaded.provider = .openSource }
+        userDefaults.removeObject(forKey: Key.legacyMLXModel)
         loaded.apiBaseURL = userDefaults.string(forKey: Key.apiBaseURL) ?? defaults.apiBaseURL
         loaded.modelsByProvider = userDefaults.dictionary(forKey: Key.modelsByProvider) as? [String: String] ?? [:]
         if let stored = userDefaults.string(forKey: Key.cloudProvider).flatMap(RewriteCloudProvider.init(rawValue:)) {
@@ -47,7 +63,6 @@ final class RewritePreferencesStore: ObservableObject {
                 loaded.modelsByProvider["custom"] = legacyModel
             }
         }
-        loaded.mlxModelID = userDefaults.string(forKey: Key.mlxModel) ?? defaults.mlxModelID
         loaded.usesMemoryByDefault = userDefaults.object(forKey: Key.usesMemory) as? Bool ?? defaults.usesMemoryByDefault
         loaded.sendsMemoryToAPI = userDefaults.object(forKey: Key.sendsMemoryToAPI) as? Bool ?? defaults.sendsMemoryToAPI
         loaded.showsButtonOnSelection = userDefaults.object(forKey: Key.showsButton) as? Bool ?? defaults.showsButtonOnSelection
@@ -74,11 +89,6 @@ final class RewritePreferencesStore: ObservableObject {
     func setAPIModelName(_ value: String) {
         preferences.apiModelName = value
         userDefaults.set(preferences.modelsByProvider, forKey: Key.modelsByProvider)
-    }
-
-    func setMLXModelID(_ value: String) {
-        preferences.mlxModelID = value
-        userDefaults.set(value, forKey: Key.mlxModel)
     }
 
     func setUsesMemoryByDefault(_ value: Bool) {

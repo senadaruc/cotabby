@@ -1,7 +1,7 @@
 import XCTest
 @testable import Cotabby
 
-/// The Rewrite settings persist under their own keys and start from safe defaults: local provider,
+/// The Rewrite settings persist under their own keys and start from safe defaults: same-as-autocomplete provider,
 /// memory never sent to an API.
 @MainActor
 final class RewritePreferencesStoreTests: XCTestCase {
@@ -28,7 +28,7 @@ final class RewritePreferencesStoreTests: XCTestCase {
 
     func test_defaultsAreLocalAndNeverSendMemoryToTheCloud() {
         let prefs = makeStore().preferences
-        XCTAssertEqual(prefs.provider, .local)
+        XCTAssertEqual(prefs.provider, .sameAsAutocomplete)
         XCTAssertFalse(prefs.sendsMemoryToAPI)
         XCTAssertTrue(prefs.showsButtonOnSelection)
         XCTAssertEqual(prefs.shortcutKeyCode, 15)
@@ -107,20 +107,46 @@ final class RewritePreferencesStoreTests: XCTestCase {
         XCTAssertTrue(RewriteCloudProvider.anthropic.suggestedModels.contains("claude-sonnet-5-5"))
     }
 
-    func test_mlxModelDefaultsToTheInstructModelAndPersists() {
-        let store = makeStore()
-        XCTAssertEqual(store.preferences.mlxModelID, "mlx-community/gemma-4-e4b-it-4bit")
-        store.setProvider(.mlx)
-        store.setMLXModelID("mlx-community/other-it")
-        let reloaded = makeStore()
-        XCTAssertEqual(reloaded.preferences.provider, .mlx)
-        XCTAssertEqual(reloaded.preferences.mlxModelID, "mlx-community/other-it")
-        XCTAssertEqual(defaults.string(forKey: "cotabbyRewriteMLXModel"), "mlx-community/other-it")
+    func test_defaultProviderIsSameAsAutocomplete() {
+        XCTAssertEqual(makeStore().preferences.provider, .sameAsAutocomplete)
     }
 
-    func test_storedMLXProviderFallsBackToLocalWithoutAppleSilicon() {
+    func test_providerChoicePersists() {
+        let store = makeStore()
+        store.setProvider(.localEndpoint)
+        XCTAssertEqual(makeStore().preferences.provider, .localEndpoint)
+        XCTAssertEqual(defaults.string(forKey: "cotabbyRewriteProvider"), "localEndpoint")
+    }
+
+    func test_storedLocalMigratesToAppleIntelligenceWhenAvailable() {
+        defaults.set("local", forKey: "cotabbyRewriteProvider")
+        let store = RewritePreferencesStore(userDefaults: defaults, isAppleSilicon: true, isAppleIntelligenceAvailable: true)
+        XCTAssertEqual(store.preferences.provider, .appleIntelligence)
+        XCTAssertEqual(defaults.string(forKey: "cotabbyRewriteProvider"), "appleIntelligence", "migrated once, then stable")
+    }
+
+    func test_storedLocalMigratesToOpenSourceWithoutAppleIntelligence() {
+        defaults.set("local", forKey: "cotabbyRewriteProvider")
+        let store = RewritePreferencesStore(userDefaults: defaults, isAppleSilicon: true, isAppleIntelligenceAvailable: false)
+        XCTAssertEqual(store.preferences.provider, .openSource)
+        XCTAssertEqual(defaults.string(forKey: "cotabbyRewriteProvider"), "openSource")
+    }
+
+    func test_storedAPIAndMLXAreKept() {
+        defaults.set("api", forKey: "cotabbyRewriteProvider")
+        XCTAssertEqual(RewritePreferencesStore(userDefaults: defaults, isAppleSilicon: true).preferences.provider, .api)
         defaults.set("mlx", forKey: "cotabbyRewriteProvider")
-        XCTAssertEqual(RewritePreferencesStore(userDefaults: defaults, isAppleSilicon: false).preferences.provider, .local)
         XCTAssertEqual(RewritePreferencesStore(userDefaults: defaults, isAppleSilicon: true).preferences.provider, .mlx)
+    }
+
+    func test_storedMLXFallsBackToOpenSourceWithoutAppleSilicon() {
+        defaults.set("mlx", forKey: "cotabbyRewriteProvider")
+        XCTAssertEqual(RewritePreferencesStore(userDefaults: defaults, isAppleSilicon: false).preferences.provider, .openSource)
+    }
+
+    func test_rewriteOnlyMLXModelPreferenceIsGone() {
+        defaults.set("mlx-community/old-it", forKey: "cotabbyRewriteMLXModel")
+        _ = makeStore()
+        XCTAssertNil(defaults.object(forKey: "cotabbyRewriteMLXModel"), "the rewrite-only model key is cleaned up")
     }
 }
