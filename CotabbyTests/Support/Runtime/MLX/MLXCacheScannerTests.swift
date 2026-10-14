@@ -91,6 +91,24 @@ final class MLXCacheScannerTests: XCTestCase {
         XCTAssertNil(result.rejected[MLXRepoID("a/partial")!], "an incomplete download is just not downloaded")
     }
 
+    func test_partialSnapshotsAreNeitherListedNorRejected() throws {
+        try repo("models--a--configonly", files: ["config.json": "{\"model_type\":\"qwen3\"}"])
+        var noTokenizer = modelFiles(type: "qwen3"); noTokenizer["tokenizer.json"] = nil
+        try repo("models--a--notok", files: noTokenizer)
+        let result = MLXCacheScanner.scanDetailed(cacheRoot: root, supportedModelTypes: ["qwen3"])
+        XCTAssertTrue(result.models.isEmpty)
+        XCTAssertTrue(result.rejected.isEmpty)
+        XCTAssertEqual(
+            MLXServerDesireResolver.desire(
+                engine: .mlx, isAppleSilicon: true,
+                toolchain: .ready(MLXToolchain(
+                    serverExecutable: URL(fileURLWithPath: "/s"), pythonExecutable: URL(fileURLWithPath: "/p"),
+                    version: "0.32.0", isCotabbyInstall: true)),
+                modelID: "a/configonly", cachedModels: result.models, promptCacheBytes: 1 << 30,
+                rejectedModels: result.rejected),
+            .unavailable(.modelNotDownloaded(MLXRepoID("a/configonly")!)))
+    }
+
     func test_unsupportedModelTypeIsSkippedUnlessTheSetIsUnknown() throws {
         try repo("models--a--odd", files: modelFiles(type: "whisper_like"))
         XCTAssertTrue(MLXCacheScanner.scan(cacheRoot: root, supportedModelTypes: ["gemma4"]).isEmpty)

@@ -65,6 +65,11 @@ nonisolated enum MLXCacheScanner {
                     modelType: modelType,
                     isInstruct: isInstruct
                 ))
+            case .incompatible(.missingConfig), .incompatible(.missingWeights), .incompatible(.missingTokenizer):
+                // A snapshot with files missing is an interrupted download or another tool's
+                // placeholder: "not downloaded", not "incompatible". Telling the user the model
+                // can't run would hide the real fix, which is to download it.
+                continue
             case .incompatible(let reason):
                 rejected[repoID] = reason
             }

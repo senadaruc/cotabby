@@ -255,10 +255,12 @@ final class MLXModelDownloader: ObservableObject {
             if cachedModels?.contains(where: { $0.repoID == repoID }) == true {
                 download = nil
             } else {
-                let why = rejectedModels[repoID]?.message ?? "The installed mlx-lm cannot run this model type."
+                // No rejection means the snapshot is missing files, i.e. the download is incomplete.
+                let failure = rejectedModels[repoID].map { "Downloaded, but it can't be used. \($0.message)" }
+                    ?? "The download did not complete. Try again."
                 download = MLXDownloadState(
                     repoID: repoID, fraction: 1,
-                    failure: "Downloaded, but it can't be used. \(why)",
+                    failure: failure,
                     isActive: false)
             }
         }
