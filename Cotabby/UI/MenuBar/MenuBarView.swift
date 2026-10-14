@@ -44,10 +44,15 @@ struct MenuBarView: View {
         .frame(width: 340)
         .modifier(MenuBarWindowBackgroundModifier())
         .background(
-            MenuBarPresentationObserver {
-                permissionManager.refresh()
-                runtimeModel.refreshAvailableModels()
-            }
+            MenuBarPresentationObserver(
+                onPresent: {
+                    permissionManager.refresh()
+                    runtimeModel.refreshAvailableModels()
+                    // The real window edge, not `onAppear`: the panel's content can outlive a close.
+                    menuResourceMonitor.start()
+                },
+                onDismiss: { menuResourceMonitor.stop() }
+            )
         )
         .background(
             MenuBarPopoverDismisserBinder(

@@ -17,6 +17,7 @@ final class MenuResourceMonitorTests: XCTestCase {
                 return ResourceUsageSummary(
                     cpuPercent: Double(calls), memoryBytes: 1, gpuPercent: nil, includesMLXServer: mlx)
             },
+            primingDelay: 3600,
             onStop: { stops.count += 1 }
         )
         Self.retained.append(monitor)
@@ -30,9 +31,9 @@ final class MenuResourceMonitorTests: XCTestCase {
         let (monitor, _) = makeMonitor()
         XCTAssertNil(monitor.summary)
         monitor.start()
-        XCTAssertEqual(monitor.summary?.cpuPercent, 1)
+        XCTAssertNil(monitor.summary, "the priming reading seeds baselines and is not published")
         monitor.tick()
-        XCTAssertEqual(monitor.summary?.cpuPercent, 2)
+        XCTAssertEqual(monitor.summary?.cpuPercent, 2, "first published value is the second reading")
         monitor.stop()
     }
 
@@ -48,11 +49,15 @@ final class MenuResourceMonitorTests: XCTestCase {
 
     @MainActor
     func testStartTwiceDoesNotResample() {
-        let (monitor, _) = makeMonitor()
+        let (monitor, stops) = makeMonitor()
         monitor.start()
         monitor.start()
-        XCTAssertEqual(monitor.summary?.cpuPercent, 1)
+        monitor.tick()
+        XCTAssertEqual(monitor.summary?.cpuPercent, 2, "second start() must not take another priming reading")
         monitor.stop()
+        monitor.stop()
+        XCTAssertEqual(stops.count, 1, "stop is idempotent")
+        XCTAssertNil(monitor.summary)
     }
 
     @MainActor
@@ -60,5 +65,15 @@ final class MenuResourceMonitorTests: XCTestCase {
         let (monitor, _) = makeMonitor(mlx: true)
         monitor.tick()
         XCTAssertEqual(monitor.summary?.includesMLXServer, true)
+    }
+}
+
+final class MenuBarWindowSignalTests: XCTestCase {
+    func testSignalsMapToPresentation() {
+        XCTAssertTrue(MenuBarWindowSignal.becameKey.presentation)
+        XCTAssertFalse(MenuBarWindowSignal.resignedKey.presentation)
+        XCTAssertFalse(MenuBarWindowSignal.willClose.presentation)
+        XCTAssertTrue(MenuBarWindowSignal.occlusionChanged(isVisible: true).presentation)
+        XCTAssertFalse(MenuBarWindowSignal.occlusionChanged(isVisible: false).presentation)
     }
 }

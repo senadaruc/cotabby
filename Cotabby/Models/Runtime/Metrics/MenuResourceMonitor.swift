@@ -15,13 +15,17 @@ final class MenuResourceMonitor: ObservableObject {
     private let interval: TimeInterval
     private let sample: () -> ResourceUsageSummary
     private let onStop: () -> Void
+    private let primingDelay: TimeInterval
     private var timer: Timer?
+    private var isActive = false
 
     init(
         interval: TimeInterval = MenuResourceMonitor.defaultInterval,
         sample: @escaping () -> ResourceUsageSummary,
+        primingDelay: TimeInterval = 0.3,
         onStop: @escaping () -> Void = {}
     ) {
+        self.primingDelay = primingDelay
         self.interval = interval
         self.sample = sample
         self.onStop = onStop
@@ -32,10 +36,27 @@ final class MenuResourceMonitor: ObservableObject {
         // holds `self` weakly and invalidates itself on its first tick after we are gone.
     }
 
-    /// Takes a reading now (so the popover is not empty for a full interval) and starts the timer.
+    /// Seeds the CPU/GPU baselines with an unpublished reading, then publishes the first real one
+    /// after `primingDelay` and every `interval` after that. Publishing the priming reading itself
+    /// would show RAM (and "incl. MLX") without CPU or GPU deltas, which need two readings.
+    /// Idempotent: a second call while active does nothing.
     func start() {
-        guard timer == nil else { return }
-        tick()
+        guard !isActive else { return }
+        isActive = true
+        _ = sample()
+        let first = Timer(timeInterval: primingDelay, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            MainActor.assumeIsolated {
+                guard self.isActive else { return }
+                self.tick()
+                self.startRepeating()
+            }
+        }
+        RunLoop.main.add(first, forMode: .common)
+        timer = first
+    }
+
+    private func startRepeating() {
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] fired in
             guard let self else {
                 fired.invalidate()
@@ -47,9 +68,13 @@ final class MenuResourceMonitor: ObservableObject {
         self.timer = timer
     }
 
+    /// Idempotent: only the first call after `start()` clears state and notifies.
     func stop() {
+        guard isActive else { return }
+        isActive = false
         timer?.invalidate()
         timer = nil
+        summary = nil
         onStop()
     }
 
@@ -58,5 +83,5 @@ final class MenuResourceMonitor: ObservableObject {
         summary = sample()
     }
 
-    var isRunning: Bool { timer != nil }
+    var isRunning: Bool { isActive }
 }

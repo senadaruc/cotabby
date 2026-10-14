@@ -8,15 +8,37 @@ import SwiftUI
 /// instead and calls `onPresent` whenever the panel becomes key or visible again.
 struct MenuBarPresentationObserver: NSViewRepresentable {
     let onPresent: () -> Void
+    /// Called when the panel is dismissed (resigned key, closed or fully occluded).
+    var onDismiss: () -> Void = {}
 
     func makeNSView(context: Context) -> MenuBarPresentationTrackingView {
         let view = MenuBarPresentationTrackingView()
         view.onPresent = onPresent
+        view.onDismiss = onDismiss
         return view
     }
 
     func updateNSView(_ nsView: MenuBarPresentationTrackingView, context: Context) {
         nsView.onPresent = onPresent
+        nsView.onDismiss = onDismiss
+    }
+}
+
+/// Pure mapping from a window notification to "the panel is now shown / hidden / no change", so the
+/// start/stop decision is testable without an `NSWindow`.
+enum MenuBarWindowSignal: Equatable {
+    case becameKey
+    case resignedKey
+    case willClose
+    case occlusionChanged(isVisible: Bool)
+
+    /// `true` = presented, `false` = dismissed.
+    var presentation: Bool {
+        switch self {
+        case .becameKey: return true
+        case .resignedKey, .willClose: return false
+        case .occlusionChanged(let isVisible): return isVisible
+        }
     }
 }
 
@@ -27,6 +49,7 @@ struct MenuBarPresentationObserver: NSViewRepresentable {
 /// the menu should force one immediate permission read.
 final class MenuBarPresentationTrackingView: NSView {
     var onPresent: (() -> Void)?
+    var onDismiss: (() -> Void)?
 
     private weak var observedWindow: NSWindow?
     private var observers: [NSObjectProtocol] = []
@@ -75,7 +98,27 @@ final class MenuBarPresentationTrackingView: NSView {
                 object: window,
                 queue: .main
             ) { [weak self] _ in
-                self?.refreshIfVisible()
+                guard let self, let window = self.observedWindow else { return }
+                // Existing behavior: re-present when visible; additionally report the hide edge.
+                if window.occlusionState.contains(.visible) {
+                    self.refreshIfVisible()
+                } else if MenuBarWindowSignal.occlusionChanged(isVisible: false).presentation == false {
+                    self.onDismiss?()
+                }
+            },
+            center.addObserver(
+                forName: NSWindow.didResignKeyNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                if MenuBarWindowSignal.resignedKey.presentation == false { self?.onDismiss?() }
+            },
+            center.addObserver(
+                forName: NSWindow.willCloseNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                if MenuBarWindowSignal.willClose.presentation == false { self?.onDismiss?() }
             }
         ]
     }
