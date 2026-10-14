@@ -55,6 +55,7 @@ final class MLXLiveEvalTests: XCTestCase {
             print("MLX: \(prefix)|\(result.rawText)|")
         }
         print("MLX latencies ms: \(latencies)")
+        XCTAssertLessThan(latencies[0], 3000, "first suggestion after readiness should not pay the cold-start cost")
         XCTAssertGreaterThan(partials, 0, "the stream reported no partials")
 
         await manager.apply(.stopped)

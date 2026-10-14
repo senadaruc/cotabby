@@ -550,16 +550,71 @@ nonisolated struct MLXHTTPReadinessProbe: MLXReadinessProbing {
             try await Task.sleep(for: .milliseconds(250))
         }
 
+        // Two streamed warm-ups instead of one tiny blocking request. MLX builds its Metal kernels
+        // lazily, per tensor shape and per op, and the stop-word state machine is keyed to the
+        // request shape. A "Hello" with `stream: false` warms a different path than the first real
+        // suggestion (streamed, several hundred prompt tokens, `stop` set), so the first user-visible
+        // completion still paid that cost. The first pass uses the real sampling settings with the
+        // newline stop word; the second drops `stop` to cover the multi-line path.
+        try await warmUp(session: session, base: base, modelID: modelID, stop: ["\n"], deadline: deadline)
+        try await warmUp(session: session, base: base, modelID: modelID, stop: nil, deadline: deadline)
+    }
+
+    /// A fixed, realistic draft in the shape Cotabby sends: a conditioning preface line, a blank
+    /// line, then prose that ends mid-sentence. Its length (about 1,900 characters) is what makes
+    /// the warm-up prefill match a real request.
+    private static let warmUpPrompt = """
+    Format: email; Title: Project status and next steps
+
+    Hi Dana,
+
+    Thanks for sending the revised timeline on Monday. I went through it line by line with the team this morning, and most of the dates hold up well against what we are seeing in the build pipeline. The integration work for the storage layer finished ahead of schedule, which gives us a little room at the end of the month for the reviewer feedback that we always seem to collect late. I still have concerns about the migration step, though. The current plan assumes that every customer account can be moved in a single window on the weekend, but the account export we ran last Thursday took almost twice as long as we estimated, and it only covered about a third of the records. If the remaining records scale the same way, the window will not be long enough, and we would have to split the work across two weekends. That is not a disaster, but it changes who needs to be on call and how we communicate the maintenance notice to customers, so I would like to settle it before we commit to the calendar invitations. Ibrahim has offered to rerun the export with the new indexes enabled, and I think his numbers will tell us quickly whether the single window is realistic. In the meantime, I would suggest we keep the draft schedule as it is, mark the migration as a risk in the tracker, and avoid sending anything to the customer success team until we have the new figures. I know this is not the answer you were hoping for on a Monday morning, and I appreciate that you have been patient while we worked through the details. If it helps, I can join a short call tomorrow to walk through the export log together and agree on the fallback plan before the end of the week, so that everyone leaves the meeting with the same picture of what happens next and who owns each
+    """
+
+    /// Sends one streamed completion shaped like a real suggestion and reads it to `[DONE]` or the
+    /// end of the stream. The sampling values are the ones `SuggestionConfiguration.standard` sends,
+    /// so the server takes the same sampler path. The request timeout is whatever remains of the
+    /// readiness deadline, so a slow warm-up cannot outlive the readiness budget.
+    private func warmUp(
+        session: URLSession,
+        base: URL,
+        modelID: String,
+        stop: [String]?,
+        deadline: ContinuousClock.Instant
+    ) async throws {
+        var body: [String: Any] = [
+            "model": modelID,
+            "prompt": Self.warmUpPrompt,
+            "max_tokens": 8,
+            "stream": true,
+            "temperature": 0.1,
+            "top_p": 0.7,
+            "top_k": 20,
+            "min_p": 0.08,
+            "repetition_penalty": 1.025
+        ]
+        if let stop { body["stop"] = stop }
+
         var request = URLRequest(url: base.appendingPathComponent("completions"))
-        request.timeoutInterval = max(5, Double((deadline - ContinuousClock.now).components.seconds))
+        request.timeoutInterval = Self.remainingSeconds(until: deadline)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "model": modelID, "prompt": "Hello", "max_tokens": 2, "stream": false
-        ])
-        let (_, response) = try await session.data(for: request)
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (bytes, response) = try await session.bytes(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 200 else { throw MLXServerError.warmUpFailed(statusCode: status) }
+        // The server finishes generation only once the client has read the stream, so drain it.
+        for try await line in bytes.lines {
+            if line == "data: [DONE]" { break }
+        }
+    }
+
+    /// Seconds left until `deadline`, floored at one second so a request is never sent with a zero
+    /// timeout, which URLSession would treat as "no timeout" in some configurations.
+    private static func remainingSeconds(until deadline: ContinuousClock.Instant) -> TimeInterval {
+        let remaining = deadline - ContinuousClock.now
+        let seconds = Double(remaining.components.seconds) + Double(remaining.components.attoseconds) / 1e18
+        return max(1, seconds)
     }
 }
 
