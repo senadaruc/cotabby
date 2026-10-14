@@ -10,22 +10,31 @@ import Foundation
 final class RewriteEngine {
     private let local: RewriteProviding
     private let api: RewriteProviding
+    private let mlx: RewriteProviding
     private let preferences: @MainActor () -> RewritePreferences
 
-    init(local: RewriteProviding, api: RewriteProviding, preferences: @escaping @MainActor () -> RewritePreferences) {
+    init(local: RewriteProviding, api: RewriteProviding, mlx: RewriteProviding, preferences: @escaping @MainActor () -> RewritePreferences) {
         self.local = local
         self.api = api
+        self.mlx = mlx
         self.preferences = preferences
     }
 
     nonisolated deinit {}
 
-    var activeProvider: RewriteProviding { preferences().provider == .api ? api : local }
+    var activeProvider: RewriteProviding {
+        switch preferences().provider {
+        case .local: return local
+        case .api: return api
+        case .mlx: return mlx
+        }
+    }
 
     /// Whether memory may be part of a rewrite with the current provider.
     var memoryAllowed: Bool {
         let prefs = preferences()
-        return prefs.provider == .local || prefs.sendsMemoryToAPI
+        // MLX runs on this Mac like the other local models, so memory never leaves it.
+        return prefs.provider != .api || prefs.sendsMemoryToAPI
     }
 
     func rewrite(_ request: RewriteRequest, onPartial: @escaping @MainActor (String) -> Void) async throws -> String {

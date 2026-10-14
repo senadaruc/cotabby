@@ -26,11 +26,28 @@ final class RewriteEngineTests: XCTestCase {
                                               styleExamples: ["Best regards, Senad"])
 
     private func make(_ prefs: RewritePreferences) -> (RewriteEngine, StubProvider, StubProvider) {
+        let (engine, local, api, _) = makeWithMLX(prefs)
+        return (engine, local, api)
+    }
+
+    private func makeWithMLX(_ prefs: RewritePreferences) -> (RewriteEngine, StubProvider, StubProvider, StubProvider) {
         let local = StubProvider(offDevice: false)
         let api = StubProvider(offDevice: true)
-        let engine = RewriteEngine(local: local, api: api, preferences: { prefs })
-        Self.retained.append(contentsOf: [engine, local, api] as [AnyObject])
-        return (engine, local, api)
+        let mlx = StubProvider(offDevice: false)
+        let engine = RewriteEngine(local: local, api: api, mlx: mlx, preferences: { prefs })
+        Self.retained.append(contentsOf: [engine, local, api, mlx] as [AnyObject])
+        return (engine, local, api, mlx)
+    }
+
+    func test_mlxProviderIsChosenAndKeepsMemory() async throws {
+        var prefs = RewritePreferences.defaults
+        prefs.provider = .mlx
+        let (engine, local, api, mlx) = makeWithMLX(prefs)
+        XCTAssertTrue(engine.memoryAllowed)
+        _ = try await engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: memory), onPartial: { _ in })
+        XCTAssertEqual(mlx.received.first?.memory, memory)
+        XCTAssertTrue(local.received.isEmpty)
+        XCTAssertTrue(api.received.isEmpty)
     }
 
     func test_usesTheChosenProvider() async throws {
