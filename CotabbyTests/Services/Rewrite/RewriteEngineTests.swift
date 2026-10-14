@@ -26,28 +26,44 @@ final class RewriteEngineTests: XCTestCase {
     private let memory = RewriteMemoryContext(facts: [.init(text: "Dinner on the 28th", source: "whatsapp", sender: "Richard")],
                                               styleExamples: ["Best regards, Senad"])
 
-    private func make(_ prefs: RewritePreferences) -> (RewriteEngine, StubProvider, StubProvider) {
-        let (engine, local, api, _) = makeWithMLX(prefs)
-        return (engine, local, api)
+    /// Every provider slot, as stubs: Apple Intelligence and Open Source and MLX stay on this Mac,
+    /// the Local Endpoint stub is on loopback unless a test flips it, the API stub is off device.
+    private struct Rig {
+        let engine: RewriteEngine
+        let apple: StubProvider
+        let openSource: StubProvider
+        let endpoint: StubProvider
+        let mlx: StubProvider
+        let api: StubProvider
     }
 
-    private func makeWithMLX(_ prefs: RewritePreferences) -> (RewriteEngine, StubProvider, StubProvider, StubProvider) {
-        let local = StubProvider(offDevice: false)
-        let api = StubProvider(offDevice: true)
+    private func makeRig(_ prefs: RewritePreferences, autocomplete: SuggestionEngineKind = .llamaOpenSource) -> Rig {
+        let apple = StubProvider(offDevice: false)
+        let openSource = StubProvider(offDevice: false)
+        let endpoint = StubProvider(offDevice: false)
         let mlx = StubProvider(offDevice: false)
-        let engine = RewriteEngine(local: local, api: api, mlx: mlx, preferences: { prefs })
-        Self.retained.append(contentsOf: [engine, local, api, mlx] as [AnyObject])
-        return (engine, local, api, mlx)
+        let api = StubProvider(offDevice: true)
+        let engine = RewriteEngine(
+            appleIntelligence: apple, openSource: openSource, localEndpoint: endpoint, mlx: mlx, api: api,
+            autocompleteEngine: { autocomplete }, preferences: { prefs })
+        Self.retained.append(contentsOf: [engine, apple, openSource, endpoint, mlx, api] as [AnyObject])
+        return Rig(engine: engine, apple: apple, openSource: openSource, endpoint: endpoint, mlx: mlx, api: api)
+    }
+
+    /// The old three-slot shape: `local` is the Open Source stub (the default resolves to it).
+    private func make(_ prefs: RewritePreferences) -> (RewriteEngine, StubProvider, StubProvider) {
+        let rig = makeRig(prefs)
+        return (rig.engine, rig.openSource, rig.api)
     }
 
     func test_unavailableMLXThrowsItsOwnReason() async {
         var prefs = RewritePreferences.defaults
         prefs.provider = .mlx
-        let (engine, _, _, mlx) = makeWithMLX(prefs)
-        mlx.isAvailable = false
-        mlx.unavailableReason = "Install MLX in Settings → Engine & Model."
+        let rig = makeRig(prefs)
+        rig.mlx.isAvailable = false
+        rig.mlx.unavailableReason = "Install MLX in Settings → Engine & Model."
         do {
-            _ = try await engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: .empty), onPartial: { _ in })
+            _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: .empty), onPartial: { _ in })
             XCTFail("expected an error")
         } catch {
             XCTAssertEqual(error as? RewriteError, .mlxUnavailable("Install MLX in Settings → Engine & Model."))
@@ -57,12 +73,86 @@ final class RewriteEngineTests: XCTestCase {
     func test_mlxProviderIsChosenAndKeepsMemory() async throws {
         var prefs = RewritePreferences.defaults
         prefs.provider = .mlx
-        let (engine, local, api, mlx) = makeWithMLX(prefs)
-        XCTAssertTrue(engine.memoryAllowed)
-        _ = try await engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: memory), onPartial: { _ in })
-        XCTAssertEqual(mlx.received.first?.memory, memory)
-        XCTAssertTrue(local.received.isEmpty)
-        XCTAssertTrue(api.received.isEmpty)
+        let rig = makeRig(prefs)
+        XCTAssertTrue(rig.engine.memoryAllowed)
+        _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: memory), onPartial: { _ in })
+        XCTAssertEqual(rig.mlx.received.first?.memory, memory)
+        XCTAssertTrue(rig.openSource.received.isEmpty)
+        XCTAssertTrue(rig.api.received.isEmpty)
+    }
+
+    func test_sameAsAutocompleteRunsOnTheProviderOfTheAutocompleteEngine() async throws {
+        let request = RewriteRequest(selection: draft, action: .fixOnly, memory: .empty)
+        for (engineKind, pick) in [
+            (SuggestionEngineKind.appleIntelligence, \Rig.apple), (.llamaOpenSource, \Rig.openSource),
+            (.openAICompatible, \Rig.endpoint), (.mlx, \Rig.mlx)
+        ] {
+            let rig = makeRig(RewritePreferences.defaults, autocomplete: engineKind)
+            _ = try await rig.engine.rewrite(request, onPartial: { _ in })
+            XCTAssertEqual(rig[keyPath: pick].received.count, 1, "\(engineKind)")
+            XCTAssertTrue(rig.api.received.isEmpty)
+        }
+    }
+
+    func test_anExplicitChoiceBeatsTheAutocompleteEngine() async throws {
+        var prefs = RewritePreferences.defaults
+        prefs.provider = .appleIntelligence
+        let rig = makeRig(prefs, autocomplete: .mlx)
+        _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .fixOnly, memory: .empty), onPartial: { _ in })
+        XCTAssertEqual(rig.apple.received.count, 1)
+        XCTAssertTrue(rig.mlx.received.isEmpty)
+    }
+
+    // MARK: - Memory policy on the resolved provider
+
+    func test_memoryIsAllowedOnTheThreeLocalProviders() {
+        for kind in [RewriteProviderKind.appleIntelligence, .openSource, .mlx] {
+            var prefs = RewritePreferences.defaults
+            prefs.provider = kind
+            prefs.sendsMemoryToAPI = false
+            XCTAssertTrue(makeRig(prefs).engine.memoryAllowed, "\(kind)")
+        }
+    }
+
+    func test_localEndpointOnLoopbackAllowsMemory() async throws {
+        var prefs = RewritePreferences.defaults
+        prefs.provider = .localEndpoint
+        prefs.sendsMemoryToAPI = false
+        let rig = makeRig(prefs)
+        rig.endpoint.sendsOffDevice = false
+        XCTAssertTrue(rig.engine.memoryAllowed)
+        _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: memory), onPartial: { _ in })
+        XCTAssertEqual(rig.endpoint.received.first?.memory, memory)
+    }
+
+    func test_localEndpointOnTheLANFollowsTheMemoryToggle() async throws {
+        var prefs = RewritePreferences.defaults
+        prefs.provider = .localEndpoint
+        prefs.sendsMemoryToAPI = false
+        let rig = makeRig(prefs)
+        rig.endpoint.sendsOffDevice = true
+        XCTAssertFalse(rig.engine.memoryAllowed)
+        _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: memory), onPartial: { _ in })
+        XCTAssertEqual(rig.endpoint.received.first?.memory, RewriteMemoryContext.empty, "the engine strips it")
+
+        prefs.sendsMemoryToAPI = true
+        let allowed = makeRig(prefs)
+        allowed.endpoint.sendsOffDevice = true
+        XCTAssertTrue(allowed.engine.memoryAllowed)
+    }
+
+    func test_sameAsAutocompleteOnALANEndpointStripsMemory() async throws {
+        let rig = makeRig(RewritePreferences.defaults, autocomplete: .openAICompatible)
+        rig.endpoint.sendsOffDevice = true
+        XCTAssertFalse(rig.engine.memoryAllowed)
+        _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: memory), onPartial: { _ in })
+        XCTAssertEqual(rig.endpoint.received.first?.memory, RewriteMemoryContext.empty)
+    }
+
+    func test_activeProviderFollowsTheResolvedKind() {
+        let rig = makeRig(RewritePreferences.defaults, autocomplete: .mlx)
+        XCTAssertTrue(rig.engine.activeProvider === rig.mlx)
+        XCTAssertEqual(rig.engine.resolvedKind, .mlx)
     }
 
     func test_usesTheChosenProvider() async throws {

@@ -2,39 +2,73 @@ import Foundation
 
 /// File overview:
 /// Runs one rewrite on the provider the user chose in Settings → Rewrite, and returns text ready to
-/// replace the selection (`RewriteOutputCleaner`). It is also the last guard for memory: when the
-/// provider is the API and the user has not allowed sending memory there, the request's memory is
-/// dropped here, whatever the popup asked for, so a UI bug can never leak facts off the Mac.
-/// Built by `CotabbyAppEnvironment`, used by `SelectionRewriteCoordinator`.
+/// replace the selection (`RewriteOutputCleaner`). "Same as autocomplete" is resolved here against
+/// the current autocomplete engine (`RewriteProviderResolver`), so every decision below (which
+/// provider, whether memory may be used) is made on the concrete provider that will run.
+///
+/// It is also the last guard for memory: when the resolved provider sends text off this Mac (the
+/// API, or a Local Endpoint on a LAN or public host) and the user has not allowed sending memory
+/// there, the request's memory is dropped here, whatever the popup asked for, so a UI bug can never
+/// leak facts off the Mac. Apple Intelligence, Open Source and MLX never leave the Mac.
+/// Built by `CotabbyAppEnvironment`, used by `SelectionRewriteCoordinator` and the Rewrite pane.
 @MainActor
 final class RewriteEngine {
-    private let local: RewriteProviding
-    private let api: RewriteProviding
+    private let appleIntelligence: RewriteProviding
+    private let openSource: RewriteProviding
+    private let localEndpoint: RewriteProviding
     private let mlx: RewriteProviding
+    private let api: RewriteProviding
+    private let autocompleteEngine: @MainActor () -> SuggestionEngineKind
     private let preferences: @MainActor () -> RewritePreferences
 
-    init(local: RewriteProviding, api: RewriteProviding, mlx: RewriteProviding, preferences: @escaping @MainActor () -> RewritePreferences) {
-        self.local = local
-        self.api = api
+    init(
+        appleIntelligence: RewriteProviding,
+        openSource: RewriteProviding,
+        localEndpoint: RewriteProviding,
+        mlx: RewriteProviding,
+        api: RewriteProviding,
+        autocompleteEngine: @escaping @MainActor () -> SuggestionEngineKind,
+        preferences: @escaping @MainActor () -> RewritePreferences
+    ) {
+        self.appleIntelligence = appleIntelligence
+        self.openSource = openSource
+        self.localEndpoint = localEndpoint
         self.mlx = mlx
+        self.api = api
+        self.autocompleteEngine = autocompleteEngine
         self.preferences = preferences
     }
 
     nonisolated deinit {}
 
-    var activeProvider: RewriteProviding {
-        switch preferences().provider {
-        case .local: return local
-        case .api: return api
+    /// The concrete provider kind the current choice runs on; never `sameAsAutocomplete`.
+    var resolvedKind: RewriteProviderKind {
+        RewriteProviderResolver.resolve(preferences().provider, autocompleteEngine: autocompleteEngine())
+    }
+
+    /// The provider for a concrete kind (`sameAsAutocomplete` is resolved first). The Settings pane
+    /// asks it for availability and the reason a row is disabled.
+    func provider(for kind: RewriteProviderKind) -> RewriteProviding {
+        switch RewriteProviderResolver.resolve(kind, autocompleteEngine: autocompleteEngine()) {
+        case .appleIntelligence: return appleIntelligence
+        case .openSource: return openSource
+        case .localEndpoint: return localEndpoint
         case .mlx: return mlx
+        case .api: return api
+        case .sameAsAutocomplete: return openSource // unreachable: the resolver never returns it
         }
     }
 
-    /// Whether memory may be part of a rewrite with the current provider.
+    var activeProvider: RewriteProviding { provider(for: resolvedKind) }
+
+    /// Whether memory may be part of a rewrite with the current provider: always for the providers
+    /// on this Mac, and for the API or an off-device endpoint only when the user allowed it.
     var memoryAllowed: Bool {
-        let prefs = preferences()
-        // MLX runs on this Mac like the other local models, so memory never leaves it.
-        return prefs.provider != .api || prefs.sendsMemoryToAPI
+        switch resolvedKind {
+        case .appleIntelligence, .openSource, .mlx: return true
+        case .localEndpoint: return !localEndpoint.sendsOffDevice || preferences().sendsMemoryToAPI
+        case .api, .sameAsAutocomplete: return preferences().sendsMemoryToAPI
+        }
     }
 
     func rewrite(_ request: RewriteRequest, onPartial: @escaping @MainActor (String) -> Void) async throws -> String {

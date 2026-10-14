@@ -2,8 +2,9 @@ import Foundation
 
 /// File overview:
 /// The models a rewrite can run on, behind one narrow protocol so `RewriteEngine` chooses between
-/// them without knowing how each talks to its model. `APIRewriteProvider` lives here;
-/// `LocalRewriteProvider` is in `LocalRewriteProvider.swift`.
+/// them without knowing how each talks to its model. `APIRewriteProvider` lives here; the Apple
+/// Intelligence and Open Source providers are in `LocalRewriteProvider.swift`, the Local Endpoint
+/// one in `LocalEndpointRewriteProvider.swift`, MLX in `MLXRewriteProvider.swift`.
 @MainActor
 protocol RewriteProviding: AnyObject {
     /// Whether this provider can run a rewrite right now (a model is configured and reachable in
@@ -13,12 +14,15 @@ protocol RewriteProviding: AnyObject {
     var sendsOffDevice: Bool { get }
     /// Why `isAvailable` is false, in words for the popup; nil when the provider has no specific reason.
     var unavailableReason: String? { get }
+    /// The remote host the text goes to, for the popup's disclosure; nil for providers on this Mac.
+    var hostName: String? { get }
     /// Runs the rewrite. `onPartial` receives the cumulative raw text while it streams.
     func rewrite(_ request: RewriteRequest, onPartial: @escaping @MainActor (String) -> Void) async throws -> String
 }
 
 extension RewriteProviding {
     var unavailableReason: String? { nil }
+    var hostName: String? { nil }
 }
 
 /// Rewrites through the user's cloud service: Claude through Anthropic's Messages API

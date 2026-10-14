@@ -524,7 +524,7 @@ extension RewriteMemoryGatherer: SelectionRewriteMemoryGathering {}
 
 extension RewriteEngine: SelectionRewriteRunning {
     var activeProviderSendsOffDevice: Bool { activeProvider.sendsOffDevice }
-    var activeHostName: String? { (activeProvider as? APIRewriteProvider)?.hostName }
+    var activeHostName: String? { activeProvider.hostName }
 }
 
 /// Writes a rewrite into the host: pastes over the live selection (paste, not keystrokes, because a

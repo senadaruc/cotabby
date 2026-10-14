@@ -15,18 +15,29 @@ final class MLXRewriteProviderTests: XCTestCase {
         super.tearDown()
     }
 
+    private let baseModel = "mlx-community/gemma-4-e4b-5bit"
+
     private struct Rig {
         let provider: MLXRewriteProvider
         let controller: MLXRewriteServerController
         let launcher: MLXFakeLauncher
         let probe: MLXFakeProbe
+        /// Autocomplete's own server, which the provider may reuse.
+        let shared: MLXServerManager
+        let sharedLauncher: MLXFakeLauncher
+        let sharedProbe: MLXFakeProbe
     }
 
+    /// `autocomplete` is the engine autocomplete is on; `modelID` is autocomplete's MLX model, the
+    /// one a rewrite uses (there is no rewrite-only model).
     private func makeRig(
         toolchain: MLXToolchainState? = nil, cached: Bool = true,
         health: MLXServerHealth = .generatorDead,
-        healthCheck: MLXHealthCheck? = nil
+        healthCheck: MLXHealthCheck? = nil,
+        autocomplete: SuggestionEngineKind = .llamaOpenSource,
+        modelID: String? = nil
     ) -> Rig {
+        let model = modelID ?? self.model
         let launcher = MLXFakeLauncher()
         let probe = MLXFakeProbe()
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("mlx-rp-\(UUID().uuidString)")
@@ -34,6 +45,11 @@ final class MLXRewriteProviderTests: XCTestCase {
             paths: MLXPaths(root: root), launcher: launcher, probe: probe, pickPort: { 50300 },
             sleep: { _ in await Task.yield() }, baseEnvironment: [:], verifyListener: { _, _ in true },
             pidFileURL: MLXPaths(root: root).rewriteServerPIDFile)
+        let sharedLauncher = MLXFakeLauncher()
+        let sharedProbe = MLXFakeProbe()
+        let shared = MLXServerManager(
+            paths: MLXPaths(root: root), launcher: sharedLauncher, probe: sharedProbe, pickPort: { 50400 },
+            sleep: { _ in await Task.yield() }, baseEnvironment: [:], verifyListener: { _, _ in true })
         let ready = MLXToolchainState.ready(MLXToolchain(
             serverExecutable: URL(fileURLWithPath: "/mlx/bin/mlx_lm.server"),
             pythonExecutable: URL(fileURLWithPath: "/mlx/bin/python"), version: "0.32.0", isCotabbyInstall: true))
@@ -48,11 +64,127 @@ final class MLXRewriteProviderTests: XCTestCase {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [MLXRewriteStubURLProtocol.self]
         let client = OpenAICompatibleAPIClient(session: URLSession(configuration: configuration))
-        var prefs = RewritePreferences.defaults
-        prefs.provider = .mlx
-        let provider = MLXRewriteProvider(controller: controller, client: client, preferences: { prefs }, healthCheck: healthCheck ?? { _ in health })
-        Self.retained.append(contentsOf: [launcher, probe, manager, controller, client, provider] as [AnyObject])
-        return Rig(provider: provider, controller: controller, launcher: launcher, probe: probe)
+        let provider = MLXRewriteProvider(
+            controller: controller, autocompleteServer: shared, autocompleteEngine: { autocomplete },
+            modelID: { model }, client: client, healthCheck: healthCheck ?? { _ in health })
+        Self.retained.append(contentsOf: [launcher, probe, manager, controller, client, provider, shared, sharedLauncher, sharedProbe] as [AnyObject])
+        return Rig(provider: provider, controller: controller, launcher: launcher, probe: probe,
+                   shared: shared, sharedLauncher: sharedLauncher, sharedProbe: sharedProbe)
+    }
+
+    /// Brings autocomplete's server to `.ready` on port 50400 with `modelID`.
+    private func readyAutocompleteServer(_ rig: Rig, modelID: String) async {
+        let launch = MLXServerLaunch(
+            executable: URL(fileURLWithPath: "/mlx/bin/mlx_lm.server"), modelID: modelID, promptCacheBytes: 1 << 30)
+        Task { await rig.shared.apply(.running(launch)) }
+        await waitUntil { rig.sharedProbe.waiting >= 1 }
+        rig.sharedProbe.succeedNext()
+        await waitUntil { if case .ready = rig.shared.state { return true } else { return false } }
+    }
+
+    private static let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"Fixed text.\"},\"text\":\"Fixed text.\"}]}\n\ndata: [DONE]\n\n"
+
+    private func okHandler(_ check: ((URLRequest) -> Void)? = nil) {
+        MLXRewriteStubURLProtocol.handler = { request in
+            check?(request)
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                                           headerFields: ["Content-Type": "text/event-stream"])!
+            return (response, Data(Self.sse.utf8))
+        }
+    }
+
+    // MARK: - Which server and which prompt shape
+
+    func test_baseModelOnTheOnDemandServerUsesTheCompletionsRouteAndBasePrompt() async throws {
+        let rig = makeRig(modelID: baseModel)
+        let request = RewriteRequest(selection: "fixd text", action: .fixOnly, memory: .empty)
+        okHandler { httpRequest in
+            let body = (try? JSONSerialization.jsonObject(with: Self.bodyData(httpRequest)) as? [String: Any]) ?? [:]
+            XCTAssertEqual(body["prompt"] as? String, RewritePromptBuilder.basePrompt(request))
+            XCTAssertEqual(body["stop"] as? [String], RewritePromptBuilder.baseStopSequences)
+            XCTAssertEqual(body["max_tokens"] as? Int, RewritePromptBuilder.completionTokenBudget(selection: "fixd text"))
+            XCTAssertNil(body["messages"])
+        }
+        async let result = rig.provider.rewrite(request, onPartial: { _ in })
+        await waitUntil { rig.probe.waiting >= 1 }
+        rig.probe.succeedNext()
+        let text = try await result
+        XCTAssertEqual(text, "Fixed text.")
+        XCTAssertEqual(MLXRewriteStubURLProtocol.requested, ["http://127.0.0.1:50300/v1/completions"])
+    }
+
+    func test_aReadyAutocompleteServerIsReusedWithoutStartingASecondOne() async throws {
+        let rig = makeRig(autocomplete: .mlx)
+        await readyAutocompleteServer(rig, modelID: model)
+        okHandler()
+        var partials: [String] = []
+        let text = try await rig.provider.rewrite(
+            RewriteRequest(selection: "fixd text", action: .fixOnly, memory: .empty), onPartial: { partials.append($0) })
+        XCTAssertEqual(text, "Fixed text.")
+        XCTAssertEqual(MLXRewriteStubURLProtocol.requested, ["http://127.0.0.1:50400/v1/chat/completions"])
+        XCTAssertTrue(rig.launcher.launches.isEmpty, "no second server")
+        XCTAssertNotEqual(partials.first, MLXRewriteProvider.loadingNote, "the shared server is already loaded")
+    }
+
+    func test_aReadyBaseAutocompleteServerGetsTheBasePromptOnItsPort() async throws {
+        let rig = makeRig(autocomplete: .mlx, modelID: baseModel)
+        await readyAutocompleteServer(rig, modelID: baseModel)
+        okHandler()
+        _ = try await rig.provider.rewrite(
+            RewriteRequest(selection: "fixd text", action: .fixOnly, memory: .empty), onPartial: { _ in })
+        XCTAssertEqual(MLXRewriteStubURLProtocol.requested, ["http://127.0.0.1:50400/v1/completions"])
+        XCTAssertTrue(rig.launcher.launches.isEmpty)
+    }
+
+    func test_autocompleteOnMLXButNotReadyStartsTheOnDemandServerOnTheSameModel() async throws {
+        let rig = makeRig(autocomplete: .mlx)
+        okHandler()
+        async let result = rig.provider.rewrite(
+            RewriteRequest(selection: "fixd", action: .fixOnly, memory: .empty), onPartial: { _ in })
+        await waitUntil { rig.probe.waiting >= 1 }
+        rig.probe.succeedNext()
+        _ = try await result
+        XCTAssertEqual(MLXRewriteStubURLProtocol.requested, ["http://127.0.0.1:50300/v1/chat/completions"])
+        XCTAssertEqual(rig.launcher.launches.count, 1)
+        XCTAssertTrue(rig.sharedLauncher.launches.isEmpty)
+    }
+
+    func test_aReadyAutocompleteServerIsNotUsedWhenAutocompleteIsOnAnotherEngine() async throws {
+        let rig = makeRig(autocomplete: .llamaOpenSource)
+        await readyAutocompleteServer(rig, modelID: model)
+        okHandler()
+        async let result = rig.provider.rewrite(
+            RewriteRequest(selection: "fixd", action: .fixOnly, memory: .empty), onPartial: { _ in })
+        await waitUntil { rig.probe.waiting >= 1 }
+        rig.probe.succeedNext()
+        _ = try await result
+        XCTAssertEqual(MLXRewriteStubURLProtocol.requested, ["http://127.0.0.1:50300/v1/chat/completions"])
+    }
+
+    func test_availabilityHoldsWhenTheSharedServerIsReadyEvenIfTheOnDemandOneCannotRun() async {
+        let rig = makeRig(toolchain: .notInstalled, autocomplete: .mlx)
+        XCTAssertFalse(rig.provider.isAvailable)
+        await readyAutocompleteServer(rig, modelID: model)
+        XCTAssertTrue(rig.provider.isAvailable)
+        XCTAssertNil(rig.provider.unavailableReason)
+    }
+
+    func test_a404OnTheSharedServerReportsThatServerBroken() async {
+        let rig = makeRig(health: .generatorDead, autocomplete: .mlx)
+        await readyAutocompleteServer(rig, modelID: model)
+        MLXRewriteStubURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!, Data())
+        }
+        do {
+            _ = try await rig.provider.rewrite(
+                RewriteRequest(selection: "fixd", action: .fixOnly, memory: .empty), onPartial: { _ in })
+            XCTFail("expected an error")
+        } catch {
+            XCTAssertEqual(error as? RewriteError, .mlxUnavailable("MLX is restarting…"))
+        }
+        await waitUntil { rig.sharedLauncher.launches.count == 2 }
+        XCTAssertEqual(rig.sharedLauncher.launches[0].process.terminateCount, 1)
+        XCTAssertTrue(rig.launcher.launches.isEmpty)
     }
 
     func test_availabilityFollowsToolchainAndCache() {
