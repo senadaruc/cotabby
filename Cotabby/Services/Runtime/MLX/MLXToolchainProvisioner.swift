@@ -18,7 +18,10 @@ final class MLXToolchainProvisioner: ObservableObject {
     private let fileManager: FileManager
     private let probeVersion: VersionProbe
     private let installer: MLXToolchainInstalling
-    private var installTask: Task<Void, Never>?
+    /// The install that currently holds the single-flight slot, tagged with an identity. A finishing
+    /// task clears the slot and publishes its state only while it is still this one, so a task that
+    /// was superseded (cancelled by `remove()`) cannot overwrite a newer install's state.
+    private var activeInstall: (id: UUID, task: Task<Void, Never>)?
 
     init(
         paths: MLXPaths,
@@ -53,10 +56,10 @@ final class MLXToolchainProvisioner: ObservableObject {
 
     /// Re-checks the install places unless an install is running (its own completion re-checks).
     func refresh() async {
-        guard installTask == nil else { return }
+        guard activeInstall == nil else { return }
         state = .checking
         let located = await locate()
-        guard installTask == nil else { return }
+        guard activeInstall == nil else { return }
         state = located
     }
 
@@ -85,43 +88,66 @@ final class MLXToolchainProvisioner: ObservableObject {
     /// Starts Cotabby's own install. A second call while one runs is ignored, so every caller
     /// shares the one install.
     func install() {
-        guard installTask == nil else { return }
+        guard activeInstall == nil else { return }
         CotabbyLogger.runtime.info("MLX install started")
-        installTask = Task { [weak self] in
-            guard let self else { return }
-            do {
-                try await self.installer.install { [weak self] phase in
-                    self?.state = .installing(phase)
-                }
-                let located = await self.locate()
-                self.state = located.toolchain != nil
-                    ? located
-                    : .failed(reason: "MLX was installed but does not start.", logTail: [])
-            } catch is CancellationError {
-                self.state = await self.locate()
-            } catch let error as MLXInstallError {
-                CotabbyLogger.runtime.error("MLX install failed: \(error.localizedDescription)")
-                self.state = .failed(reason: error.localizedDescription, logTail: error.logTail)
-            } catch {
-                CotabbyLogger.runtime.error("MLX install failed: \(error.localizedDescription)")
-                self.state = .failed(reason: error.localizedDescription, logTail: [])
-            }
-            self.installTask = nil
+        let id = UUID()
+        // Annotated: the optional chain would otherwise infer Task<Void?, Never>.
+        let task = Task<Void, Never> { [weak self] in
+            await self?.runInstall(id: id)
         }
+        activeInstall = (id: id, task: task)
     }
 
     func cancelInstall() {
-        installTask?.cancel()
+        activeInstall?.task.cancel()
     }
 
-    /// Deletes Cotabby's own MLX folder (models in the Hugging Face cache are kept), then
-    /// re-checks: an external install may still be usable.
+    /// Cancels a running install and waits for it to finish before deleting anything, so no uv
+    /// process can recreate files under the folder being removed. A second install cannot start
+    /// meanwhile, because the slot stays taken until the cancelled task clears it. Then deletes
+    /// Cotabby's own MLX folder (models in the Hugging Face cache are kept) and re-checks: an
+    /// external install may still be usable.
     func remove() async {
-        installTask?.cancel()
-        installTask = nil
+        let running = activeInstall?.task
+        running?.cancel()
+        await running?.value
         try? fileManager.removeItem(at: paths.root)
         CotabbyLogger.runtime.info("Removed Cotabby's MLX install")
-        state = await locate()
+        let located = await locate()
+        // An install started during the re-check owns the state now; do not overwrite it.
+        guard activeInstall == nil else { return }
+        state = located
+    }
+
+    /// One install run, publishing its outcome unless a newer install or a remove has taken over.
+    /// The slot is cleared last, so a remove() that awaits this task resumes only after the state
+    /// is final.
+    private func runInstall(id: UUID) async {
+        defer { if activeInstall?.id == id { activeInstall = nil } }
+        do {
+            try await installer.install { [weak self] phase in
+                guard let self, self.activeInstall?.id == id else { return }
+                self.state = .installing(phase)
+            }
+            let located = await locate()
+            guard activeInstall?.id == id else { return }
+            // Only Cotabby's own install counts. A working external install must not hide a broken own one.
+            state = located.toolchain?.isCotabbyInstall == true
+                ? located
+                : .failed(reason: "MLX was installed but does not start.", logTail: [])
+        } catch is CancellationError {
+            let located = await locate()
+            guard activeInstall?.id == id else { return }
+            state = located
+        } catch let error as MLXInstallError {
+            CotabbyLogger.runtime.error("MLX install failed: \(error.localizedDescription)")
+            guard activeInstall?.id == id else { return }
+            state = .failed(reason: error.localizedDescription, logTail: error.logTail)
+        } catch {
+            CotabbyLogger.runtime.error("MLX install failed: \(error.localizedDescription)")
+            guard activeInstall?.id == id else { return }
+            state = .failed(reason: error.localizedDescription, logTail: [])
+        }
     }
 
     /// Reads the launcher's first lines through any symlink (uv's bin entries are symlinks).

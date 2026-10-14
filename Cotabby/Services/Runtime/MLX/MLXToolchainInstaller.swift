@@ -43,8 +43,9 @@ protocol MLXToolchainInstalling {
 }
 
 /// One install run. A value type with injected effects; the provisioner owns one for the app's
-/// lifetime and calls it at most once at a time.
-struct MLXToolchainInstaller: MLXToolchainInstalling {
+/// lifetime and calls it at most once at a time. It is `nonisolated` so the hashing, file writes
+/// and signature check run off the main actor; only the `phase` callback hops back to it.
+nonisolated struct MLXToolchainInstaller: MLXToolchainInstalling {
     typealias Download = (URL) async throws -> Data
     typealias RunProcess = (URL, [String], [String: String], Duration) async throws -> MLXProcessResult
     typealias VerifySignature = (URL) -> Bool
@@ -101,7 +102,7 @@ struct MLXToolchainInstaller: MLXToolchainInstalling {
         let deadline = ContinuousClock.now + Self.totalTimeout
         let fileManager = FileManager.default
 
-        phase(.downloadingUV)
+        await phase(.downloadingUV)
         let archive: Data
         do {
             archive = try await download(Self.uvArchiveURL)
@@ -109,11 +110,15 @@ struct MLXToolchainInstaller: MLXToolchainInstalling {
             throw error
         } catch is CancellationError {
             throw CancellationError()
+        } catch let error where Task.isCancelled || (error as? URLError)?.code == .cancelled {
+            // URLSession reports a cancelled task as URLError(.cancelled), not CancellationError.
+            // Map it, so cancelInstall() reverts to the real state instead of showing a failure.
+            throw CancellationError()
         } catch {
             throw MLXInstallError.downloadFailed(error.localizedDescription)
         }
 
-        phase(.verifyingUV)
+        await phase(.verifyingUV)
         let digest = SHA256.hash(data: archive).map { String(format: "%02x", $0) }.joined()
         guard digest == expectedSHA256 else { throw MLXInstallError.checksumMismatch }
         try? fileManager.removeItem(at: paths.uvDirectory)
@@ -129,7 +134,7 @@ struct MLXToolchainInstaller: MLXToolchainInstalling {
         guard extract.status == 0 else { throw MLXInstallError.extractFailed }
         guard verifySignature(paths.uvExecutable) else { throw MLXInstallError.signatureInvalid }
 
-        phase(.installingMLX)
+        await phase(.installingMLX)
         let result: MLXProcessResult
         do {
             result = try await runProcess(

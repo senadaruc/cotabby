@@ -87,6 +87,55 @@ final class MLXToolchainProvisionerTests: XCTestCase {
         XCTAssertEqual(provisioner.state, .failed(reason: MLXInstallError.installFailed(tail: ["boom"]).localizedDescription, logTail: ["boom"]))
     }
 
+    /// Remove must not delete the folder under a live uv, and the slot must stay taken until that
+    /// install has really ended.
+    func test_removeDuringInstallJoinsTheCancelledInstallBeforeDeleting() async throws {
+        let installer = GatedInstaller()
+        let provisioner = makeProvisioner(versions: ["/own/python": "0.32.0"], installer: installer)
+        provisioner.install()
+        await waitUntil { installer.calls == 1 }
+
+        let removing = Task { await provisioner.remove() }
+        // The test has not suspended since `install()`, so `remove()` has not started yet and the
+        // running install still holds the slot. This second call must be a no-op.
+        provisioner.install()
+        XCTAssertEqual(installer.calls, 1, "a second install must not start while the first holds the slot")
+
+        await removing.value
+        XCTAssertEqual(installer.finished, 1, "remove must wait for the cancelled install to end")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.root.path))
+
+        try script(at: paths.ownServerExecutable, python: "/own/python")
+        provisioner.install()
+        await waitUntil { installer.calls == 2 }
+        XCTAssertEqual(installer.finished, 1, "the second install starts only after the first finished")
+        installer.release()
+        await waitUntil { provisioner.state.toolchain != nil }
+        XCTAssertEqual(installer.calls, 2)
+        XCTAssertEqual(installer.overlaps, 0)
+    }
+
+    func test_cancelDuringDownloadRevertsInsteadOfFailing() async {
+        let installer = MLXToolchainInstaller(
+            paths: paths,
+            download: { _ in
+                _ = try? await Task.sleep(for: .seconds(10))
+                throw URLError(.cancelled)
+            },
+            runProcess: { _, _, _, _ in
+                XCTFail("nothing may run after a cancelled download")
+                return MLXProcessResult(status: 0, stdout: "", stderrTail: [])
+            },
+            verifySignature: { _ in true }
+        )
+        let provisioner = makeProvisioner(versions: [:], installer: installer)
+        provisioner.install()
+        await waitUntil { provisioner.state == .installing(.downloadingUV) }
+        provisioner.cancelInstall()
+        await waitUntil { provisioner.state == .notInstalled }
+        XCTAssertEqual(provisioner.state, .notInstalled)
+    }
+
     func test_removeDeletesOnlyCotabbysFolder() async throws {
         try script(at: paths.ownServerExecutable, python: "/own/python")
         let external = home.appendingPathComponent(".local/bin/mlx_lm.server")
@@ -115,6 +164,15 @@ final class MLXToolchainProvisionerTests: XCTestCase {
             XCTAssertEqual(error as? MLXInstallError, .checksumMismatch)
         }
         XCTAssertFalse(ran)
+    }
+
+    /// The Security check is synchronous and can be slow, so it runs in a detached task, off the
+    /// main thread, as it does in the installer.
+    func test_signatureCheckRejectsAnUnrelatedBinary() async {
+        let signedByAstral = await Task.detached {
+            MLXToolchainInstaller.isSignedByAstral(URL(fileURLWithPath: "/usr/bin/true"))
+        }.value
+        XCTAssertFalse(signedByAstral)
     }
 
     func test_installerRejectsAnUnsignedUV() async {
@@ -173,20 +231,31 @@ private struct FailingInstaller: MLXToolchainInstalling {
     }
 }
 
-/// Suspends inside `install` until the test calls `release()`, counting calls.
+/// Holds inside `install` until the test calls `release()` or the install is cancelled. It polls
+/// instead of parking on a continuation, so cancellation ends it at once: `Task.sleep` throws
+/// `CancellationError` when the install task is cancelled.
 @MainActor
 private final class GatedInstaller: MLXToolchainInstalling {
     private(set) var calls = 0
-    private var gate: CheckedContinuation<Void, Never>?
+    private(set) var finished = 0
+    /// Calls that began while another was still running. Single-flight keeps this at 0.
+    private(set) var overlaps = 0
+    private var active = 0
+    private var released = false
 
     func install(phase: @escaping @MainActor (MLXInstallPhase) -> Void) async throws {
         calls += 1
+        if active > 0 { overlaps += 1 }
+        active += 1
+        defer {
+            active -= 1
+            finished += 1
+        }
         phase(.installingMLX)
-        await withCheckedContinuation { gate = $0 }
+        while !released { try await Task.sleep(for: .milliseconds(5)) }
     }
 
     func release() {
-        gate?.resume()
-        gate = nil
+        released = true
     }
 }
