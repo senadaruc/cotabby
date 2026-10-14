@@ -763,6 +763,7 @@
 		8F216FA9E4DD8C0317E28286 /* BundleVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A951C04DF783B1F1EFDD1E5 /* BundleVersion.swift */; };
 		8F4F2EA0AB190B89F109CACF /* GenerationStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = 035E1149322C1FF4B8BF5F8F /* GenerationStats.swift */; };
 		8F5E73A575C8A4C3DF7FACAB /* GhosttyConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = C498A848A5A4C4544A6202FA /* GhosttyConfiguration.swift */; };
+		8F68D51D24F9185808A66EA2 /* MLXModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA378879CEC6FB2BF160520E /* MLXModelsTests.swift */; };
 		8F6B554D210B15AD99511D4D /* OnboardingTemplateRecommender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F86D2716CBE36970BB462E8 /* OnboardingTemplateRecommender.swift */; };
 		902175A80CC3585095BE7D58 /* InlineCommandCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1D68B5ABA427D3E87000E78 /* InlineCommandCoordinator.swift */; };
 		907A0BF56C3BB0CBAF2649AB /* SettingsCategory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D0AEFF86F8210CBE7CFCBAD /* SettingsCategory.swift */; };
@@ -2114,6 +2115,7 @@
 		E91CA4CBD3F0E35457B48DEC /* GhostFontStylerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhostFontStylerTests.swift; sourceTree = "<group>"; };
 		E94A6036F4B703A2FF7F68EF /* DownloadFileRescuerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadFileRescuerTests.swift; sourceTree = "<group>"; };
 		E9925986485A828B1772B137 /* FlatVectorIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlatVectorIndex.swift; sourceTree = "<group>"; };
+		EA378879CEC6FB2BF160520E /* MLXModelsTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MLXModelsTests.swift; sourceTree = "<group>"; };
 		EA8311FAC345FE431FA89855 /* EmojiMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmojiMatcher.swift; sourceTree = "<group>"; };
 		EAA290A7B1BF37F3D125DC8F /* SuggestionCoordinatorPredictionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SuggestionCoordinatorPredictionTests.swift; sourceTree = "<group>"; };
 		EAC61CA8FEFB45FB1CCA453A /* GhostFontSizeLimits.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhostFontSizeLimits.swift; sourceTree = "<group>"; };
@@ -2845,6 +2847,7 @@
 				7D2E806C1915514651343055 /* HuggingFaceModelsTests.swift */,
 				C40BA54CDA6F5887BEC6C668 /* OpenAICompatibleEndpointConfigurationTests.swift */,
 				D72CC98CFDA795F8210198E8 /* RuntimeBootstrapModelTests.swift */,
+				EA378879CEC6FB2BF160520E /* MLXModelsTests.swift */,
 			);
 			path = Runtime;
 			sourceTree = "<group>";
@@ -6235,6 +6238,7 @@
 				ED560EA132AF1EEA0FE66DAA /* WordPrefixIndexTests.swift in Sources */,
 				C73181E294561990A9DB4770 /* SuggestionEngineKindTests.swift in Sources */,
 				9E8A285F20E6040351B7F12A /* SuggestionSettingsMLXTests.swift in Sources */,
+				8F68D51D24F9185808A66EA2 /* MLXModelsTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
