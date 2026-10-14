@@ -81,7 +81,7 @@ final class MemoryRetriever: SuggestionMemoryProviding {
     // MARK: - SuggestionMemoryProviding
 
     func memorySnippets(for context: FocusedInputContext, engine: SuggestionEngineKind) -> [String] {
-        guard engine != .openAICompatible, !context.isSecure, self.engine() != nil, isAllowedByTuning(),
+        guard engine.isOnDevice, !context.isSecure, self.engine() != nil, isAllowedByTuning(),
               let scope = ConversationScopeResolver.scope(
                   bundleIdentifier: context.bundleIdentifier,
                   conversationTitle: context.featureScopeWindowTitle,

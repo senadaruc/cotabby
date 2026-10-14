@@ -122,13 +122,13 @@ enum SuggestionRequestFactory {
                     : nil
             )
             : nil
-        // Typing history stays on this Mac. The provider already returns nothing for the endpoint
-        // engine; dropping it here as well keeps that guarantee in the one pure place every request
-        // passes through.
-        let activeHistoryExamples = settings.selectedEngine == .openAICompatible ? [] : historyExamples
+        // Typing history stays off this Mac. The provider already returns nothing for engines that
+        // are not on-device; dropping it here as well keeps that guarantee in the one pure place
+        // every request passes through.
+        let activeHistoryExamples = settings.selectedEngine.isOnDevice ? historyExamples : []
         // Conversation memory is private history from this Mac, held to the same rule as typing
-        // history: never part of a request the endpoint engine could receive.
-        let activeMemorySnippets = settings.selectedEngine == .openAICompatible ? [] : memorySnippets
+        // history: never part of a request that leaves this Mac.
+        let activeMemorySnippets = settings.selectedEngine.isOnDevice ? memorySnippets : []
         // Cotabby 2 is a base-model continuation product on the Open Source path, so the local
         // prompt is always the base render: no instruction blob, exact caret prefix last.
         // Custom instructions and persona condition the output rather than being obeyed. The
@@ -147,7 +147,7 @@ enum SuggestionRequestFactory {
             // The endpoint backend shares this renderer, but adding document-tail content to a
             // network request needs its own disclosure and consent. Keep this new context local;
             // Apple's fallback request can use it because both eligible engines run on-device.
-            trailingText: settings.selectedEngine == .openAICompatible ? "" : promptTrailingText,
+            trailingText: settings.selectedEngine.isOnDevice ? promptTrailingText : "",
             maxSuffixCharacters: maxSuffixCharacters,
             customRules: customRules,
             extendedContext: activeExtendedContext,

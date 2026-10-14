@@ -32,10 +32,11 @@ extension SuggestionCoordinator {
     /// Only terminal word endings need another request. A model-provided phrase stays in its
     /// original session; prefetch never replaces those words with a different model guess.
     func prepareContinuation(after session: ActiveSuggestionSession, rawContext: FocusedInputSnapshot) {
-        // Uncommitted lookahead is new work, so keep it on-device. The coordinator intentionally
-        // has no endpoint URL; allowing all configured endpoints here would also send hypothetical
-        // corrections to hosted servers. Their already-returned phrases still use the same buffer.
-        guard settingsSnapshot.selectedEngine != .openAICompatible,
+        // Uncommitted lookahead is new work the user did not ask for. Only the in-process engines
+        // cancel it cheaply; an HTTP server (the endpoint or MLX) would keep decoding it, and the
+        // endpoint would also receive hypothetical corrections. Already-returned phrases still use
+        // the same buffer.
+        guard settingsSnapshot.selectedEngine.allowsSpeculativeGeneration,
               !userDefaults.bool(forKey: Self.speculativePrefetchDisabledDefaultsKey),
               currentDisabledReason(focusSnapshot: focusModel.snapshot) == nil else { return }
         let plan: SuggestionContinuationPlan?
