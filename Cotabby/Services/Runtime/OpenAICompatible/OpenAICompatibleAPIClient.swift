@@ -95,7 +95,8 @@ final class OpenAICompatibleAPIClient {
         prompt: String,
         options: OpenAICompatibleGenerationOptions,
         onPartialRawText: (@MainActor (String) -> Void)?,
-        stopWhen: (@MainActor (String, Int) -> Bool)? = nil
+        stopWhen: (@MainActor (String, Int) -> Bool)? = nil,
+        trace: OpenAICompatibleStreamTrace? = nil
     ) async throws -> String {
         guard !configuration.modelName.isEmpty else {
             throw OpenAICompatibleEndpointError.emptyModelName
@@ -120,7 +121,8 @@ final class OpenAICompatibleAPIClient {
             request,
             mode: configuration.apiMode,
             onPartialRawText: onPartialRawText,
-            stopWhen: stopWhen
+            stopWhen: stopWhen,
+            trace: trace
         )
     }
 
@@ -149,7 +151,8 @@ final class OpenAICompatibleAPIClient {
             request,
             mode: .chatCompletions,
             onPartialRawText: onPartialRawText,
-            stopWhen: nil
+            stopWhen: nil,
+            trace: nil
         )
     }
 
@@ -162,7 +165,8 @@ final class OpenAICompatibleAPIClient {
         _ request: URLRequest,
         mode: OpenAICompatibleAPIMode,
         onPartialRawText: (@MainActor (String) -> Void)?,
-        stopWhen: (@MainActor (String, Int) -> Bool)?
+        stopWhen: (@MainActor (String, Int) -> Bool)?,
+        trace: OpenAICompatibleStreamTrace?
     ) async throws -> String {
         let (bytes, response) = try await session.bytes(for: request)
         try Self.validate(response)
@@ -180,6 +184,7 @@ final class OpenAICompatibleAPIClient {
             case .text(let text):
                 sawEvent = true
                 textEvents += 1
+                trace?.recordTextEvent()
                 accumulated += text
                 onPartialRawText?(accumulated)
                 // Returning leaves the `for await`, which cancels the URLSession task and closes the
@@ -454,4 +459,23 @@ private nonisolated struct StreamChunk: Decodable {
 
 private nonisolated struct StreamContent: Decodable {
     let content: String?
+}
+
+/// What one streamed generation looked like from the outside: when the first text arrived and how
+/// many text events there were. The engine creates one per request, hands it to the client, and
+/// reads it afterwards to report time-to-first-token and (for MLX) a real token count, which the
+/// performance tuner needs to tell prompt processing apart from decoding speed. It is a class so
+/// the client can fill it in while the engine holds the same instance; main-actor isolated like
+/// both of them, and discarded with the request.
+@MainActor
+final class OpenAICompatibleStreamTrace {
+    private(set) var firstTextAt: Date?
+    private(set) var textEvents = 0
+    /// Set by the engine's early-stop closure when it ends the stream (a `DecodeStopPolicy` reason).
+    var stopReason: String?
+
+    func recordTextEvent() {
+        if firstTextAt == nil { firstTextAt = Date() }
+        textEvents += 1
+    }
 }

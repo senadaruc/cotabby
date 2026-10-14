@@ -203,7 +203,14 @@ final class CotabbyAppEnvironment {
         let qualityMetricsStore = SuggestionQualityMetricsStore()
         // Live CPU/RAM graph backing for the Performance pane. Holds no state until the pane asks it
         // to start sampling, so constructing it eagerly here costs nothing.
-        let systemMetricsStore = SystemMetricsStore()
+        // With MLX the model runs in a separate server process, so the sampler adds that process's
+        // CPU and memory while one is running; otherwise the graph would read near zero.
+        let systemMetricsStore = SystemMetricsStore(sampler: { [weak mlxServerManager] in
+            let pid = MainActor.assumeIsolated { mlxServerManager?.runningProcessIdentifier }
+            var sample = SystemResourceSampler.sample(extraProcessIDs: pid.map { [$0] } ?? [])
+            sample.includesMLXServer = pid != nil
+            return sample
+        })
         // What the performance tuner has learned per model (speed, accepted lengths), and the
         // machine conditions it reacts to. Both are cheap until a request asks: the GPU is read at
         // most every few seconds, and only while tuning is on.

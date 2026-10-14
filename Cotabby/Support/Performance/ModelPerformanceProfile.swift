@@ -61,9 +61,16 @@ struct ModelPerformanceProfile: Codable, Equatable, Sendable {
         guard tokens > 0, latencyMs > 0 else { return self }
         var next = self
         let decodeMs = prefillMs.map { max(latencyMs - $0, 0) } ?? latencyMs
-        next.latencyMs = Self.averaged(latencyMs, into: self.latencyMs)
-        next.prefillMs = Self.averaged(prefillMs ?? 0, into: self.prefillMs)
-        next.msPerToken = Self.averaged(decodeMs / Double(tokens), into: msPerToken)
+        // A coarse history (whole latency spread over estimated tokens) can be several times off
+        // from the true decode speed, and a 0.1-weight average would take dozens of suggestions to
+        // forget it. The first precise sample replaces it instead of blending with it.
+        let restartsTiming = isTimingCoarse && sampleCount > 0 && prefillMs != nil
+        let blend: (Double, Double?) -> Double = { sample, current in
+            restartsTiming ? sample : Self.averaged(sample, into: current)
+        }
+        next.latencyMs = blend(latencyMs, self.latencyMs)
+        next.prefillMs = blend(prefillMs ?? 0, self.prefillMs)
+        next.msPerToken = blend(decodeMs / Double(tokens), msPerToken)
         next.isTimingCoarse = prefillMs == nil
         next.sampleCount += 1
         return next

@@ -36,6 +36,19 @@ final class PerformanceTuningPolicyTests: XCTestCase {
 
     // MARK: - Nothing to react to
 
+    func test_preciseSampleReplacesCoarseTimingHistory() {
+        let coarse = ModelPerformanceProfile().recordingGeneration(latencyMs: 2_000, tokens: 10, prefillMs: nil)
+        XCTAssertTrue(coarse.isTimingCoarse)
+        let precise = coarse.recordingShown(words: 3)
+            .recordingGeneration(latencyMs: 600, tokens: 20, prefillMs: 100)
+        XCTAssertFalse(precise.isTimingCoarse)
+        XCTAssertEqual(precise.latencyMs, 600)
+        XCTAssertEqual(precise.prefillMs, 100)
+        XCTAssertEqual(precise.msPerToken, 25)
+        XCTAssertEqual(precise.sampleCount, 2)
+        XCTAssertEqual(precise.buckets[0].shown, 1, "acceptance history is kept")
+    }
+
     func test_offAlwaysLeavesTheSettingsAlone() {
         XCTAssertEqual(PerformanceTuningPolicy.tuning(input(mode: .off, conditions: onBattery, profile: profile(msPerToken: 50))), .unchanged)
     }

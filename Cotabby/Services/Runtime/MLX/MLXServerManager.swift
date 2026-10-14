@@ -163,6 +163,8 @@ final class MLXServerManager: ObservableObject {
 
     private var desired: MLXServerDesire = .stopped
     private var current: RunningServer?
+    /// The live server's pid, for the Performance pane's resource graph. Nil when none is running.
+    var runningProcessIdentifier: Int32? { current?.process.processIdentifier }
     /// The process a stop is waiting on right now (inside its SIGTERM grace). `current` is already
     /// nil by then, so `shutdownSync` needs this reference to still reach it.
     private var stoppingProcess: (any MLXRunningProcess)?

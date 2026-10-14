@@ -136,6 +136,48 @@ final class OpenAICompatibleSuggestionEngineTests: XCTestCase {
         XCTAssertEqual(result.rawText, " Thanks for the report. Next week")
     }
 
+    func test_mlxBackend_reportsRealTokenCountAndPrefill() async throws {
+        EngineStubURLProtocol.handler = { request in
+            Self.sse(request,
+                "data: {\"choices\":[{\"text\":\" a\"}]}\n\n" +
+                "data: {\"choices\":[{\"text\":\" b\"}]}\n\n" +
+                "data: {\"choices\":[{\"text\":\" c\"}]}\n\n" +
+                "data: [DONE]\n\n")
+        }
+        let result = try await makeEngine(mode: .completions, backend: .mlx)
+            .generateSuggestion(for: CotabbyTestFixtures.suggestionRequest())
+        let stats = try XCTUnwrap(result.stats)
+        XCTAssertEqual(stats.tokensGenerated, 3)
+        XCTAssertFalse(stats.isTokenCountEstimated)
+        XCTAssertNotNil(stats.prefillMilliseconds)
+        XCTAssertNil(stats.stopReason)
+    }
+
+    func test_mlxBackend_earlyStopSetsStopReason() async throws {
+        EngineStubURLProtocol.handler = { request in
+            Self.sse(request,
+                "data: {\"choices\":[{\"text\":\" Thanks\"}]}\n\n" +
+                "data: {\"choices\":[{\"text\":\" for the report.\"}]}\n\n" +
+                "data: {\"choices\":[{\"text\":\" Next week\"}]}\n\n" +
+                "data: [DONE]\n\n")
+        }
+        let result = try await makeEngine(mode: .completions, backend: .mlx)
+            .generateSuggestion(for: CotabbyTestFixtures.suggestionRequest())
+        XCTAssertEqual(result.stats?.stopReason, "sentence_boundary")
+        XCTAssertEqual(result.stats?.tokensGenerated, 2)
+    }
+
+    func test_endpointBackend_keepsEstimatedTokensButMeasuresPrefill() async throws {
+        EngineStubURLProtocol.handler = { request in
+            Self.sse(request, "data: {\"choices\":[{\"text\":\" hello there\"}]}\n\ndata: [DONE]\n\n")
+        }
+        let result = try await makeEngine(mode: .completions)
+            .generateSuggestion(for: CotabbyTestFixtures.suggestionRequest())
+        let stats = try XCTUnwrap(result.stats)
+        XCTAssertTrue(stats.isTokenCountEstimated)
+        XCTAssertNotNil(stats.prefillMilliseconds)
+    }
+
     func test_mlxNotReady_throwsUnavailableWithoutNetwork() async {
         let engine = makeEngine(
             configuration: { throw SuggestionClientError.unavailable("MLX is starting the model…") },

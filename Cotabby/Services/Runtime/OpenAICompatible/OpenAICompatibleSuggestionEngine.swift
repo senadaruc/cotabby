@@ -78,6 +78,7 @@ final class OpenAICompatibleSuggestionEngine: SuggestionGenerating {
                 ]) { _, new in new }
             )
 
+            let trace = OpenAICompatibleStreamTrace()
             let raw = try await client.generate(
                 configuration: configuration,
                 apiKey: apiKey,
@@ -89,7 +90,8 @@ final class OpenAICompatibleSuggestionEngine: SuggestionGenerating {
                     mlx: backend == .mlx ? Self.mlxOptions(for: request) : nil
                 ),
                 onPartialRawText: partialHandler,
-                stopWhen: backend == .mlx ? Self.earlyStop(for: request) : nil
+                stopWhen: backend == .mlx ? Self.earlyStop(for: request, trace: trace) : nil,
+                trace: trace
             )
             try Task.checkCancellation()
 
@@ -118,13 +120,15 @@ final class OpenAICompatibleSuggestionEngine: SuggestionGenerating {
                     "latency_ms": .stringConvertible(latencyMs)
                 ]) { _, new in new }
             )
-            return SuggestionResult(
+            var result = SuggestionResult(
                 generation: request.generation,
                 rawText: raw,
                 text: normalization.text,
                 latency: latency,
                 suppressionReason: normalization.suppression?.rawValue
             )
+            result.stats = generationStats(raw: raw, trace: trace, startTime: startTime)
+            return result
         } catch is CancellationError {
             CotabbyLogger.suggestion.debug("Endpoint generation cancelled", metadata: metadata)
             throw SuggestionClientError.cancelled
@@ -148,6 +152,34 @@ final class OpenAICompatibleSuggestionEngine: SuggestionGenerating {
 
     func resetCachedGenerationContext() async {}
 
+    /// Timing the performance tuner can use. Without a first text event (empty output) there is
+    /// nothing to measure, so `nil` lets the router fall back to its text-length estimate.
+    ///
+    /// MLX: `mlx_lm.server` streams one SSE event per decoded token and skips events whose text is
+    /// empty, so the event count is the token count (it can only be slightly low). Endpoints may
+    /// batch several tokens per event, so their count stays an estimate and only the
+    /// time-to-first-token is real. Either way `prefillMilliseconds` is what separates prompt
+    /// processing from decoding; without it the tuner spreads the whole latency over the tokens.
+    private func generationStats(
+        raw: String, trace: OpenAICompatibleStreamTrace, startTime: Date
+    ) -> GenerationStats? {
+        guard let firstTextAt = trace.firstTextAt, !raw.isEmpty else { return nil }
+        let prefillMs = firstTextAt.timeIntervalSince(startTime) * 1_000
+        switch backend {
+        case .mlx:
+            return GenerationStats(
+                tokensGenerated: max(trace.textEvents, 1),
+                isTokenCountEstimated: false,
+                prefillMilliseconds: prefillMs,
+                stopReason: trace.stopReason
+            )
+        case .endpoint:
+            var stats = GenerationStats.estimated(fromText: raw)
+            stats.prefillMilliseconds = prefillMs
+            return stats
+        }
+    }
+
     /// Same sampling values the llama runtime uses, so MLX and Open Source condition alike.
     private static func mlxOptions(for request: SuggestionRequest) -> MLXCompletionOptions {
         MLXCompletionOptions(
@@ -161,14 +193,19 @@ final class OpenAICompatibleSuggestionEngine: SuggestionGenerating {
 
     /// The llama runtime's stop rule applied to the streamed text: one SSE text event is about one
     /// token, which is what `tokensGenerated` counts for the minimum-token guard.
-    private static func earlyStop(for request: SuggestionRequest) -> @MainActor (String, Int) -> Bool {
+    private static func earlyStop(
+        for request: SuggestionRequest, trace: OpenAICompatibleStreamTrace
+    ) -> @MainActor (String, Int) -> Bool {
         let minimumWords = request.wordRange?.lowWords ?? 0
         return { accumulated, events in
-            DecodeStopPolicy.verdict(
+            let verdict = DecodeStopPolicy.verdict(
                 accumulated: accumulated,
                 tokensGenerated: events,
                 minimumWords: minimumWords
-            ) != nil
+            )
+            // Remembered so the result's stats can say why the stream ended early.
+            if let verdict { trace.stopReason = verdict.rawValue }
+            return verdict != nil
         }
     }
 
