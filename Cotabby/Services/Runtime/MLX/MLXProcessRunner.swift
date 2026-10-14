@@ -35,9 +35,16 @@ nonisolated final class MLXOutputCollector: @unchecked Sendable {
     private var stdout = Data()
     private var stderrLines: [String] = []
     private var partialStderrLine = ""
+    private var stdoutClosed = false
+    private var stderrClosed = false
 
     init(tailLines: Int) {
         self.tailLines = tailLines
+    }
+
+    /// True once both pipes have reached EOF. The runner polls this during its bounded drain.
+    var bothStreamsClosed: Bool {
+        lock.withLock { stdoutClosed && stderrClosed }
     }
 
     func appendStdout(_ data: Data) {
@@ -56,6 +63,14 @@ nonisolated final class MLXOutputCollector: @unchecked Sendable {
             stderrLines.append(contentsOf: lines.filter { !$0.isEmpty })
             if stderrLines.count > tailLines { stderrLines.removeFirst(stderrLines.count - tailLines) }
         }
+    }
+
+    func markStdoutClosed() {
+        lock.withLock { stdoutClosed = true }
+    }
+
+    func markStderrClosed() {
+        lock.withLock { stderrClosed = true }
     }
 
     var stdoutText: String {
@@ -119,13 +134,24 @@ nonisolated enum MLXProcessRunner {
 
         let output = MLXOutputCollector(tailLines: tailLines)
         // At EOF the handler is called with empty data, and it keeps being called until it is removed.
+        // Removing it at EOF and recording the close is how the drain below knows the pipe is done.
         stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            if data.isEmpty { handle.readabilityHandler = nil } else { output.appendStdout(data) }
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                output.markStdoutClosed()
+            } else {
+                output.appendStdout(data)
+            }
         }
         stderrPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            if data.isEmpty { handle.readabilityHandler = nil } else { output.appendStderr(data) }
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                output.markStderrClosed()
+            } else {
+                output.appendStderr(data)
+            }
         }
         let exit = ExitSignal()
         process.terminationHandler = { exit.finish($0.terminationStatus) }
@@ -158,21 +184,31 @@ nonisolated enum MLXProcessRunner {
                 Self.stop(process)
             }
         } catch {
-            stdoutPipe.fileHandleForReading.readabilityHandler = nil
-            stderrPipe.fileHandleForReading.readabilityHandler = nil
+            await Self.drain(output, stdoutPipe, stderrPipe)
             throw error
         }
 
-        stdoutPipe.fileHandleForReading.readabilityHandler = nil
-        stderrPipe.fileHandleForReading.readabilityHandler = nil
-        output.appendStdout((try? stdoutPipe.fileHandleForReading.readToEnd()) ?? Data())
-        output.appendStderr((try? stderrPipe.fileHandleForReading.readToEnd()) ?? Data())
+        await Self.drain(output, stdoutPipe, stderrPipe)
 
         try Task.checkCancellation()
         guard let status else {
             throw MLXProcessRunnerError.timedOut(tail: output.stderrTail)
         }
         return MLXProcessResult(status: status, stdout: output.stdoutText, stderrTail: output.stderrTail)
+    }
+
+    /// Waits a bounded grace (about 1 s) for both pipes to reach EOF, then detaches the handlers.
+    /// The direct child may be gone while a grandchild (a `sleep &`, a uv build backend) still holds
+    /// the write end open. A blocking read would then wait forever and could not be cancelled, so
+    /// the drain polls the collector instead and abandons whatever has not arrived after the grace.
+    /// A cancelled task skips the wait: its sleep would return at once and nothing is waiting on it.
+    private static func drain(_ output: MLXOutputCollector, _ stdoutPipe: Pipe, _ stderrPipe: Pipe) async {
+        for _ in 0..<20 {
+            if output.bothStreamsClosed || Task.isCancelled { break }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        stdoutPipe.fileHandleForReading.readabilityHandler = nil
+        stderrPipe.fileHandleForReading.readabilityHandler = nil
     }
 
     /// SIGTERM now, SIGKILL three seconds later if the child ignored it.

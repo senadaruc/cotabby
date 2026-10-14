@@ -70,6 +70,21 @@ final class MLXProcessRunnerTests: XCTestCase {
         }
     }
 
+    /// A grandchild that keeps the pipe open must not stretch the run past the timeout grace.
+    func test_grandchildHoldingThePipeDoesNotBlock() async {
+        let start = Date()
+        do {
+            _ = try await MLXProcessRunner.run(
+                executable: sh, arguments: ["-c", "sleep 30 & echo started; sleep 30"], environment: [:],
+                timeout: .milliseconds(500))
+            XCTFail("expected a timeout")
+        } catch MLXProcessRunnerError.timedOut {
+            XCTAssertLessThan(Date().timeIntervalSince(start), 6)
+        } catch {
+            XCTFail("unexpected \(error)")
+        }
+    }
+
     func test_missingExecutableIsALaunchFailure() async {
         do {
             _ = try await MLXProcessRunner.run(
