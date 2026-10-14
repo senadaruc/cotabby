@@ -168,7 +168,8 @@ struct SettingsContainerView: View {
             TranslationPaneView(preferences: translationPreferences, service: translationService)
         case .rewrite:
             RewritePaneView(preferences: rewritePreferences, credentials: rewriteCredentials,
-                            modelList: rewriteModelList, usesAppleIntelligence: rewriteUsesAppleIntelligence)
+                            modelList: rewriteModelList, usesAppleIntelligence: rewriteUsesAppleIntelligence,
+                            mlxToolchainProvisioner: mlxToolchainProvisioner, mlxModelDownloader: mlxModelDownloader)
         case .context:
             ContextPaneView(suggestionSettings: suggestionSettings, typingHistory: typingHistoryStore)
         case .shortcuts:

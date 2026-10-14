@@ -47,16 +47,20 @@ nonisolated final class MenuResourceSampler {
 
     /// `extraProcessID` is the MLX server's pid when it runs.
     func sample(extraProcessID: Int32?) -> ResourceUsageSummary {
-        let pids = [getpid()] + (extraProcessID.map { [$0] } ?? [])
-        let resources = SystemResourceSampler.sample(
-            extraProcessIDs: extraProcessID.map { [$0] } ?? [], baseline: cpuBaseline)
+        sample(extraProcessIDs: extraProcessID.map { [$0] } ?? [])
+    }
+
+    /// `extraProcessIDs` are every MLX server Cotabby runs (autocomplete's and the rewrite one).
+    func sample(extraProcessIDs: [Int32]) -> ResourceUsageSummary {
+        let pids = [getpid()] + extraProcessIDs
+        let resources = SystemResourceSampler.sample(extraProcessIDs: extraProcessIDs, baseline: cpuBaseline)
         let gpu = GPUStatisticsReader.read(pids: pids)
         let share = gpuTracker.update(pids: pids, nanoseconds: gpu.processGPUTimeNanoseconds, at: Date())
         return ResourceUsageSummary(
             cpuPercent: resources.cpuPercent,
             memoryBytes: resources.footprintBytes,
             gpuPercent: share,
-            includesMLXServer: extraProcessID != nil
+            includesMLXServer: !extraProcessIDs.isEmpty
         )
     }
 }

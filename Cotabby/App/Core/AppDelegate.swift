@@ -287,7 +287,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Waits at most 3 s for mlx_lm.server to exit (SIGKILL after that), so quitting Cotabby
         // never leaves a Python process holding the model's memory.
-        environment.mlxServerManager.shutdownSync(timeoutSeconds: 3)
+        // Both servers (autocomplete's and the rewrite one) get SIGTERM first, then share the wait.
+        environment.mlxRewriteServer.prepareForShutdown()
+        MLXServerManager.shutdownSync(
+            [environment.mlxServerManager, environment.mlxRewriteServer.manager], timeoutSeconds: 3)
         runtimeModel.shutdownSync(timeoutSeconds: 1.5)
     }
 

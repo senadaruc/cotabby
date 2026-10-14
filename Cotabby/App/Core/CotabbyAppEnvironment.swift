@@ -26,6 +26,8 @@ final class CotabbyAppEnvironment {
     /// `startMLXEngine()` (called by AppDelegate outside the test host) starts their work.
     let mlxToolchainProvisioner: MLXToolchainProvisioner
     let mlxServerManager: MLXServerManager
+    /// The second, on-demand MLX server that Rewrite with MLX uses (an instruct model).
+    let mlxRewriteServer: MLXRewriteServerController
     let menuResourceMonitor: MenuResourceMonitor
     let mlxModelDownloader: MLXModelDownloader
     let foundationModelAvailabilityService: FoundationModelAvailabilityService
@@ -103,6 +105,14 @@ final class CotabbyAppEnvironment {
         let mlxToolchainProvisioner = MLXToolchainProvisioner.live(paths: mlxPaths)
         let mlxServerManager = MLXServerManager.live(paths: mlxPaths)
         let mlxModelDownloader = MLXModelDownloader.live()
+        // The rewrite server is a second manager with its own pid file, so the launch-time orphan
+        // sweep and the two stop paths can tell the two processes apart.
+        let mlxRewriteServer = MLXRewriteServerController(
+            manager: MLXServerManager.live(paths: mlxPaths, pidFileURL: mlxPaths.rewriteServerPIDFile),
+            toolchain: { [weak mlxToolchainProvisioner] in mlxToolchainProvisioner?.state ?? .checking },
+            cachedModels: { [weak mlxModelDownloader] in mlxModelDownloader?.cachedModels },
+            rejectedModels: { [weak mlxModelDownloader] in mlxModelDownloader?.rejectedModels ?? [:] }
+        )
         let foundationModelAvailabilityService = FoundationModelAvailabilityService()
         let powerSourceMonitor = PowerSourceMonitor()
         let lowPowerModeMonitor = LowPowerModeMonitor()
@@ -206,19 +216,24 @@ final class CotabbyAppEnvironment {
         // to start sampling, so constructing it eagerly here costs nothing.
         // With MLX the model runs in a separate server process, so the sampler adds that process's
         // CPU and memory while one is running; otherwise the graph would read near zero.
-        let systemMetricsStore = SystemMetricsStore(sampler: { [weak mlxServerManager] in
-            let pid = MainActor.assumeIsolated { mlxServerManager?.runningProcessIdentifier }
-            var sample = SystemResourceSampler.sample(extraProcessIDs: pid.map { [$0] } ?? [])
-            sample.includesMLXServer = pid != nil
+        let systemMetricsStore = SystemMetricsStore(sampler: { [weak mlxServerManager, weak mlxRewriteServer] in
+            // Autocomplete's server and the rewrite server (when it is up) both count.
+            let pids = MainActor.assumeIsolated {
+                [mlxServerManager?.runningProcessIdentifier, mlxRewriteServer?.manager.runningProcessIdentifier].compactMap { $0 }
+            }
+            var sample = SystemResourceSampler.sample(extraProcessIDs: pids)
+            sample.includesMLXServer = !pids.isEmpty
             return sample
         })
         // Compact CPU/RAM/GPU line in the menu bar popover. It samples with its own baselines
         // (`MenuResourceSampler`) so it cannot disturb the Performance pane's CPU deltas.
         let menuResourceSampler = MenuResourceSampler()
         let menuResourceMonitor = MenuResourceMonitor(
-            sample: { [weak mlxServerManager] in
-                let pid = MainActor.assumeIsolated { mlxServerManager?.runningProcessIdentifier }
-                return menuResourceSampler.sample(extraProcessID: pid)
+            sample: { [weak mlxServerManager, weak mlxRewriteServer] in
+                let pids = MainActor.assumeIsolated {
+                    [mlxServerManager?.runningProcessIdentifier, mlxRewriteServer?.manager.runningProcessIdentifier].compactMap { $0 }
+                }
+                return menuResourceSampler.sample(extraProcessIDs: pids)
             },
             onStop: { menuResourceSampler.reset() }
         )
@@ -429,6 +444,11 @@ final class CotabbyAppEnvironment {
                     rewriteCredentials?.store(for: service) ?? InMemoryOpenAICompatibleCredentialStore()
                 }
             ),
+            mlx: MLXRewriteProvider(
+                controller: mlxRewriteServer,
+                client: openAICompatibleClient,
+                preferences: { [weak rewritePreferences] in rewritePreferences?.preferences ?? .defaults }
+            ),
             preferences: { [weak rewritePreferences] in rewritePreferences?.preferences ?? .defaults }
         )
         let selectionRewriteCoordinator = SelectionRewriteCoordinator(
@@ -626,6 +646,7 @@ final class CotabbyAppEnvironment {
         self.openAICompatibleConnectionModel = openAICompatibleConnectionModel
         self.mlxToolchainProvisioner = mlxToolchainProvisioner
         self.mlxServerManager = mlxServerManager
+        self.mlxRewriteServer = mlxRewriteServer
         self.menuResourceMonitor = menuResourceMonitor
         self.mlxModelDownloader = mlxModelDownloader
         self.foundationModelAvailabilityService = foundationModelAvailabilityService
@@ -861,6 +882,7 @@ final class CotabbyAppEnvironment {
         Task { [weak self] in
             guard let self else { return }
             await self.mlxServerManager.cleanUpOrphan()
+            await self.mlxRewriteServer.manager.cleanUpOrphan()
             await self.mlxToolchainProvisioner.rescan(models: self.mlxModelDownloader)
         }
         observeMLXEngine()
@@ -898,6 +920,18 @@ final class CotabbyAppEnvironment {
                       let cached, let pick = MLXModelCatalog.defaultSelection(cached: cached)
                 else { return }
                 self.suggestionSettings.setMLXModelID(pick.value)
+            }
+            .store(in: &cancellables)
+
+        // The rewrite server runs only while Rewrite uses MLX: switching the provider away or
+        // changing the rewrite model stops it (the next rewrite restarts it on the new model).
+        rewritePreferences.$preferences
+            .map { ($0.provider, $0.mlxModelID) }
+            .removeDuplicates { $0 == $1 }
+            .dropFirst()
+            .sink { [weak self] _ in
+                guard let self else { return }
+                Task { await self.mlxRewriteServer.stop() }
             }
             .store(in: &cancellables)
 

@@ -10,6 +10,8 @@ struct RewritePaneView: View {
     let credentials: RewriteCredentialVault
     let modelList: RewriteModelListService
     let usesAppleIntelligence: Bool
+    @ObservedObject var mlxToolchainProvisioner: MLXToolchainProvisioner
+    @ObservedObject var mlxModelDownloader: MLXModelDownloader
 
     /// Models the service reported after "Load models"; empty until then.
     @State private var loadedModels: [String] = []
@@ -31,13 +33,21 @@ struct RewritePaneView: View {
             Section("Model") {
                 Picker(selection: Binding(get: { preferences.preferences.provider }, set: preferences.setProvider)) {
                     Text(usesAppleIntelligence ? "Local (Apple Intelligence)" : "Local (Cotabby's model — basic quality)").tag(RewriteProviderKind.local)
+                    if MLXHardware.isAppleSilicon {
+                        Text("Local (MLX)").tag(RewriteProviderKind.mlx)
+                    }
                     Text("API model").tag(RewriteProviderKind.api)
                 } label: {
                     SettingsRowLabel(title: "Rewrite Model",
-                                     description: "Local runs on this Mac. An API model usually rewrites better, but the selected text is sent to it.",
+                                     description: "Local and MLX run on this Mac. An API model usually rewrites better, but the selected text is sent to it.",
                                      systemImage: "cpu")
                 }
                 .settingsItem(.rewriteProvider)
+
+                if preferences.preferences.provider == .mlx {
+                    MLXRewriteModelSection(preferences: preferences, provisioner: mlxToolchainProvisioner,
+                                           downloader: mlxModelDownloader)
+                }
 
                 if preferences.preferences.provider == .api {
                     Picker("Service", selection: Binding(get: { preferences.preferences.cloudProvider }, set: switchService)) {
