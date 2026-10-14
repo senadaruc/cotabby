@@ -18,6 +18,9 @@ struct SettingsContainerView: View {
     let permissionGuidanceController: PermissionGuidanceController
     @ObservedObject var suggestionSettings: SuggestionSettingsModel
     @ObservedObject var openAICompatibleConnectionModel: OpenAICompatibleConnectionModel
+    @ObservedObject var mlxToolchainProvisioner: MLXToolchainProvisioner
+    @ObservedObject var mlxServerManager: MLXServerManager
+    @ObservedObject var mlxModelDownloader: MLXModelDownloader
     @ObservedObject var foundationModelAvailabilityService: FoundationModelAvailabilityService
     @ObservedObject var runtimeModel: RuntimeBootstrapModel
     @ObservedObject var modelDownloadManager: ModelDownloadManager
@@ -112,7 +115,8 @@ struct SettingsContainerView: View {
                 foundationModelAvailable: foundationModelAvailabilityService.isAvailable,
                 llamaRuntimeFailedReason: runtimeModel.state.failureDetail,
                 endpointConfigurationError: endpointConfigurationError,
-                endpointConnectionFailedReason: openAICompatibleConnectionModel.state.failureDetail
+                endpointConnectionFailedReason: openAICompatibleConnectionModel.state.failureDetail,
+                mlxProblem: mlxServerManager.state.problem
             )
         )
     }
@@ -147,6 +151,9 @@ struct SettingsContainerView: View {
             EngineAndModelPaneView(
                 suggestionSettings: suggestionSettings,
                 openAICompatibleConnectionModel: openAICompatibleConnectionModel,
+                mlxToolchainProvisioner: mlxToolchainProvisioner,
+                mlxServerManager: mlxServerManager,
+                mlxModelDownloader: mlxModelDownloader,
                 foundationModelAvailabilityService: foundationModelAvailabilityService,
                 runtimeModel: runtimeModel,
                 modelDownloadManager: modelDownloadManager,

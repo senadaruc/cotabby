@@ -21,8 +21,8 @@ extension EngineAndModelPaneView {
             guard case .failed(let detail) = runtimeModel.state else { return nil }
             return SettingsPaneCallout(tone: .warning, message: detail)
         case .mlx:
-            // Task 13 replaces this with the MLX server's problem text.
-            return nil
+            guard let problem = mlxServerManager.state.problem else { return nil }
+            return SettingsPaneCallout(tone: .warning, message: problem)
         case .openAICompatible:
             do {
                 let configuration = try suggestionSettings.openAICompatibleConfiguration

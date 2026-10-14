@@ -9,6 +9,9 @@ import SwiftUI
 struct EngineAndModelPaneView: View {
     @ObservedObject var suggestionSettings: SuggestionSettingsModel
     @ObservedObject var openAICompatibleConnectionModel: OpenAICompatibleConnectionModel
+    @ObservedObject var mlxToolchainProvisioner: MLXToolchainProvisioner
+    @ObservedObject var mlxServerManager: MLXServerManager
+    @ObservedObject var mlxModelDownloader: MLXModelDownloader
     @ObservedObject var foundationModelAvailabilityService: FoundationModelAvailabilityService
     @ObservedObject var runtimeModel: RuntimeBootstrapModel
     @ObservedObject var modelDownloadManager: ModelDownloadManager
@@ -24,6 +27,11 @@ struct EngineAndModelPaneView: View {
     /// reads, so the toggle and the model scan stay in sync. LM Studio models are an additive,
     /// read-only source; Cotabby's own folder is always scanned and is always the download target.
     @AppStorage(BundledRuntimeLocator.lmStudioSourceEnabledKey) var lmStudioSourceEnabled = false
+    @State var mlxCustomRepoDraft = ""
+    @State var mlxCustomValidation: MLXRepoValidation?
+    @State var mlxIsCheckingCustomRepo = false
+    @State var pendingMLXDeletion: MLXModelOption?
+    @State var showsMLXRemoveConfirmation = false
 
     var body: some View {
         SettingsPaneScaffold(callout: callout) {
@@ -47,6 +55,7 @@ struct EngineAndModelPaneView: View {
                         title: "Engine",
                         description: "Apple Intelligence runs on-device using macOS's built-in model " +
                             "(newer Apple Silicon Macs only). Open Source runs a downloaded model file. " +
+                            "MLX runs an MLX model with Apple's mlx-lm, which Cotabby installs and manages. " +
                             "Local Endpoint connects to an OpenAI-compatible server you manage.",
                         systemImage: "cpu"
                     )
