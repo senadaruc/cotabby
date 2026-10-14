@@ -36,7 +36,8 @@ nonisolated enum MLXServerDesireResolver {
         toolchain: MLXToolchainState,
         modelID: String,
         cachedModels: [MLXCachedModel]?,
-        promptCacheBytes: Int
+        promptCacheBytes: Int,
+        rejectedModels: [MLXRepoID: MLXModelCompatibility.Reason] = [:]
     ) -> MLXServerDesire {
         guard engine == .mlx else { return .stopped }
         guard isAppleSilicon else { return .unavailable(.unsupportedHardware) }
@@ -51,6 +52,10 @@ nonisolated enum MLXServerDesireResolver {
             // The first cache scan has not finished: wait rather than claim the model is missing.
             guard let cachedModels else { return .stopped }
             guard cachedModels.contains(where: { $0.repoID == repoID }) else {
+                // Downloaded but turned away by the compatibility rule: say why, not "download it".
+                if let reason = rejectedModels[repoID] {
+                    return .unavailable(.modelIncompatible(repoID, reason.message))
+                }
                 return .unavailable(.modelNotDownloaded(repoID))
             }
             return .running(MLXServerLaunch(

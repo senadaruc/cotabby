@@ -21,12 +21,6 @@ nonisolated enum MLXCacheScanner {
         return home.appendingPathComponent(".cache/huggingface/hub", isDirectory: true)
     }
 
-    /// Repo names that mark a model which is not a text generator.
-    private static let excludedNameFragments = ["embed", "rerank", "tts", "whisper", "speech", "asr", "audio"]
-    /// `architectures` entries that mark a non-generative head.
-    private static let excludedArchitectureFragments = ["Embedding", "SequenceClassification", "Speech", "CTC", "Audio"]
-    private static let tokenizerFiles = ["tokenizer.json", "tokenizer.model", "tokenizer_config.json"]
-
     /// Every usable model, sorted by repo id. `supportedModelTypes` is nil when mlx-lm is not
     /// installed yet; the type filter is then skipped (nothing can run anyway, and hiding the
     /// user's models would read as "your download vanished").
@@ -35,40 +29,53 @@ nonisolated enum MLXCacheScanner {
         supportedModelTypes: Set<String>?,
         fileManager: FileManager = .default
     ) -> [MLXCachedModel] {
-        guard let folders = try? fileManager.contentsOfDirectory(atPath: cacheRoot.path) else { return [] }
-        return folders.compactMap { folder -> MLXCachedModel? in
-            guard let repoID = MLXRepoID(cacheFolderName: folder) else { return nil }
-            let lowerName = repoID.name.lowercased()
-            guard !excludedNameFragments.contains(where: { lowerName.contains($0) }) else { return nil }
+        scanDetailed(cacheRoot: cacheRoot, supportedModelTypes: supportedModelTypes, fileManager: fileManager).models
+    }
+
+    /// Like `scan`, but also reports the repos that have a complete snapshot and still fail
+    /// `MLXModelCompatibility`, so the UI can say why a downloaded model is not offered. A repo with
+    /// no snapshot, or with `.incomplete` blobs, is neither listed nor rejected: it is simply not
+    /// downloaded.
+    static func scanDetailed(
+        cacheRoot: URL,
+        supportedModelTypes: Set<String>?,
+        fileManager: FileManager = .default
+    ) -> MLXCacheScanResult {
+        guard let folders = try? fileManager.contentsOfDirectory(atPath: cacheRoot.path) else {
+            return MLXCacheScanResult(models: [], rejected: [:])
+        }
+        var models: [MLXCachedModel] = []
+        var rejected: [MLXRepoID: MLXModelCompatibility.Reason] = [:]
+        for folder in folders {
+            guard let repoID = MLXRepoID(cacheFolderName: folder) else { continue }
             let repoURL = cacheRoot.appendingPathComponent(folder, isDirectory: true)
             guard !hasIncompleteBlob(repoURL, fileManager: fileManager),
                   let snapshot = currentSnapshot(repoURL, fileManager: fileManager),
-                  let files = try? fileManager.contentsOfDirectory(atPath: snapshot.path),
-                  files.contains("config.json"),
-                  files.contains(where: { $0.hasSuffix(".safetensors") }),
-                  files.contains(where: { tokenizerFiles.contains($0) }),
-                  let config = readConfig(snapshot.appendingPathComponent("config.json")),
-                  let modelType = config["model_type"] as? String
-            else { return nil }
-            let architectures = config["architectures"] as? [String] ?? []
-            guard !architectures.contains(where: { arch in excludedArchitectureFragments.contains(where: { arch.contains($0) }) })
-            else { return nil }
-            if let supportedModelTypes, !supportedModelTypes.contains(modelType) { return nil }
-            return MLXCachedModel(
-                repoID: repoID,
-                snapshotURL: snapshot,
-                sizeBytes: snapshotBytes(snapshot, files: files, fileManager: fileManager),
-                modelType: modelType,
-                isInstruct: isInstructName(repoID.name)
-            )
+                  let files = try? fileManager.contentsOfDirectory(atPath: snapshot.path)
+            else { continue }
+            let config = readConfig(snapshot.appendingPathComponent("config.json"))
+            switch MLXModelCompatibility.verdict(
+                repoName: repoID.name, fileNames: files, config: config, supportedModelTypes: supportedModelTypes
+            ) {
+            case .compatible(let modelType, let isInstruct):
+                models.append(MLXCachedModel(
+                    repoID: repoID,
+                    snapshotURL: snapshot,
+                    sizeBytes: snapshotBytes(snapshot, files: files, fileManager: fileManager),
+                    modelType: modelType,
+                    isInstruct: isInstruct
+                ))
+            case .incompatible(let reason):
+                rejected[repoID] = reason
+            }
         }
-        .sorted { $0.repoID.value.localizedCaseInsensitiveCompare($1.repoID.value) == .orderedAscending }
+        models.sort { $0.repoID.value.localizedCaseInsensitiveCompare($1.repoID.value) == .orderedAscending }
+        return MLXCacheScanResult(models: models, rejected: rejected)
     }
 
-    /// "-it", "instruct" or "chat" as a whole `-`/`_`/`.` separated token.
+    /// Forwarded so existing callers keep working; the rule lives in `MLXModelCompatibility`.
     static func isInstructName(_ name: String) -> Bool {
-        let tokens = name.lowercased().split(whereSeparator: { "-_.".contains($0) })
-        return tokens.contains { $0 == "it" || $0 == "instruct" || $0 == "chat" }
+        MLXModelCompatibility.isInstructName(name)
     }
 
     /// Bytes of a repo's blobs, finished and partial, for download progress.
@@ -125,4 +132,12 @@ nonisolated enum MLXCacheScanner {
             return sum + (size?.int64Value ?? 0)
         }
     }
+}
+
+/// The outcome of one cache scan: the models Cotabby can use and why the other complete downloads
+/// cannot be used. A plain value produced by `MLXCacheScanner` and published by
+/// `MLXModelDownloader`; it owns nothing.
+nonisolated struct MLXCacheScanResult: Equatable, Sendable {
+    let models: [MLXCachedModel]
+    let rejected: [MLXRepoID: MLXModelCompatibility.Reason]
 }

@@ -79,6 +79,18 @@ final class MLXCacheScannerTests: XCTestCase {
         XCTAssertTrue(MLXCacheScanner.scan(cacheRoot: root, supportedModelTypes: ["qwen3"]).isEmpty)
     }
 
+    func test_detailedScanReportsRejectedRepos() throws {
+        try repo("models--mlx-community--Qwen3-Embedding-0.6B-8bit", files: modelFiles(type: "qwen3"))
+        try repo("models--mlx-community--Qwen3-TTS-12Hz-1.7B-Base-bf16", files: modelFiles(type: "qwen3"))
+        try repo("models--a--partial", files: modelFiles(type: "qwen3"), incompleteBlob: true)
+        try repo("models--a--ok", files: modelFiles(type: "qwen3"))
+        let result = MLXCacheScanner.scanDetailed(cacheRoot: root, supportedModelTypes: ["qwen3"])
+        XCTAssertEqual(result.models.map(\.repoID.value), ["a/ok"])
+        XCTAssertEqual(result.rejected[MLXRepoID("mlx-community/Qwen3-Embedding-0.6B-8bit")!], .embeddingModel)
+        XCTAssertEqual(result.rejected[MLXRepoID("mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16")!], .speechModel)
+        XCTAssertNil(result.rejected[MLXRepoID("a/partial")!], "an incomplete download is just not downloaded")
+    }
+
     func test_unsupportedModelTypeIsSkippedUnlessTheSetIsUnknown() throws {
         try repo("models--a--odd", files: modelFiles(type: "whisper_like"))
         XCTAssertTrue(MLXCacheScanner.scan(cacheRoot: root, supportedModelTypes: ["gemma4"]).isEmpty)

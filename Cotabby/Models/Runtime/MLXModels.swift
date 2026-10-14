@@ -255,6 +255,8 @@ nonisolated enum MLXUnavailableReason: Equatable, Sendable {
     case notInstalled
     case noModel
     case modelNotDownloaded(MLXRepoID)
+    /// The model is downloaded but `MLXModelCompatibility` rejected it; the string is the reason.
+    case modelIncompatible(MLXRepoID, String)
 
     var message: String {
         switch self {
@@ -262,6 +264,7 @@ nonisolated enum MLXUnavailableReason: Equatable, Sendable {
         case .notInstalled: return "Install MLX in Settings → Engine & Model."
         case .noModel: return "Choose an MLX model in Settings → Engine & Model."
         case .modelNotDownloaded(let id): return "Download \(id.value) in Settings → Engine & Model."
+        case .modelIncompatible(let id, let reason): return "\(id.value) can't run on MLX: \(reason)"
         }
     }
 }

@@ -35,11 +35,12 @@ final class MLXModelDownloaderTests: XCTestCase {
     private func makeDownloader(
         files: @escaping (String) async throws -> [HFRepoFile] = { _ in [] },
         gated: @escaping (String) async throws -> Bool = { _ in false },
+        config: @escaping MLXModelDownloader.ConfigFetch = { _ in Data("{\"model_type\":\"gemma4\"}".utf8) },
         run: @escaping MLXModelDownloader.RunProcess = { _, _, _, _ in MLXProcessResult(status: 0, stdout: "[\"gemma4\"]", stderrTail: []) }
     ) -> MLXModelDownloader {
         let downloader = MLXModelDownloader(
             cacheRoot: cacheRoot, fileManager: .default,
-            fetchRepoFiles: files, fetchIsGated: gated, runProcess: run, pollInterval: .milliseconds(20))
+            fetchRepoFiles: files, fetchIsGated: gated, fetchConfig: config, runProcess: run, pollInterval: .milliseconds(20))
         Self.retained.append(downloader)
         return downloader
     }
@@ -57,28 +58,71 @@ final class MLXModelDownloaderTests: XCTestCase {
 
     func test_validationRejectsBadIDsWithoutNetwork() async {
         let downloader = makeDownloader(files: { _ in XCTFail("no network for a bad id"); return [] })
-        let result = await downloader.validateCustomRepo("../../etc")
+        let result = await downloader.validateCustomRepo("../../etc", toolchain: nil)
         XCTAssertEqual(result, .invalidID)
     }
 
     func test_validationClassifiesRepos() async {
         let missing = makeDownloader(files: { _ in throw HuggingFaceAPIClient.APIError.httpError(statusCode: 404) })
-        let missingResult = await missing.validateCustomRepo("a/b")
+        let missingResult = await missing.validateCustomRepo("a/b", toolchain: nil)
         XCTAssertEqual(missingResult, .notFoundOrPrivate(MLXRepoID("a/b")!))
 
         let gated = makeDownloader(files: { _ in [HFRepoFile(path: "config.json", size: 1)] }, gated: { _ in true })
-        let gatedResult = await gated.validateCustomRepo("a/b")
+        let gatedResult = await gated.validateCustomRepo("a/b", toolchain: nil)
         XCTAssertEqual(gatedResult, .gated(MLXRepoID("a/b")!))
 
         let gguf = makeDownloader(files: { _ in [HFRepoFile(path: "config.json", size: 1), HFRepoFile(path: "m.gguf", size: 9)] })
-        let ggufResult = await gguf.validateCustomRepo("a/b")
-        XCTAssertEqual(ggufResult, .notMLX(MLXRepoID("a/b")!))
+        let ggufResult = await gguf.validateCustomRepo("a/b", toolchain: nil)
+        XCTAssertEqual(ggufResult, .incompatible(MLXRepoID("a/b")!, .missingWeights))
 
         let good = makeDownloader(files: { _ in
-            [HFRepoFile(path: "config.json", size: 1), HFRepoFile(path: "model.safetensors", size: 99)]
+            [HFRepoFile(path: "config.json", size: 1), HFRepoFile(path: "model.safetensors", size: 99),
+             HFRepoFile(path: "tokenizer.json", size: 1)]
         })
-        let goodResult = await good.validateCustomRepo("https://huggingface.co/a/b")
-        XCTAssertEqual(goodResult, .valid(MLXRepoID("a/b")!, totalBytes: 100))
+        let goodResult = await good.validateCustomRepo("https://huggingface.co/a/b", toolchain: toolchain)
+        XCTAssertEqual(goodResult, .valid(MLXRepoID("a/b")!, totalBytes: 101, isInstruct: false))
+    }
+
+    private let fullTree = [
+        HFRepoFile(path: "config.json", size: 1), HFRepoFile(path: "model.safetensors", size: 9),
+        HFRepoFile(path: "tokenizer.json", size: 1)
+    ]
+
+    func test_validationRejectsEmbeddingRepo() async {
+        let tree = fullTree
+        let d = makeDownloader(files: { _ in tree })
+        let result = await d.validateCustomRepo("mlx-community/Qwen3-Embedding-0.6B", toolchain: nil)
+        XCTAssertEqual(result, .incompatible(MLXRepoID("mlx-community/Qwen3-Embedding-0.6B")!, .embeddingModel))
+    }
+
+    func test_validationRejectsUnsupportedModelTypeWhenTheSetIsKnown() async {
+        let tree = fullTree
+        let d = makeDownloader(
+            files: { _ in tree },
+            config: { _ in Data("{\"model_type\":\"mamba_x\"}".utf8) })
+        let result = await d.validateCustomRepo("a/b", toolchain: toolchain)
+        XCTAssertEqual(result, .incompatible(MLXRepoID("a/b")!, .unsupportedArchitecture("mamba_x")))
+    }
+
+    func test_validationMarksInstructReposAndMapsConfig404() async {
+        let tree = fullTree
+        let instruct = makeDownloader(files: { _ in tree })
+        let result = await instruct.validateCustomRepo("a/gemma-it", toolchain: toolchain)
+        XCTAssertEqual(result, .valid(MLXRepoID("a/gemma-it")!, totalBytes: 11, isInstruct: true))
+
+        let gone = makeDownloader(
+            files: { _ in tree },
+            config: { _ in throw HuggingFaceAPIClient.APIError.httpError(statusCode: 404) })
+        let goneResult = await gone.validateCustomRepo("a/b", toolchain: nil)
+        XCTAssertEqual(goneResult, .incompatible(MLXRepoID("a/b")!, .missingConfig))
+    }
+
+    func test_refreshPublishesRejectedModels() async throws {
+        try writeCachedModel("a/gemma", type: "gemma4")
+        try writeCachedModel("a/gemma-embed", type: "gemma4")
+        let downloader = makeDownloader()
+        await downloader.refreshCache(toolchain: toolchain)
+        XCTAssertEqual(downloader.rejectedModels, [MLXRepoID("a/gemma-embed")!: .embeddingModel])
     }
 
     func test_downloadRunsTheToolchainPythonAndRefreshes() async throws {
@@ -119,7 +163,7 @@ final class MLXModelDownloaderTests: XCTestCase {
         })
         downloader.startDownload(MLXRepoID("a/b")!, toolchain: toolchain)
         await waitUntil { downloader.download?.isActive == false }
-        XCTAssertEqual(downloader.download?.failure, "Downloaded, but the installed mlx-lm cannot run this model type.")
+        XCTAssertEqual(downloader.download?.failure, "Downloaded, but it can't be used. Architecture “mamba_x” isn't supported by the installed mlx-lm.")
         XCTAssertEqual(downloader.cachedModels?.isEmpty, true)
     }
 
@@ -168,7 +212,7 @@ final class MLXModelDownloaderTests: XCTestCase {
             runProcess: { _, _, _, _ in MLXProcessResult(status: 0, stdout: "[\"gemma4\"]", stderrTail: []) },
             pollInterval: .milliseconds(20),
             scanCache: { root, types in
-                let models = MLXCacheScanner.scan(cacheRoot: root, supportedModelTypes: types)
+                let models = MLXCacheScanner.scanDetailed(cacheRoot: root, supportedModelTypes: types)
                 if calls.next() == 1 {
                     enteredSignal.yield()
                     for await _ in release { break }

@@ -15,11 +15,11 @@ import Logging
 /// The answer to "can Cotabby download this custom repo?", shown under the Settings text field.
 /// A value type because the pane only renders it; it owns no state and no network access.
 nonisolated enum MLXRepoValidation: Equatable, Sendable {
-    case valid(MLXRepoID, totalBytes: Int64)
+    case valid(MLXRepoID, totalBytes: Int64, isInstruct: Bool)
     case invalidID
     case notFoundOrPrivate(MLXRepoID)
     case gated(MLXRepoID)
-    case notMLX(MLXRepoID)
+    case incompatible(MLXRepoID, MLXModelCompatibility.Reason)
     case networkError(String)
 
     /// Nil for `.valid`; otherwise the sentence the pane shows under the field.
@@ -29,7 +29,7 @@ nonisolated enum MLXRepoValidation: Equatable, Sendable {
         case .invalidID: return "Enter a Hugging Face model id like mlx-community/gemma-4-e4b-5bit."
         case .notFoundOrPrivate(let id): return "\(id.value) was not found, or it is private."
         case .gated(let id): return "\(id.value) needs a Hugging Face login, which Cotabby does not support yet."
-        case .notMLX(let id): return "\(id.value) has no MLX weights (config.json and .safetensors files)."
+        case .incompatible(let id, let reason): return "\(id.value): \(reason.message)"
         case .networkError(let message): return "Could not reach Hugging Face: \(message)"
         }
     }
@@ -43,19 +43,25 @@ nonisolated enum MLXRepoValidation: Equatable, Sendable {
 final class MLXModelDownloader: ObservableObject {
     typealias RepoFilesFetch = (String) async throws -> [HFRepoFile]
     typealias GatedFetch = (String) async throws -> Bool
+    /// Downloads one small file (`config.json`) of a remote repo: repo id, then file path.
+    typealias ConfigFetch = (String) async throws -> Data
     typealias RunProcess = (URL, [String], [String: String], Duration) async throws -> MLXProcessResult
     /// The cache scan, injectable so a test can hold one scan after it has read the disk.
-    typealias CacheScan = @Sendable (URL, Set<String>?) async -> [MLXCachedModel]
+    typealias CacheScan = @Sendable (URL, Set<String>?) async -> MLXCacheScanResult
 
     /// Nil until the first scan finishes, so the server wiring waits instead of reporting the
     /// selected model as missing during launch.
     @Published private(set) var cachedModels: [MLXCachedModel]?
+    /// Complete downloads the compatibility rule turned away, with the reason. Published together
+    /// with `cachedModels` so the UI and the server wiring never see one without the other.
+    @Published private(set) var rejectedModels: [MLXRepoID: MLXModelCompatibility.Reason] = [:]
     @Published private(set) var download: MLXDownloadState?
 
     private let cacheRoot: URL
     private let fileManager: FileManager
     private let fetchRepoFiles: RepoFilesFetch
     private let fetchIsGated: GatedFetch
+    private let fetchConfig: ConfigFetch
     private let runProcess: RunProcess
     private let pollInterval: Duration
     private let scanCache: CacheScan
@@ -72,19 +78,23 @@ final class MLXModelDownloader: ObservableObject {
         fileManager: FileManager = .default,
         fetchRepoFiles: @escaping RepoFilesFetch = { try await HuggingFaceAPIClient.fetchRepoFiles(repoId: $0) },
         fetchIsGated: @escaping GatedFetch = { try await HuggingFaceAPIClient.isGated(repoId: $0) },
+        fetchConfig: @escaping ConfigFetch = {
+            try await HuggingFaceAPIClient.fetchFileData(repoId: $0, path: "config.json")
+        },
         runProcess: @escaping RunProcess = { executable, arguments, environment, timeout in
             try await MLXProcessRunner.run(
                 executable: executable, arguments: arguments, environment: environment, timeout: timeout)
         },
         pollInterval: Duration = .milliseconds(500),
         scanCache: @escaping CacheScan = { root, types in
-            MLXCacheScanner.scan(cacheRoot: root, supportedModelTypes: types)
+            MLXCacheScanner.scanDetailed(cacheRoot: root, supportedModelTypes: types)
         }
     ) {
         self.cacheRoot = cacheRoot
         self.fileManager = fileManager
         self.fetchRepoFiles = fetchRepoFiles
         self.fetchIsGated = fetchIsGated
+        self.fetchConfig = fetchConfig
         self.runProcess = runProcess
         self.pollInterval = pollInterval
         self.scanCache = scanCache
@@ -100,39 +110,46 @@ final class MLXModelDownloader: ObservableObject {
     func refreshCache(toolchain: MLXToolchain?) async {
         refreshGeneration &+= 1
         let generation = refreshGeneration
-        let types: Set<String>?
-        if let toolchain {
-            if let cached = supportedTypes, cached.python == toolchain.pythonExecutable {
-                types = cached.types
-            } else {
-                types = await loadSupportedTypes(python: toolchain.pythonExecutable)
-                // Cache only a real answer: a probe that failed or was cancelled must be retried
-                // next time, not remembered as "unknown" (which turns the type filter off).
-                if types != nil { supportedTypes = (toolchain.pythonExecutable, types) }
-            }
-        } else {
-            types = nil
-        }
+        let types = await supportedModelTypes(for: toolchain)
         let root = cacheRoot
         let scan = scanCache
-        let models = await Task.detached(priority: .utility) {
+        let result = await Task.detached(priority: .utility) {
             await scan(root, types)
         }.value
         // A newer refresh started while this one was suspended, so its answer is the current one.
         // Publishing this older scan could bring back a model that was just deleted.
         guard generation == refreshGeneration else { return }
-        cachedModels = models
+        cachedModels = result.models
+        rejectedModels = result.rejected
     }
 
-    func validateCustomRepo(_ raw: String) async -> MLXRepoValidation {
+    /// Checks a custom repo before any download, with the same `MLXModelCompatibility` rule the
+    /// cache scan uses, so "accepted here" and "listed after download" cannot disagree. The repo's
+    /// `config.json` (a few KB) is fetched for the architecture and head checks; a 404 there means
+    /// the repo has no config at all.
+    func validateCustomRepo(_ raw: String, toolchain: MLXToolchain?) async -> MLXRepoValidation {
         guard let repoID = MLXRepoID(raw) else { return .invalidID }
         do {
             let files = try await fetchRepoFiles(repoID.value)
             if try await fetchIsGated(repoID.value) { return .gated(repoID) }
-            guard files.contains(where: { $0.path == "config.json" }),
-                  files.contains(where: { $0.path.hasSuffix(".safetensors") })
-            else { return .notMLX(repoID) }
-            return .valid(repoID, totalBytes: files.reduce(Int64(0)) { $0 + $1.size })
+            var config: [String: Any]?
+            if files.contains(where: { $0.path == "config.json" }) {
+                do {
+                    let data = try await fetchConfig(repoID.value)
+                    config = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                } catch HuggingFaceAPIClient.APIError.httpError(404) {
+                    return .incompatible(repoID, .missingConfig)
+                }
+            }
+            let types = await supportedModelTypes(for: toolchain)
+            switch MLXModelCompatibility.verdict(
+                repoName: repoID.name, fileNames: files.map(\.path), config: config, supportedModelTypes: types
+            ) {
+            case .incompatible(let reason):
+                return .incompatible(repoID, reason)
+            case .compatible(_, let isInstruct):
+                return .valid(repoID, totalBytes: files.reduce(Int64(0)) { $0 + $1.size }, isInstruct: isInstruct)
+            }
         } catch HuggingFaceAPIClient.APIError.httpError(let code) where [401, 403, 404].contains(code) {
             return .notFoundOrPrivate(repoID)
         } catch {
@@ -238,12 +255,25 @@ final class MLXModelDownloader: ObservableObject {
             if cachedModels?.contains(where: { $0.repoID == repoID }) == true {
                 download = nil
             } else {
+                let why = rejectedModels[repoID]?.message ?? "The installed mlx-lm cannot run this model type."
                 download = MLXDownloadState(
                     repoID: repoID, fraction: 1,
-                    failure: "Downloaded, but the installed mlx-lm cannot run this model type.",
+                    failure: "Downloaded, but it can't be used. \(why)",
                     isActive: false)
             }
         }
+    }
+
+    /// The architectures the installed mlx-lm supports, nil without a toolchain or when the probe
+    /// failed. Cached per Python so the ~1 s probe runs once.
+    private func supportedModelTypes(for toolchain: MLXToolchain?) async -> Set<String>? {
+        guard let toolchain else { return nil }
+        if let cached = supportedTypes, cached.python == toolchain.pythonExecutable { return cached.types }
+        let types = await loadSupportedTypes(python: toolchain.pythonExecutable)
+        // Cache only a real answer: a probe that failed or was cancelled must be retried
+        // next time, not remembered as "unknown" (which turns the type filter off).
+        if types != nil { supportedTypes = (toolchain.pythonExecutable, types) }
+        return types
     }
 
     private func loadSupportedTypes(python: URL) async -> Set<String>? {

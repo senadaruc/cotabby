@@ -888,7 +888,8 @@ final class CotabbyAppEnvironment {
             suggestionSettings.$selectedEngine,
             suggestionSettings.$mlxModelID,
             suggestionSettings.$mlxPromptCacheBytes,
-            Publishers.CombineLatest(mlxToolchainProvisioner.$state, mlxModelDownloader.$cachedModels)
+            Publishers.CombineLatest3(
+                mlxToolchainProvisioner.$state, mlxModelDownloader.$cachedModels, mlxModelDownloader.$rejectedModels)
         )
         .map { engine, modelID, cacheBytes, toolchainAndCache in
             MLXServerDesireResolver.desire(
@@ -897,7 +898,8 @@ final class CotabbyAppEnvironment {
                 toolchain: toolchainAndCache.0,
                 modelID: modelID,
                 cachedModels: toolchainAndCache.1,
-                promptCacheBytes: cacheBytes
+                promptCacheBytes: cacheBytes,
+                rejectedModels: toolchainAndCache.2
             )
         }
         .removeDuplicates()

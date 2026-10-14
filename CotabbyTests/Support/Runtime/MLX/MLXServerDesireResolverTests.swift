@@ -18,7 +18,8 @@ final class MLXServerDesireResolverTests: XCTestCase {
         appleSilicon: Bool = true,
         toolchain: MLXToolchainState? = nil,
         modelID: String = "mlx-community/gemma-4-e4b-5bit",
-        cached: [MLXCachedModel]?? = .none
+        cached: [MLXCachedModel]?? = .none,
+        rejected: [MLXRepoID: MLXModelCompatibility.Reason] = [:]
     ) -> MLXServerDesire {
         MLXServerDesireResolver.desire(
             engine: engine,
@@ -26,8 +27,19 @@ final class MLXServerDesireResolverTests: XCTestCase {
             toolchain: toolchain ?? .ready(self.toolchain),
             modelID: modelID,
             cachedModels: cached ?? [model],
-            promptCacheBytes: 1 << 30
+            promptCacheBytes: 1 << 30,
+            rejectedModels: rejected
         )
+    }
+
+    func test_selectedModelRejectedByCompatibilityIsIncompatibleNotMissing() {
+        let id = MLXRepoID("a/embed")!
+        XCTAssertEqual(
+            desire(modelID: "a/embed", cached: [], rejected: [id: .embeddingModel]),
+            .unavailable(.modelIncompatible(id, "Embedding model: it can't write text.")))
+        XCTAssertEqual(desire(modelID: "a/embed", cached: []), .unavailable(.modelNotDownloaded(id)))
+        XCTAssertEqual(
+            MLXUnavailableReason.modelIncompatible(id, "x").message, "a/embed can't run on MLX: x")
     }
 
     func test_otherEnginesStopTheServer() {

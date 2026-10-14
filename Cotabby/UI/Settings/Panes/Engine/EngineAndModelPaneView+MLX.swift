@@ -204,16 +204,19 @@ extension EngineAndModelPaneView {
                 Button("Check", action: checkMLXCustomRepo)
                     .disabled(mlxCustomRepoDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         || mlxIsCheckingCustomRepo || mlxIsBusy)
-                if case .valid(let repoID, _) = mlxCustomValidation {
+                if case .valid(let repoID, _, _) = mlxCustomValidation {
                     Button("Download") { startMLXDownload(repoID) }
                         .buttonStyle(.borderedProminent)
                         .disabled(!canStartMLXDownload)
                 }
             }
-            if case .valid(let repoID, let bytes) = mlxCustomValidation {
+            if case .valid(let repoID, let bytes, let isInstruct) = mlxCustomValidation {
                 Text("\(repoID.value) · \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if isInstruct {
+                    Text(MLXModelCatalog.instructNote).font(.caption).foregroundStyle(.secondary)
+                }
             } else if let message = mlxCustomValidation?.message {
                 Text(message).font(.caption).foregroundStyle(.orange)
             }
@@ -270,7 +273,7 @@ extension EngineAndModelPaneView {
         let draft = mlxCustomRepoDraft
         mlxIsCheckingCustomRepo = true
         Task {
-            let result = await mlxModelDownloader.validateCustomRepo(draft)
+            let result = await mlxModelDownloader.validateCustomRepo(draft, toolchain: mlxToolchainProvisioner.state.toolchain)
             mlxIsCheckingCustomRepo = false
             // The field may have changed while the check ran; a stale answer would mislabel it.
             guard draft == mlxCustomRepoDraft else { return }
