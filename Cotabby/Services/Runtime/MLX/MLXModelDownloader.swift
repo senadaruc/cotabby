@@ -44,6 +44,8 @@ final class MLXModelDownloader: ObservableObject {
     typealias RepoFilesFetch = (String) async throws -> [HFRepoFile]
     typealias GatedFetch = (String) async throws -> Bool
     typealias RunProcess = (URL, [String], [String: String], Duration) async throws -> MLXProcessResult
+    /// The cache scan, injectable so a test can hold one scan after it has read the disk.
+    typealias CacheScan = @Sendable (URL, Set<String>?) async -> [MLXCachedModel]
 
     /// Nil until the first scan finishes, so the server wiring waits instead of reporting the
     /// selected model as missing during launch.
@@ -56,9 +58,14 @@ final class MLXModelDownloader: ObservableObject {
     private let fetchIsGated: GatedFetch
     private let runProcess: RunProcess
     private let pollInterval: Duration
+    private let scanCache: CacheScan
     /// The architectures the installed mlx-lm supports, cached per Python (asked once, ~1 s).
     private var supportedTypes: (python: URL, types: Set<String>?)?
     private var downloadTask: Task<Void, Never>?
+    /// Bumped by every `refreshCache`. Scans run off the main actor, so two can overlap; a scan
+    /// that started before a delete could finish last and publish the deleted model again. Only
+    /// the newest refresh may publish.
+    private var refreshGeneration: UInt64 = 0
 
     init(
         cacheRoot: URL,
@@ -69,7 +76,10 @@ final class MLXModelDownloader: ObservableObject {
             try await MLXProcessRunner.run(
                 executable: executable, arguments: arguments, environment: environment, timeout: timeout)
         },
-        pollInterval: Duration = .milliseconds(500)
+        pollInterval: Duration = .milliseconds(500),
+        scanCache: @escaping CacheScan = { root, types in
+            MLXCacheScanner.scan(cacheRoot: root, supportedModelTypes: types)
+        }
     ) {
         self.cacheRoot = cacheRoot
         self.fileManager = fileManager
@@ -77,6 +87,7 @@ final class MLXModelDownloader: ObservableObject {
         self.fetchIsGated = fetchIsGated
         self.runProcess = runProcess
         self.pollInterval = pollInterval
+        self.scanCache = scanCache
     }
 
     static func live() -> MLXModelDownloader {
@@ -87,6 +98,8 @@ final class MLXModelDownloader: ObservableObject {
     }
 
     func refreshCache(toolchain: MLXToolchain?) async {
+        refreshGeneration &+= 1
+        let generation = refreshGeneration
         let types: Set<String>?
         if let toolchain {
             if let cached = supportedTypes, cached.python == toolchain.pythonExecutable {
@@ -101,9 +114,14 @@ final class MLXModelDownloader: ObservableObject {
             types = nil
         }
         let root = cacheRoot
-        cachedModels = await Task.detached(priority: .utility) {
-            MLXCacheScanner.scan(cacheRoot: root, supportedModelTypes: types)
+        let scan = scanCache
+        let models = await Task.detached(priority: .utility) {
+            await scan(root, types)
         }.value
+        // A newer refresh started while this one was suspended, so its answer is the current one.
+        // Publishing this older scan could bring back a model that was just deleted.
+        guard generation == refreshGeneration else { return }
+        cachedModels = models
     }
 
     func validateCustomRepo(_ raw: String) async -> MLXRepoValidation {
@@ -140,8 +158,32 @@ final class MLXModelDownloader: ObservableObject {
     /// Removes the repo from the shared cache, then rescans (the server wiring reacts if it was
     /// the selected model).
     func delete(_ repoID: MLXRepoID, toolchain: MLXToolchain?) async {
-        try? fileManager.removeItem(at: cacheRoot.appendingPathComponent(repoID.cacheFolderName, isDirectory: true))
-        CotabbyLogger.runtime.info("Deleted MLX model", metadata: ["model": .string(repoID.value)])
+        // A download still writing into this folder would bring the model back, so stop it and wait
+        // until it has really finished before removing anything.
+        if download?.repoID == repoID, download?.isActive == true {
+            let task = downloadTask
+            task?.cancel()
+            await task?.value
+        }
+        let folder = cacheRoot.appendingPathComponent(repoID.cacheFolderName, isDirectory: true)
+        let manager = fileManager
+        // Model folders are several GB; removing them on the main actor would stall the UI.
+        let failure: String? = await Task.detached(priority: .utility) { () -> String? in
+            guard manager.fileExists(atPath: folder.path) else { return nil }
+            do {
+                try manager.removeItem(at: folder)
+                return nil
+            } catch {
+                return error.localizedDescription
+            }
+        }.value
+        if let failure {
+            CotabbyLogger.runtime.error(
+                "Could not delete MLX model",
+                metadata: ["model": .string(repoID.value), "error": .string(failure)])
+        } else {
+            CotabbyLogger.runtime.info("Deleted MLX model", metadata: ["model": .string(repoID.value)])
+        }
         await refreshCache(toolchain: toolchain)
     }
 

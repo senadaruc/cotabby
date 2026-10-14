@@ -142,4 +142,76 @@ final class MLXModelDownloaderTests: XCTestCase {
         XCTAssertEqual(downloader.cachedModels, [])
         XCTAssertFalse(FileManager.default.fileExists(atPath: cacheRoot.appendingPathComponent("models--a--b").path))
     }
+
+    /// Review focus 2 with a race: a scan that read the disk before the delete finishes after it.
+    /// The first scan reads the model, then holds; the delete's own scan runs and publishes the
+    /// list without it; releasing the stale scan must not bring the model back.
+    func test_staleRefreshCannotResurrectADeletedModel() async throws {
+        try writeCachedModel("a/b")
+        let calls = CallCounter()
+        let (entered, enteredSignal) = AsyncStream<Void>.makeStream()
+        let (release, releaseSignal) = AsyncStream<Void>.makeStream()
+        let downloader = MLXModelDownloader(
+            cacheRoot: cacheRoot, fileManager: .default,
+            fetchRepoFiles: { _ in [] }, fetchIsGated: { _ in false },
+            runProcess: { _, _, _, _ in MLXProcessResult(status: 0, stdout: "[\"gemma4\"]", stderrTail: []) },
+            pollInterval: .milliseconds(20),
+            scanCache: { root, types in
+                let models = MLXCacheScanner.scan(cacheRoot: root, supportedModelTypes: types)
+                if calls.next() == 1 {
+                    enteredSignal.yield()
+                    for await _ in release { break }
+                }
+                return models
+            }
+        )
+        let stale = Task { await downloader.refreshCache(toolchain: nil) }
+        for await _ in entered { break }
+
+        // Nil toolchain skips the type probe, so the delete's scan does not wait on the held scan.
+        await downloader.delete(MLXRepoID("a/b")!, toolchain: nil)
+        XCTAssertEqual(downloader.cachedModels, [])
+
+        releaseSignal.yield()
+        await stale.value
+        XCTAssertEqual(downloader.cachedModels, [], "the older scan saw the model before the delete and must not publish it")
+    }
+
+    /// Review focus 2: deleting the repo that is downloading must stop the download first, so the
+    /// partial files cannot reappear once the folder is gone.
+    func test_deletingTheActiveDownloadCancelsItFirst() async throws {
+        let downloader = makeDownloader(
+            files: { _ in [HFRepoFile(path: "model.safetensors", size: 1000)] },
+            run: { [unowned self] _, arguments, _, _ in
+                guard arguments.last == "a/b" else { return MLXProcessResult(status: 0, stdout: "[]", stderrTail: []) }
+                let blobs = self.cacheRoot.appendingPathComponent("models--a--b/blobs")
+                try FileManager.default.createDirectory(at: blobs, withIntermediateDirectories: true)
+                try Data(count: 500).write(to: blobs.appendingPathComponent("x.incomplete"))
+                try await Task.sleep(for: .seconds(60))
+                return MLXProcessResult(status: 0, stdout: "", stderrTail: [])
+            }
+        )
+        downloader.startDownload(MLXRepoID("a/b")!, toolchain: toolchain)
+        await waitUntil { downloader.download?.fraction == 0.5 }
+
+        await downloader.delete(MLXRepoID("a/b")!, toolchain: nil)
+
+        XCTAssertNil(downloader.download, "the delete waited for the download to stop")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cacheRoot.appendingPathComponent("models--a--b").path))
+        XCTAssertEqual(downloader.cachedModels, [])
+    }
+}
+
+/// Counts calls from a `@Sendable` closure. The lock makes the count safe to bump from the detached scan.
+private final class CallCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    /// Returns the 1-based number of this call.
+    func next() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        count += 1
+        return count
+    }
 }
