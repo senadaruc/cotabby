@@ -164,9 +164,10 @@ from Accessibility and Input Monitoring.
 
 Runtime generation is split by responsibility:
 
-- `SuggestionEngineRouter`: selects Apple Intelligence, Open Source, or the configured
+- `SuggestionEngineRouter`: selects Apple Intelligence, Open Source, MLX, or the configured
   OpenAI-compatible endpoint and owns the narrow Apple-to-llama language fallback.
 - `FoundationModelSuggestionEngine`: Apple on-device generation path.
+- `MLXServerManager`: Cotabby's `mlx_lm.server` child process (loopback only), with `MLXToolchainProvisioner` and `MLXModelDownloader` for its install and models.
 - `LlamaSuggestionEngine`: request-to-prompt, llama result handling, and cache reset handoff.
 - `OpenAICompatibleSuggestionEngine`: completion/chat transport, SSE streaming, and Ollama preload
   behavior for the configured endpoint.
