@@ -38,7 +38,7 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
     private let rewritePreferences: RewritePreferencesStore
     private let rewriteCredentials: RewriteCredentialVault
     private let rewriteModelList: RewriteModelListService
-    private let rewriteUsesAppleIntelligence: Bool
+    private let rewriteEngine: RewriteEngine
 
     private var settingsWindowController: NSWindowController?
 
@@ -77,7 +77,7 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
         rewritePreferences: RewritePreferencesStore,
         rewriteCredentials: RewriteCredentialVault,
         rewriteModelList: RewriteModelListService,
-        rewriteUsesAppleIntelligence: Bool
+        rewriteEngine: RewriteEngine
     ) {
         self.appUpdateManager = appUpdateManager
         self.permissionManager = permissionManager
@@ -106,7 +106,7 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
         self.rewritePreferences = rewritePreferences
         self.rewriteCredentials = rewriteCredentials
         self.rewriteModelList = rewriteModelList
-        self.rewriteUsesAppleIntelligence = rewriteUsesAppleIntelligence
+        self.rewriteEngine = rewriteEngine
     }
 
     /// Shows the settings window, reusing the existing instance if it is already open.
@@ -149,7 +149,7 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
                     rewritePreferences: rewritePreferences,
                     rewriteCredentials: rewriteCredentials,
                     rewriteModelList: rewriteModelList,
-                    rewriteUsesAppleIntelligence: rewriteUsesAppleIntelligence,
+                    rewriteEngine: rewriteEngine,
                     onQuit: { NSApplication.shared.terminate(nil) }
                 )
             )

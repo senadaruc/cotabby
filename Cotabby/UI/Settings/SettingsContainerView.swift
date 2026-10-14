@@ -42,7 +42,7 @@ struct SettingsContainerView: View {
     @ObservedObject var rewritePreferences: RewritePreferencesStore
     let rewriteCredentials: RewriteCredentialVault
     let rewriteModelList: RewriteModelListService
-    let rewriteUsesAppleIntelligence: Bool
+    let rewriteEngine: RewriteEngine
     let onQuit: () -> Void
 
     @AppStorage("cotabbySettingsSelectedCategoryV2")
@@ -168,8 +168,7 @@ struct SettingsContainerView: View {
             TranslationPaneView(preferences: translationPreferences, service: translationService)
         case .rewrite:
             RewritePaneView(preferences: rewritePreferences, credentials: rewriteCredentials,
-                            modelList: rewriteModelList, usesAppleIntelligence: rewriteUsesAppleIntelligence,
-                            mlxToolchainProvisioner: mlxToolchainProvisioner, mlxModelDownloader: mlxModelDownloader)
+                            modelList: rewriteModelList, engine: rewriteEngine, suggestionSettings: suggestionSettings)
         case .context:
             ContextPaneView(suggestionSettings: suggestionSettings, typingHistory: typingHistoryStore)
         case .shortcuts:

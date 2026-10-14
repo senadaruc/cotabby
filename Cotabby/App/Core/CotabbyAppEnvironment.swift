@@ -424,18 +424,35 @@ final class CotabbyAppEnvironment {
         // Selection rewrite: its own preferences and Keychain item, a local and an API provider, and
         // memory gathered from the conversation in focus. Shares the inserter and llama runtime.
         // Built once here: the same store and credential instances feed the Settings pane and the engine.
-        let rewritePreferences = RewritePreferencesStore()
+        let rewritePreferences = RewritePreferencesStore(
+            isAppleIntelligenceAvailable: foundationModelAvailabilityService.isAvailable
+        )
         // One Keychain item per cloud service, so switching services keeps every key.
         let rewriteCredentials = RewriteCredentialVault()
         let anthropicClient = AnthropicMessagesClient()
         let rewriteModelList = RewriteModelListService(client: openAICompatibleClient, anthropic: anthropicClient)
-        let localRewrite = LocalRewriteProvider(
-            runtimeManager: runtimeManager,
-            hasLocalModel: { [weak runtimeModel] in runtimeModel?.selectedModelFilename != nil },
-            availability: foundationModelAvailabilityService
-        )
+        // No rewrite-only models: every local provider reuses what autocomplete is set up with.
         let rewriteEngine = RewriteEngine(
-            local: localRewrite,
+            appleIntelligence: AppleIntelligenceRewriteProvider(availability: foundationModelAvailabilityService),
+            openSource: OpenSourceRewriteProvider(
+                runtimeManager: runtimeManager,
+                hasLocalModel: { [weak runtimeModel] in runtimeModel?.selectedModelFilename != nil }
+            ),
+            localEndpoint: LocalEndpointRewriteProvider(
+                client: openAICompatibleClient,
+                configuration: { [weak suggestionSettings] in
+                    guard let suggestionSettings else { throw OpenAICompatibleClientError.invalidResponse }
+                    return try suggestionSettings.openAICompatibleConfiguration
+                },
+                apiKey: { [weak suggestionSettings] in try suggestionSettings?.openAICompatibleAPIKey() }
+            ),
+            mlx: MLXRewriteProvider(
+                controller: mlxRewriteServer,
+                autocompleteServer: mlxServerManager,
+                autocompleteEngine: { [weak suggestionSettings] in suggestionSettings?.selectedEngine ?? .llamaOpenSource },
+                modelID: { [weak suggestionSettings] in suggestionSettings?.mlxModelID ?? "" },
+                client: openAICompatibleClient
+            ),
             api: APIRewriteProvider(
                 client: openAICompatibleClient,
                 anthropic: anthropicClient,
@@ -444,11 +461,7 @@ final class CotabbyAppEnvironment {
                     rewriteCredentials?.store(for: service) ?? InMemoryOpenAICompatibleCredentialStore()
                 }
             ),
-            mlx: MLXRewriteProvider(
-                controller: mlxRewriteServer,
-                client: openAICompatibleClient,
-                preferences: { [weak rewritePreferences] in rewritePreferences?.preferences ?? .defaults }
-            ),
+            autocompleteEngine: { [weak suggestionSettings] in suggestionSettings?.selectedEngine ?? .llamaOpenSource },
             preferences: { [weak rewritePreferences] in rewritePreferences?.preferences ?? .defaults }
         )
         let selectionRewriteCoordinator = SelectionRewriteCoordinator(
@@ -512,7 +525,7 @@ final class CotabbyAppEnvironment {
             rewritePreferences: rewritePreferences,
             rewriteCredentials: rewriteCredentials,
             rewriteModelList: rewriteModelList,
-            rewriteUsesAppleIntelligence: localRewrite.usesAppleIntelligence
+            rewriteEngine: rewriteEngine
         )
 
         let interactionState = SuggestionInteractionState()
@@ -923,10 +936,9 @@ final class CotabbyAppEnvironment {
             }
             .store(in: &cancellables)
 
-        // The rewrite server runs only while Rewrite uses MLX: switching the provider away or
-        // changing the rewrite model stops it (the next rewrite restarts it on the new model).
-        rewritePreferences.$preferences
-            .map { ($0.provider, $0.mlxModelID) }
+        // The on-demand rewrite server serves autocomplete's MLX model: switching the rewrite
+        // provider or changing that model stops it (the next rewrite restarts it on the new model).
+        Publishers.CombineLatest(rewritePreferences.$preferences.map(\.provider), suggestionSettings.$mlxModelID)
             .removeDuplicates { $0 == $1 }
             .dropFirst()
             .sink { [weak self] _ in
