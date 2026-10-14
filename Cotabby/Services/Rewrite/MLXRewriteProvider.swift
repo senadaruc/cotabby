@@ -18,12 +18,15 @@ final class MLXRewriteProvider: RewriteProviding {
     private let controller: MLXRewriteServerController
     private let client: OpenAICompatibleAPIClient
     private let preferences: @MainActor () -> RewritePreferences
+    private let healthCheck: MLXHealthCheck
 
     init(
         controller: MLXRewriteServerController,
         client: OpenAICompatibleAPIClient,
-        preferences: @escaping @MainActor () -> RewritePreferences
+        preferences: @escaping @MainActor () -> RewritePreferences,
+        healthCheck: @escaping MLXHealthCheck = MLXHealthProbe.check(port:)
     ) {
+        self.healthCheck = healthCheck
         self.controller = controller
         self.client = client
         self.preferences = preferences
@@ -56,8 +59,9 @@ final class MLXRewriteProvider: RewriteProviding {
                 onPartialRawText: onPartial
             )
         } catch let error as OpenAICompatibleClientError {
-            // A dead generator answers 404/500 while the process stays up; have the manager restart it.
-            if let reason = MLXGeneratorFailure.reason(for: error), let port = configuration.baseURL.port {
+            // A 404 may mean the generator died or just that this request failed; `/health` decides.
+            if let reason = MLXGeneratorFailure.reason(for: error), let port = configuration.baseURL.port,
+               await healthCheck(port) != .healthy {
                 controller.manager.reportBroken(port: port, reason: reason)
                 throw RewriteError.mlxUnavailable("MLX is restarting…")
             }

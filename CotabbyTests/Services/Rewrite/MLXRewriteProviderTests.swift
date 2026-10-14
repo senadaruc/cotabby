@@ -22,7 +22,10 @@ final class MLXRewriteProviderTests: XCTestCase {
         let probe: MLXFakeProbe
     }
 
-    private func makeRig(toolchain: MLXToolchainState? = nil, cached: Bool = true) -> Rig {
+    private func makeRig(
+        toolchain: MLXToolchainState? = nil, cached: Bool = true,
+        health: MLXServerHealth = .generatorDead
+    ) -> Rig {
         let launcher = MLXFakeLauncher()
         let probe = MLXFakeProbe()
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("mlx-rp-\(UUID().uuidString)")
@@ -46,7 +49,7 @@ final class MLXRewriteProviderTests: XCTestCase {
         let client = OpenAICompatibleAPIClient(session: URLSession(configuration: configuration))
         var prefs = RewritePreferences.defaults
         prefs.provider = .mlx
-        let provider = MLXRewriteProvider(controller: controller, client: client, preferences: { prefs })
+        let provider = MLXRewriteProvider(controller: controller, client: client, preferences: { prefs }, healthCheck: { _ in health })
         Self.retained.append(contentsOf: [launcher, probe, manager, controller, client, provider] as [AnyObject])
         return Rig(provider: provider, controller: controller, launcher: launcher, probe: probe)
     }
@@ -81,8 +84,8 @@ final class MLXRewriteProviderTests: XCTestCase {
         XCTAssertEqual(partials.last, "Fixed text.")
     }
 
-    func test_a404FromTheRewriteServerReportsItBroken() async throws {
-        let rig = makeRig()
+    private func rewrite404(health: MLXServerHealth) async -> (Rig, Error?) {
+        let rig = makeRig(health: health)
         MLXRewriteStubURLProtocol.handler = { request in
             (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!, Data())
         }
@@ -92,13 +95,31 @@ final class MLXRewriteProviderTests: XCTestCase {
         rig.probe.succeedNext()
         do {
             _ = try await result
-            XCTFail("expected an error")
+            return (rig, nil)
         } catch {
-            XCTAssertEqual(error as? RewriteError, .mlxUnavailable("MLX is restarting…"))
+            return (rig, error)
         }
-        // reportBroken terminated the ready server and queued a restart with the 1 s backoff.
+    }
+
+    func test_a404WithHealth503ReportsTheRewriteServerBroken() async {
+        let (rig, error) = await rewrite404(health: .generatorDead)
+        XCTAssertEqual(error as? RewriteError, .mlxUnavailable("MLX is restarting…"))
         await waitUntil { rig.launcher.launches.count == 2 }
         XCTAssertEqual(rig.launcher.launches[0].process.terminateCount, 1)
+    }
+
+    func test_a404WithHealthUnreachableReportsTheRewriteServerBroken() async {
+        let (rig, error) = await rewrite404(health: .unreachable)
+        XCTAssertEqual(error as? RewriteError, .mlxUnavailable("MLX is restarting…"))
+        await waitUntil { rig.launcher.launches.count == 2 }
+    }
+
+    func test_a404WithAHealthyServerKeepsItAndFailsOnlyTheRewrite() async {
+        let (rig, error) = await rewrite404(health: .healthy)
+        XCTAssertEqual(error as? OpenAICompatibleClientError, .server(statusCode: 404))
+        for _ in 0..<5 { await Task.yield() }
+        XCTAssertEqual(rig.launcher.launches.count, 1)
+        XCTAssertEqual(rig.launcher.launches[0].process.terminateCount, 0)
     }
 
     func test_unavailableServerThrowsWithoutAnyHTTPTraffic() async {

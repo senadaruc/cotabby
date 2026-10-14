@@ -26,19 +26,23 @@ final class OpenAICompatibleSuggestionEngine: SuggestionGenerating {
     /// MLX only: told the port and a short reason when a request shows the server's generator died
     /// (see `MLXGeneratorFailure`). The endpoint backend never calls it.
     private let onServerBroken: (@MainActor (Int, String) -> Void)?
+    /// Confirms a suspicious 404 against the server's `/health` before reporting it broken.
+    private let healthCheck: MLXHealthCheck
 
     init(
         client: OpenAICompatibleAPIClient,
         configurationProvider: @escaping @MainActor () throws -> OpenAICompatibleEndpointConfiguration,
         apiKeyProvider: @escaping @MainActor () throws -> String?,
         backend: Backend = .endpoint,
-        onServerBroken: (@MainActor (Int, String) -> Void)? = nil
+        onServerBroken: (@MainActor (Int, String) -> Void)? = nil,
+        healthCheck: @escaping MLXHealthCheck = MLXHealthProbe.check(port:)
     ) {
         self.client = client
         self.configurationProvider = configurationProvider
         self.apiKeyProvider = apiKeyProvider
         self.backend = backend
         self.onServerBroken = onServerBroken
+        self.healthCheck = healthCheck
     }
 
     func generateSuggestion(for request: SuggestionRequest) async throws -> SuggestionResult {
@@ -145,12 +149,18 @@ final class OpenAICompatibleSuggestionEngine: SuggestionGenerating {
             throw SuggestionClientError.cancelled
         } catch let error as OpenAICompatibleClientError
             where backend == .mlx && MLXGeneratorFailure.reason(for: error) != nil {
-            // Our own loopback server only answers like this when its generator died. The manager
-            // restarts it; this request fails now with the reason instead of a generic error.
-            if let serverPort, let reason = MLXGeneratorFailure.reason(for: error) {
-                CotabbyLogger.suggestion.error("MLX generator failed: \(reason)", metadata: metadata)
-                onServerBroken?(serverPort, reason)
+            // Looks like a dead generator, but mlx_lm answers 404 for per-request failures too.
+            // `/health` decides: healthy means this one request failed and the server stays.
+            guard let serverPort, let reason = MLXGeneratorFailure.reason(for: error) else {
+                throw SuggestionClientError.generationFailed(error.localizedDescription)
             }
+            guard await healthCheck(serverPort) != .healthy else {
+                CotabbyLogger.suggestion.error(
+                    "MLX request failed but the server is healthy: \(reason)", metadata: metadata)
+                throw SuggestionClientError.generationFailed(error.localizedDescription)
+            }
+            CotabbyLogger.suggestion.error("MLX generator failed: \(reason)", metadata: metadata)
+            onServerBroken?(serverPort, reason)
             throw SuggestionClientError.unavailable("MLX is restarting…")
         } catch let error as SuggestionClientError {
             // The MLX configuration provider reports "server not ready" this way, already phrased

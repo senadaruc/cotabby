@@ -23,12 +23,11 @@ final class MLXServerLogFilterTests: XCTestCase {
         "ConnectionResetError: [Errno 54] Connection reset by peer"
     ]
     private let real = [
-        "Exception in thread Thread-2 (_run_generate):",
+        "mlx_lm.server generation thread died: Resource limit exceeded",
         "Traceback (most recent call last):",
         #"  File "/mlx_lm/server.py", line 700, in _run_generate"#,
         "    response = next(gen)",
-        "RuntimeError: [metal::malloc] Resource limit exceeded",
-        "mlx_lm.server generation thread died: Resource limit exceeded"
+        "RuntimeError: [metal::malloc] Resource limit exceeded"
     ]
 
     func test_dropsAccessLines() {
@@ -60,7 +59,8 @@ final class MLXServerLogFilterTests: XCTestCase {
 
     func test_classifiesGeneratorDeath() {
         XCTAssertEqual(MLXGeneratorFailure.reason(for: OpenAICompatibleClientError.server(statusCode: 404)), "HTTP 404")
-        XCTAssertEqual(MLXGeneratorFailure.reason(for: OpenAICompatibleClientError.server(statusCode: 500)), "HTTP 500")
+        // mlx_lm never answers 500; only 404 is a suspect.
+        XCTAssertNil(MLXGeneratorFailure.reason(for: OpenAICompatibleClientError.server(statusCode: 500)))
         XCTAssertEqual(
             MLXGeneratorFailure.reason(for: OpenAICompatibleClientError.streamError("generation thread died: x")),
             "generation thread died")

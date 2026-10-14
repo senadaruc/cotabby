@@ -81,18 +81,38 @@ final class OpenAICompatibleSuggestionEngineTests: XCTestCase {
         XCTAssertEqual(EngineStubURLProtocol.requestedURLs, ["http://127.0.0.1:11434/api/generate"])
     }
 
-    func test_mlxBackend_404ReportsTheServerBrokenAndSaysItIsRestarting() async {
+    private func mlx404Engine(
+        health: MLXServerHealth, reports: @escaping @MainActor (Int, String) -> Void
+    ) -> OpenAICompatibleSuggestionEngine {
         EngineStubURLProtocol.handler = { request in
             (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!, Data())
         }
-        var reports: [(Int, String)] = []
-        let engine = makeEngine(
+        return makeEngine(
             baseURL: "http://127.0.0.1:50123/v1", mode: .completions, backend: .mlx,
-            onServerBroken: { reports.append(($0, $1)) })
+            onServerBroken: reports, healthCheck: { _ in health })
+    }
+
+    func test_mlxBackend_404WithHealth503ReportsBrokenAndSaysItIsRestarting() async {
+        var reports: [(Int, String)] = []
+        let engine = mlx404Engine(health: .generatorDead) { reports.append(($0, $1)) }
         await assertThrows(engine, .unavailable("MLX is restarting…"))
         XCTAssertEqual(reports.count, 1)
         XCTAssertEqual(reports.first?.0, 50123)
         XCTAssertEqual(reports.first?.1, "HTTP 404")
+    }
+
+    func test_mlxBackend_404WithHealthUnreachableReportsBroken() async {
+        var reports = 0
+        let engine = mlx404Engine(health: .unreachable) { _, _ in reports += 1 }
+        await assertThrows(engine, .unavailable("MLX is restarting…"))
+        XCTAssertEqual(reports, 1)
+    }
+
+    func test_mlxBackend_404WithHealthyServerKeepsItAndFailsOnlyThisRequest() async {
+        var reports = 0
+        let engine = mlx404Engine(health: .healthy) { _, _ in reports += 1 }
+        await assertThrows(engine, .generationFailed("The endpoint returned HTTP 404."))
+        XCTAssertEqual(reports, 0)
     }
 
     func test_mlxBackend_streamedGenerationThreadDiedReportsBroken() async {
@@ -231,7 +251,8 @@ final class OpenAICompatibleSuggestionEngineTests: XCTestCase {
         mode: OpenAICompatibleAPIMode = .completions,
         apiKey: String? = nil,
         backend: OpenAICompatibleSuggestionEngine.Backend = .endpoint,
-        onServerBroken: (@MainActor (Int, String) -> Void)? = nil
+        onServerBroken: (@MainActor (Int, String) -> Void)? = nil,
+        healthCheck: @escaping MLXHealthCheck = { _ in .generatorDead }
     ) -> OpenAICompatibleSuggestionEngine {
         makeEngine(
             configuration: {
@@ -243,7 +264,8 @@ final class OpenAICompatibleSuggestionEngineTests: XCTestCase {
             },
             apiKey: apiKey,
             backend: backend,
-            onServerBroken: onServerBroken
+            onServerBroken: onServerBroken,
+            healthCheck: healthCheck
         )
     }
 
@@ -251,7 +273,8 @@ final class OpenAICompatibleSuggestionEngineTests: XCTestCase {
         configuration: @escaping @MainActor () throws -> OpenAICompatibleEndpointConfiguration,
         apiKey: String? = nil,
         backend: OpenAICompatibleSuggestionEngine.Backend = .endpoint,
-        onServerBroken: (@MainActor (Int, String) -> Void)? = nil
+        onServerBroken: (@MainActor (Int, String) -> Void)? = nil,
+        healthCheck: @escaping MLXHealthCheck = { _ in .generatorDead }
     ) -> OpenAICompatibleSuggestionEngine {
         let sessionConfiguration = URLSessionConfiguration.ephemeral
         sessionConfiguration.protocolClasses = [EngineStubURLProtocol.self]
@@ -261,7 +284,8 @@ final class OpenAICompatibleSuggestionEngineTests: XCTestCase {
             configurationProvider: configuration,
             apiKeyProvider: { apiKey },
             backend: backend,
-            onServerBroken: onServerBroken
+            onServerBroken: onServerBroken,
+            healthCheck: healthCheck
         )
         Self.retained.append(contentsOf: [client, engine] as [AnyObject])
         return engine
