@@ -106,4 +106,15 @@ final class RewritePreferencesStoreTests: XCTestCase {
         XCTAssertEqual(RewriteCloudProvider.openAI.keychainSuffix, "rewrite-endpoint.openAI")
         XCTAssertTrue(RewriteCloudProvider.anthropic.suggestedModels.contains("claude-sonnet-5-5"))
     }
+
+    func test_mlxModelDefaultsToTheInstructModelAndPersists() {
+        let store = makeStore()
+        XCTAssertEqual(store.preferences.mlxModelID, "mlx-community/gemma-4-e4b-it-4bit")
+        store.setProvider(.mlx)
+        store.setMLXModelID("mlx-community/other-it")
+        let reloaded = makeStore()
+        XCTAssertEqual(reloaded.preferences.provider, .mlx)
+        XCTAssertEqual(reloaded.preferences.mlxModelID, "mlx-community/other-it")
+        XCTAssertEqual(defaults.string(forKey: "cotabbyRewriteMLXModel"), "mlx-community/other-it")
+    }
 }

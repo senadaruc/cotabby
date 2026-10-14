@@ -69,6 +69,39 @@ final class MLXServerManagerTests: XCTestCase {
         await waitUntil { self.isReady(manager) }
     }
 
+    func test_aCustomPidFileIsUsedInsteadOfTheDefault() async {
+        let custom = root.appendingPathComponent("rewrite-server.pid")
+        let manager = MLXServerManager(
+            paths: paths, launcher: launcher, probe: probe, pickPort: { 50124 },
+            sleep: { _ in await Task.yield() }, baseEnvironment: [:],
+            verifyListener: { _, _ in true }, pidFileURL: custom)
+        Self.retained.append(manager)
+        await startReady(manager, launchA)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: custom.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.serverPIDFile.path))
+        XCTAssertEqual(paths.rewriteServerPIDFile.lastPathComponent, "rewrite-server.pid")
+    }
+
+    func test_sharedShutdownSendsEveryTermBeforeWaiting() async {
+        let first = makeManager()
+        await startReady(first, launchA)
+        let secondLauncher = MLXFakeLauncher()
+        let secondProbe = MLXFakeProbe()
+        let second = MLXServerManager(
+            paths: paths, launcher: secondLauncher, probe: secondProbe, pickPort: { 50125 },
+            sleep: { _ in await Task.yield() }, baseEnvironment: [:],
+            verifyListener: { _, _ in true }, pidFileURL: root.appendingPathComponent("rewrite-server.pid"))
+        Self.retained.append(contentsOf: [second, secondLauncher, secondProbe] as [AnyObject])
+        await second.apply(.running(launchB))
+        await waitUntil { secondProbe.waiting >= 1 }
+        secondProbe.succeedNext()
+        MLXServerManager.shutdownSync([first, second], timeoutSeconds: 1)
+        XCTAssertEqual(launcher.launches[0].process.terminateCount, 1)
+        XCTAssertEqual(secondLauncher.launches[0].process.terminateCount, 1)
+        XCTAssertEqual(first.state, .idle)
+        XCTAssertEqual(second.state, .idle)
+    }
+
     func test_startLaunchesTheExactCommandAndBecomesReady() async throws {
         let manager = makeManager()
         await manager.apply(.running(launchA))

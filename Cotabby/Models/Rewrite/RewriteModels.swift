@@ -38,9 +38,10 @@ nonisolated enum RewriteAction: Equatable, Hashable, Sendable {
     var alwaysUsesMemory: Bool { self == .longer }
 }
 
-/// Which model rewrites: Cotabby's own local models, or the user's OpenAI-compatible API.
+/// Which model rewrites: Cotabby's own local models, an instruct model on a second MLX server, or
+/// the user's OpenAI-compatible API.
 nonisolated enum RewriteProviderKind: String, CaseIterable, Sendable {
-    case local, api
+    case local, api, mlx
 }
 
 /// The cloud services a rewrite can use with the user's own API key. Claude goes through Anthropic's
@@ -106,6 +107,8 @@ nonisolated struct RewritePreferences: Equatable, Sendable {
     var apiBaseURL: String
     /// The chosen model per service (by `RewriteCloudProvider.rawValue`), so switching keeps each choice.
     var modelsByProvider: [String: String]
+    /// The MLX chat model (Hugging Face repo id) the `mlx` provider runs on its own server.
+    var mlxModelID: String
     var usesMemoryByDefault: Bool
     /// The popup's "Fix spelling & grammar" tick box: every action except Fix only also corrects
     /// mistakes when it is on. Remembered between rewrites.
@@ -118,11 +121,15 @@ nonisolated struct RewritePreferences: Equatable, Sendable {
     var shortcutModifiers: UInt32
     var shortcutLabel: String
 
+    /// A small instruction-tuned model (~3 GB): rewrites need a chat model, not autocomplete's base model.
+    static let defaultMLXModelID = "mlx-community/gemma-4-e4b-it-4bit"
+
     static let defaults = RewritePreferences(
         provider: .local,
         cloudProvider: .anthropic,
         apiBaseURL: "",
         modelsByProvider: [:],
+        mlxModelID: defaultMLXModelID,
         usesMemoryByDefault: false,
         fixesMistakes: true,
         sendsMemoryToAPI: false,
@@ -177,12 +184,15 @@ nonisolated enum RewriteError: LocalizedError, Equatable {
     case noProvider
     case unusableOutput
     case selectionTooLong
+    /// The MLX rewrite server cannot run or did not become ready; the text says why.
+    case mlxUnavailable(String)
 
     var errorDescription: String? {
         switch self {
         case .noProvider: return "Set up a rewrite model in Settings → Rewrite."
         case .unusableOutput: return "Couldn't rewrite this — try again."
         case .selectionTooLong: return "Selection too long to rewrite."
+        case .mlxUnavailable(let reason): return reason
         }
     }
 }

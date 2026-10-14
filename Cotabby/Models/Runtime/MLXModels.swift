@@ -63,6 +63,9 @@ nonisolated struct MLXPaths: Equatable, Sendable {
     var cacheDirectory: URL { root.appendingPathComponent("cache", isDirectory: true) }
     var ownServerExecutable: URL { binDirectory.appendingPathComponent("mlx_lm.server") }
     var serverPIDFile: URL { root.appendingPathComponent("server.pid") }
+    /// The second server (Rewrite with MLX) keeps its own pid file so launch-time orphan cleanup
+    /// can tell the two apart.
+    var rewriteServerPIDFile: URL { root.appendingPathComponent("rewrite-server.pid") }
 }
 
 /// A validated Hugging Face model repo id ("owner/name"). It reaches a command line

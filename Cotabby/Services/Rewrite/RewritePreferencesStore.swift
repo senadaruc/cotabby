@@ -21,6 +21,7 @@ final class RewritePreferencesStore: ObservableObject {
         static let apiModelName = "cotabbyRewriteAPIModelName"
         static let cloudProvider = "cotabbyRewriteCloudProvider"
         static let modelsByProvider = "cotabbyRewriteModelsByProvider"
+        static let mlxModel = "cotabbyRewriteMLXModel"
         static let usesMemory = "cotabbyRewriteUsesMemory"
         static let sendsMemoryToAPI = "cotabbyRewriteSendsMemoryToAPI"
         static let showsButton = "cotabbyRewriteShowsButton"
@@ -43,6 +44,7 @@ final class RewritePreferencesStore: ObservableObject {
                 loaded.modelsByProvider["custom"] = legacyModel
             }
         }
+        loaded.mlxModelID = userDefaults.string(forKey: Key.mlxModel) ?? defaults.mlxModelID
         loaded.usesMemoryByDefault = userDefaults.object(forKey: Key.usesMemory) as? Bool ?? defaults.usesMemoryByDefault
         loaded.sendsMemoryToAPI = userDefaults.object(forKey: Key.sendsMemoryToAPI) as? Bool ?? defaults.sendsMemoryToAPI
         loaded.showsButtonOnSelection = userDefaults.object(forKey: Key.showsButton) as? Bool ?? defaults.showsButtonOnSelection
@@ -69,6 +71,11 @@ final class RewritePreferencesStore: ObservableObject {
     func setAPIModelName(_ value: String) {
         preferences.apiModelName = value
         userDefaults.set(preferences.modelsByProvider, forKey: Key.modelsByProvider)
+    }
+
+    func setMLXModelID(_ value: String) {
+        preferences.mlxModelID = value
+        userDefaults.set(value, forKey: Key.mlxModel)
     }
 
     func setUsesMemoryByDefault(_ value: Bool) {
