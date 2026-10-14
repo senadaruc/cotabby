@@ -4,10 +4,13 @@ import Foundation
 /// Rewrites with the MLX model autocomplete uses, on whichever server can serve it. There is no
 /// rewrite-only model: the model is `suggestionSettings.mlxModelID`.
 ///
-/// - If autocomplete is on MLX and its server is `.ready`, the rewrite goes to that server. No
-///   second process, no second copy of the weights.
-/// - Otherwise the on-demand `MLXRewriteServerController` starts a second server on the same model
-///   (the first rewrite after idle takes ~10 s) and stops it after it has been idle for a while.
+/// - If autocomplete is on MLX, the rewrite always goes to autocomplete's server and never starts
+///   another one: a second copy of the same weights would double the memory the user chose to
+///   spend once. While that server is starting (launch, model change, a restart after a broken
+///   generator) the rewrite waits for it; if it failed or is off, the rewrite fails with its reason.
+/// - Only when autocomplete is not on MLX does the on-demand `MLXRewriteServerController` start a
+///   server on the same model (the first rewrite after idle takes ~10 s) and stop it after it has
+///   been idle for a while.
 ///
 /// The prompt follows the model: an instruct or chat model (`MLXModelCompatibility.isInstructName`)
 /// gets the instruct prompt through `streamChat`; a base model gets the base prompt with the example
@@ -27,6 +30,7 @@ final class MLXRewriteProvider: RewriteProviding {
     private let modelID: @MainActor () -> String
     private let client: OpenAICompatibleAPIClient
     private let healthCheck: MLXHealthCheck
+    private let sleep: MLXRewriteServerController.Sleep
 
     init(
         controller: MLXRewriteServerController,
@@ -34,8 +38,10 @@ final class MLXRewriteProvider: RewriteProviding {
         autocompleteEngine: @escaping @MainActor () -> SuggestionEngineKind,
         modelID: @escaping @MainActor () -> String,
         client: OpenAICompatibleAPIClient,
-        healthCheck: @escaping MLXHealthCheck = MLXHealthProbe.check(port:)
+        healthCheck: @escaping MLXHealthCheck = MLXHealthProbe.check(port:),
+        sleep: @escaping MLXRewriteServerController.Sleep = { try await Task.sleep(for: $0) }
     ) {
+        self.sleep = sleep
         self.controller = controller
         self.autocompleteServer = autocompleteServer
         self.autocompleteEngine = autocompleteEngine
@@ -46,23 +52,45 @@ final class MLXRewriteProvider: RewriteProviding {
 
     nonisolated deinit {}
 
-    /// Autocomplete's server when autocomplete is on MLX and that server is ready; nil otherwise.
-    private var sharedConfiguration: OpenAICompatibleEndpointConfiguration? {
-        guard autocompleteEngine() == .mlx else { return nil }
+    /// Autocomplete is on MLX, so its server (not the on-demand one) serves rewrites.
+    private var followsAutocompleteServer: Bool { autocompleteEngine() == .mlx }
+
+    /// Autocomplete's server endpoint when it is ready on the model the settings name.
+    private var readyAutocompleteConfiguration: OpenAICompatibleEndpointConfiguration? {
+        guard followsAutocompleteServer, case .ready(_, let model) = autocompleteServer.state,
+              model == (MLXRepoID(modelID())?.value ?? modelID()) else { return nil }
         return try? autocompleteServer.readyConfiguration
     }
 
-    /// A ready autocomplete server, or Apple Silicon with mlx-lm ready and the model downloaded and
-    /// compatible: exactly when a rewrite could be served.
-    var isAvailable: Bool { sharedConfiguration != nil || controller.canRun(modelID: modelID()) }
+    /// With autocomplete on MLX: its server is ready, or on its way (starting or stopping), so a
+    /// rewrite can wait. Otherwise: Apple Silicon with mlx-lm ready and the model downloaded and
+    /// compatible, exactly when the on-demand server could start.
+    var isAvailable: Bool {
+        guard followsAutocompleteServer else { return controller.canRun(modelID: modelID()) }
+        switch autocompleteServer.state {
+        case .ready, .starting, .stopping: return true
+        case .idle, .unavailable, .failed: return false
+        }
+    }
+
     var sendsOffDevice: Bool { false }
+
     var unavailableReason: String? {
-        sharedConfiguration != nil ? nil : controller.unavailableReason(modelID: modelID())
+        guard followsAutocompleteServer else { return controller.unavailableReason(modelID: modelID()) }
+        return isAvailable ? nil : autocompleteServer.state.notReadyMessage
     }
 
     func rewrite(_ request: RewriteRequest, onPartial: @escaping @MainActor (String) -> Void) async throws -> String {
-        if let shared = sharedConfiguration {
-            return try await send(request, to: shared, server: autocompleteServer, onPartial: onPartial)
+        if followsAutocompleteServer {
+            if let ready = readyAutocompleteConfiguration {
+                return try await send(request, to: ready, server: autocompleteServer, onPartial: onPartial)
+            }
+            // Autocomplete's server is loading: say so, then wait for it. Nothing is launched here.
+            onPartial(Self.loadingNote)
+            let configuration = try await autocompleteServer.waitUntilReady(
+                modelID: MLXRepoID(modelID())?.value ?? modelID(),
+                timeout: MLXRewriteServerController.defaultReadyTimeout, sleep: sleep)
+            return try await send(request, to: configuration, server: autocompleteServer, onPartial: onPartial)
         }
         // Always sent first: the popup would otherwise sit on "Rewriting…" for the whole start-up,
         // and the first streamed token replaces it. It is never part of the returned text.
@@ -107,7 +135,7 @@ final class MLXRewriteProvider: RewriteProviding {
                 if Task.isCancelled || health == .cancelled { throw CancellationError() }
                 guard health != .healthy else { throw error }
                 server.reportBroken(port: port, reason: reason)
-                throw RewriteError.mlxUnavailable("MLX is restarting…")
+                throw RewriteError.unavailable("MLX is restarting…")
             }
             throw error
         }

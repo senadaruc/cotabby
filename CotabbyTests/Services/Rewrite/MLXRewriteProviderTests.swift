@@ -66,7 +66,8 @@ final class MLXRewriteProviderTests: XCTestCase {
         let client = OpenAICompatibleAPIClient(session: URLSession(configuration: configuration))
         let provider = MLXRewriteProvider(
             controller: controller, autocompleteServer: shared, autocompleteEngine: { autocomplete },
-            modelID: { model }, client: client, healthCheck: healthCheck ?? { _ in health })
+            modelID: { model }, client: client, healthCheck: healthCheck ?? { _ in health },
+            sleep: { _ in await Task.yield() })
         Self.retained.append(contentsOf: [launcher, probe, manager, controller, client, provider, shared, sharedLauncher, sharedProbe] as [AnyObject])
         return Rig(provider: provider, controller: controller, launcher: launcher, probe: probe,
                    shared: shared, sharedLauncher: sharedLauncher, sharedProbe: sharedProbe)
@@ -102,7 +103,7 @@ final class MLXRewriteProviderTests: XCTestCase {
             let body = (try? JSONSerialization.jsonObject(with: Self.bodyData(httpRequest)) as? [String: Any]) ?? [:]
             XCTAssertEqual(body["prompt"] as? String, RewritePromptBuilder.basePrompt(request))
             XCTAssertEqual(body["stop"] as? [String], RewritePromptBuilder.baseStopSequences)
-            XCTAssertEqual(body["max_tokens"] as? Int, RewritePromptBuilder.completionTokenBudget(selection: "fixd text"))
+            XCTAssertEqual(body["max_tokens"] as? Int, RewritePromptBuilder.completionTokenBudget(for: request))
             XCTAssertNil(body["messages"])
         }
         async let result = rig.provider.rewrite(request, onPartial: { _ in })
@@ -136,16 +137,54 @@ final class MLXRewriteProviderTests: XCTestCase {
         XCTAssertTrue(rig.launcher.launches.isEmpty)
     }
 
-    func test_autocompleteOnMLXButNotReadyStartsTheOnDemandServerOnTheSameModel() async throws {
+    func test_autocompleteOnMLXWhileItsServerLoadsWaitsForItAndNeverStartsASecondServer() async throws {
         let rig = makeRig(autocomplete: .mlx)
+        let launch = MLXServerLaunch(
+            executable: URL(fileURLWithPath: "/mlx/bin/mlx_lm.server"), modelID: model, promptCacheBytes: 1 << 30)
+        Task { await rig.shared.apply(.running(launch)) }
+        await waitUntil { rig.sharedProbe.waiting >= 1 }
+        XCTAssertTrue(rig.provider.isAvailable, "a loading server is worth waiting for")
         okHandler()
+        var partials: [String] = []
         async let result = rig.provider.rewrite(
-            RewriteRequest(selection: "fixd", action: .fixOnly, memory: .empty), onPartial: { _ in })
-        await waitUntil { rig.probe.waiting >= 1 }
-        rig.probe.succeedNext()
-        _ = try await result
-        XCTAssertEqual(MLXRewriteStubURLProtocol.requested, ["http://127.0.0.1:50300/v1/chat/completions"])
-        XCTAssertEqual(rig.launcher.launches.count, 1)
+            RewriteRequest(selection: "fixd", action: .fixOnly, memory: .empty), onPartial: { partials.append($0) })
+        for _ in 0..<5 { await Task.yield() }
+        XCTAssertTrue(MLXRewriteStubURLProtocol.requested.isEmpty, "nothing is sent before the server is ready")
+        rig.sharedProbe.succeedNext()
+        let text = try await result
+        XCTAssertEqual(text, "Fixed text.")
+        XCTAssertEqual(partials.first, MLXRewriteProvider.loadingNote)
+        XCTAssertEqual(MLXRewriteStubURLProtocol.requested, ["http://127.0.0.1:50400/v1/chat/completions"])
+        XCTAssertTrue(rig.launcher.launches.isEmpty, "no second server")
+        XCTAssertEqual(rig.sharedLauncher.launches.count, 1)
+    }
+
+    func test_autocompleteOnMLXWithAFailedServerThrowsItsReasonAndLaunchesNothing() async {
+        let rig = makeRig(autocomplete: .mlx)
+        await rig.shared.apply(.unavailable(.notInstalled))
+        XCTAssertFalse(rig.provider.isAvailable)
+        XCTAssertEqual(rig.provider.unavailableReason, MLXUnavailableReason.notInstalled.message)
+        do {
+            _ = try await rig.provider.rewrite(RewriteRequest(selection: "x", action: .fixOnly, memory: .empty), onPartial: { _ in })
+            XCTFail("expected an error")
+        } catch {
+            XCTAssertEqual(error as? RewriteError, .unavailable(MLXUnavailableReason.notInstalled.message))
+        }
+        XCTAssertTrue(MLXRewriteStubURLProtocol.requested.isEmpty)
+        XCTAssertTrue(rig.launcher.launches.isEmpty)
+        XCTAssertTrue(rig.sharedLauncher.launches.isEmpty)
+    }
+
+    func test_autocompleteOnMLXWithAnIdleServerThrowsNotRunningAndLaunchesNothing() async {
+        let rig = makeRig(autocomplete: .mlx)
+        XCTAssertFalse(rig.provider.isAvailable)
+        do {
+            _ = try await rig.provider.rewrite(RewriteRequest(selection: "x", action: .fixOnly, memory: .empty), onPartial: { _ in })
+            XCTFail("expected an error")
+        } catch {
+            XCTAssertEqual(error as? RewriteError, .unavailable("MLX is not running."))
+        }
+        XCTAssertTrue(rig.launcher.launches.isEmpty)
         XCTAssertTrue(rig.sharedLauncher.launches.isEmpty)
     }
 
@@ -180,7 +219,7 @@ final class MLXRewriteProviderTests: XCTestCase {
                 RewriteRequest(selection: "fixd", action: .fixOnly, memory: .empty), onPartial: { _ in })
             XCTFail("expected an error")
         } catch {
-            XCTAssertEqual(error as? RewriteError, .mlxUnavailable("MLX is restarting…"))
+            XCTAssertEqual(error as? RewriteError, .unavailable("MLX is restarting…"))
         }
         await waitUntil { rig.sharedLauncher.launches.count == 2 }
         XCTAssertEqual(rig.sharedLauncher.launches[0].process.terminateCount, 1)
@@ -236,14 +275,14 @@ final class MLXRewriteProviderTests: XCTestCase {
 
     func test_a404WithHealth503ReportsTheRewriteServerBroken() async {
         let (rig, error) = await rewrite404(health: .generatorDead)
-        XCTAssertEqual(error as? RewriteError, .mlxUnavailable("MLX is restarting…"))
+        XCTAssertEqual(error as? RewriteError, .unavailable("MLX is restarting…"))
         await waitUntil { rig.launcher.launches.count == 2 }
         XCTAssertEqual(rig.launcher.launches[0].process.terminateCount, 1)
     }
 
     func test_a404WithHealthUnreachableReportsTheRewriteServerBroken() async {
         let (rig, error) = await rewrite404(health: .unreachable)
-        XCTAssertEqual(error as? RewriteError, .mlxUnavailable("MLX is restarting…"))
+        XCTAssertEqual(error as? RewriteError, .unavailable("MLX is restarting…"))
         await waitUntil { rig.launcher.launches.count == 2 }
     }
 
@@ -290,7 +329,7 @@ final class MLXRewriteProviderTests: XCTestCase {
             _ = try await rig.provider.rewrite(RewriteRequest(selection: "x", action: .fixOnly, memory: .empty), onPartial: { _ in })
             XCTFail("expected an error")
         } catch {
-            XCTAssertEqual(error as? RewriteError, .mlxUnavailable(MLXUnavailableReason.notInstalled.message))
+            XCTAssertEqual(error as? RewriteError, .unavailable(MLXUnavailableReason.notInstalled.message))
         }
         XCTAssertTrue(MLXRewriteStubURLProtocol.requested.isEmpty)
         XCTAssertTrue(rig.launcher.launches.isEmpty)

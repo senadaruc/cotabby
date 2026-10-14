@@ -2,10 +2,11 @@ import Combine
 import Foundation
 
 /// File overview:
-/// Owns the second `mlx_lm.server` that Rewrite with MLX uses. Autocomplete's server keeps a base
-/// model loaded; a rewrite needs an instruct (chat) model, and asking one server for another model
-/// swaps weights and evicts the autocomplete model. So rewrites get their own server, started on
-/// demand by the first rewrite and stopped after `idleTimeout` without one.
+/// Owns the second `mlx_lm.server` that Rewrite with MLX uses when autocomplete is NOT on MLX (when it
+/// is, rewrites share autocomplete's server and this controller stays idle). It runs autocomplete's
+/// MLX model, so no rewrite-only model is loaded; asking one server for another model would swap
+/// weights, which is why the second server exists at all. Started on demand by the first rewrite and
+/// stopped after `idleTimeout` without one.
 ///
 /// The controller is a thin policy layer over an `MLXServerManager` (the same state machine
 /// autocomplete uses, given its own pid file). It decides *whether* the server should run with the
@@ -21,7 +22,6 @@ final class MLXRewriteServerController {
     static let defaultIdleTimeout: Duration = .seconds(300)
     /// Load (up to 120 s in the manager) plus its warm-up, with a little slack.
     static let defaultReadyTimeout: Duration = .seconds(150)
-    private static let pollInterval: Duration = .milliseconds(100)
 
     let manager: MLXServerManager
     private let toolchain: @MainActor () -> MLXToolchainState
@@ -93,44 +93,27 @@ final class MLXRewriteServerController {
     }
 
     /// Starts (or reuses) the server for `modelID` and returns its endpoint once it is ready.
-    /// Throws `RewriteError.mlxUnavailable` with the reason when it cannot run, fails, or does not
+    /// Throws `RewriteError.unavailable` with the reason when it cannot run, fails, or does not
     /// become ready in time. Nothing is launched when the resolver says it cannot run. A server
     /// that already failed is retried: a rewrite is the user explicitly trying again.
     func readyConfiguration(modelID rawModelID: String) async throws -> OpenAICompatibleEndpointConfiguration {
-        guard !isShutDown else { throw RewriteError.mlxUnavailable("Cotabby is quitting.") }
+        guard !isShutDown else { throw RewriteError.unavailable("Cotabby is quitting.") }
         // The id is compared with what the server reports, so use the validated, trimmed form.
         guard let repoID = MLXRepoID(rawModelID) else {
-            throw RewriteError.mlxUnavailable(MLXUnavailableReason.noModel.message)
+            throw RewriteError.unavailable(MLXUnavailableReason.noModel.message)
         }
         let modelID = repoID.value
         let wanted = desire(modelID: modelID)
-        if let reason = unavailableReason(modelID: modelID) { throw RewriteError.mlxUnavailable(reason) }
+        if let reason = unavailableReason(modelID: modelID) { throw RewriteError.unavailable(reason) }
         await enqueue { await $0.apply(wanted) }
         // The same desire again changes nothing in the manager, so a failed server needs retry().
         if case .failed = manager.state {
             await enqueue { await $0.retry() }
         }
 
-        var waited: Duration = .zero
-        while true {
-            switch manager.state {
-            case .ready(_, let readyModel) where readyModel == modelID:
-                return try manager.readyConfiguration
-            case .failed(let reason, _):
-                throw RewriteError.mlxUnavailable("MLX stopped: \(reason)")
-            case .unavailable(let reason):
-                throw RewriteError.mlxUnavailable(reason.message)
-            case .idle:
-                throw RewriteError.mlxUnavailable("The MLX rewrite model was stopped.")
-            case .starting, .stopping, .ready:
-                break
-            }
-            guard waited < readyTimeout else {
-                throw RewriteError.mlxUnavailable("The MLX rewrite model did not load in time.")
-            }
-            try await sleep(Self.pollInterval)
-            waited += Self.pollInterval
-        }
+        return try await manager.waitUntilReady(
+            modelID: modelID, timeout: readyTimeout, sleep: sleep,
+            stoppedMessage: "The MLX model was stopped.")
     }
 
     /// A rewrite starts: the server counts as busy and the idle countdown is paused.
@@ -190,5 +173,41 @@ final class MLXRewriteServerController {
         }
         applyChain = task
         await task.value
+    }
+}
+
+extension MLXServerManager {
+    private static let readyPollInterval: Duration = .milliseconds(100)
+
+    /// Waits until this server is `.ready` on `modelID` and returns its endpoint. `.starting`,
+    /// `.stopping` and a `.ready` server on another model (mid-switch) keep waiting, up to
+    /// `timeout`; `.failed`, `.unavailable` and `.idle` throw `RewriteError.unavailable` at once
+    /// with the server's own reason (`stoppedMessage` overrides the `.idle` text). It never starts
+    /// anything, so a caller that must not launch a server can use it on autocomplete's. Shared by
+    /// the on-demand controller and the provider's wait on autocomplete's server.
+    func waitUntilReady(
+        modelID: String,
+        timeout: Duration,
+        sleep: (Duration) async throws -> Void,
+        stoppedMessage: String? = nil
+    ) async throws -> OpenAICompatibleEndpointConfiguration {
+        var waited: Duration = .zero
+        while true {
+            switch state {
+            case .ready(_, let readyModel) where readyModel == modelID:
+                return try readyConfiguration
+            case .failed, .unavailable:
+                throw RewriteError.unavailable(state.notReadyMessage)
+            case .idle:
+                throw RewriteError.unavailable(stoppedMessage ?? state.notReadyMessage)
+            case .starting, .stopping, .ready:
+                break
+            }
+            guard waited < timeout else {
+                throw RewriteError.unavailable("The MLX model did not load in time.")
+            }
+            try await sleep(Self.readyPollInterval)
+            waited += Self.readyPollInterval
+        }
     }
 }
