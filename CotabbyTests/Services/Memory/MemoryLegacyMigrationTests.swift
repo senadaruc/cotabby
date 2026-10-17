@@ -270,6 +270,17 @@ final class MemoryLegacyMigrationTests: XCTestCase {
         XCTAssertTrue(MemoryEngine.isExcluded(conversationID: "ayse@s.whatsapp.net", by: ["ayse@s.whatsapp.net"]))
         XCTAssertFalse(MemoryEngine.isExcluded(conversationID: "17|ayse@example.com", by: ["7"]))
         XCTAssertFalse(MemoryEngine.isExcluded(conversationID: "ayse@s.whatsapp.net", by: []))
+        // "|" is legal in an address's local part and in a sender someone else chose: the thread
+        // entry must still cover the conversation, whichever "|" ends the thread.
+        XCTAssertTrue(MemoryEngine.isExcluded(conversationID: "7|a|b@example.com,c@example.org", by: ["7"]))
+        XCTAssertTrue(MemoryEngine.isExcluded(
+            conversationID: MailAudience.conversationID(thread: "7", people: ["x|y@example.com"]), by: ["7"]
+        ))
+        XCTAssertTrue(MemoryEngine.isExcluded(conversationID: "hx-topic:invoice|evil|ayse@example.com", by: ["hx-topic:invoice"]))
+        // A thread or topic that itself contains "|".
+        XCTAssertTrue(MemoryEngine.isExcluded(conversationID: "hx-topic:q3|budget|ayse@example.com", by: ["hx-topic:q3|budget"]))
+        XCTAssertTrue(MemoryEngine.isExcluded(conversationID: "thread|7|ayse@example.com", by: ["thread|7"]))
+        XCTAssertFalse(MemoryEngine.isExcluded(conversationID: "hx-topic:q3|budget|ayse@example.com", by: ["hx-topic:q3|b"]))
 
         let engine = try MemoryEngine(
             paths: MemoryEngine.Paths(dataDirectory: directory), rootKey: key,
@@ -291,6 +302,12 @@ final class MemoryLegacyMigrationTests: XCTestCase {
         ], cursor: nil)
         XCTAssertEqual(result.stored, 0)
         XCTAssertEqual(result.dropped, 1)
+        let spoofed = MailAudience.conversationID(thread: "7", people: ["mallory|x@example.org"])
+        let second = try engine.ingest(source: "apple_mail", records: [
+            record("102", spoofed, "Please resend the invoice", title: "Invoice",
+                   participants: ["mallory|x@example.org"], subject: "Invoice")
+        ], cursor: nil)
+        XCTAssertEqual(second.stored, 0, "a \"|\" in a participant does not get excluded mail stored")
     }
 
     /// Two rows for one message (the legacy one and a keyed one) leave one, and no empty

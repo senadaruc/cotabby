@@ -420,11 +420,20 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
     /// it: a mail thread became one conversation per audience (`thread|people`), and a New Outlook
     /// topic one per sender (`hx-topic:topic|sender`), so an entry saved as the whole thread or
     /// topic keeps covering every conversation it was split into.
+    ///
+    /// Every prefix that ends right before a "|" is checked, not only the last one: an address's
+    /// local part and a sender (chosen by whoever sent the mail) may contain "|", and so may a
+    /// thread or topic, so the split point cannot be found from the id. Checking each prefix can
+    /// only exclude more, never less.
     static func isExcluded(conversationID: String, by excluded: Set<String>) -> Bool {
         guard !excluded.isEmpty else { return false }
         if excluded.contains(conversationID) { return true }
-        guard let bar = conversationID.lastIndex(of: "|") else { return false }
-        return excluded.contains(String(conversationID[..<bar]))
+        var index = conversationID.startIndex
+        while let bar = conversationID[index...].firstIndex(of: "|") {
+            if excluded.contains(String(conversationID[..<bar])) { return true }
+            index = conversationID.index(after: bar)
+        }
+        return false
     }
 
     private func retentionCutoff(_ configuration: MemoryConfiguration) -> Date? {
