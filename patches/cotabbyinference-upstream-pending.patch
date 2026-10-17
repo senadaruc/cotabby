@@ -143,16 +143,17 @@ index 1b2aca3..673e8de 100644
  
 diff --git a/Sources/CotabbyInferenceEngine/CotabbyEmbeddingEngine.cpp b/Sources/CotabbyInferenceEngine/CotabbyEmbeddingEngine.cpp
 new file mode 100644
-index 0000000..e30f81e
+index 0000000..ab1befa
 --- /dev/null
 +++ b/Sources/CotabbyInferenceEngine/CotabbyEmbeddingEngine.cpp
-@@ -0,0 +1,259 @@
+@@ -0,0 +1,261 @@
 +#include "CotabbyEmbeddingEngine.h"
 +#include "LlamaBackendGuard.h"
 +
 +#include <algorithm>
 +#include <atomic>
 +#include <cmath>
++#include <cstdint>
 +#include <mutex>
 +#include <string>
 +#include <thread>
@@ -194,9 +195,11 @@ index 0000000..e30f81e
 +    int dimensions = 0;
 +    enum llama_pooling_type pooling = LLAMA_POOLING_TYPE_UNSPECIFIED;
 +
-+    // One embedding call at a time; `cancel` only flips the flag and never takes the lock.
++    // One embedding call at a time; `cancel` only bumps the generation and never takes the lock.
++    // A call notes the generation before it waits for the lock and stops once it changes, so a
++    // cancel that lands while the call is still waiting is not lost.
 +    std::mutex mutex;
-+    std::atomic<bool> cancelled{false};
++    std::atomic<uint64_t> cancel_generation{0};
 +
 +    void release() {
 +        if (ctx) {
@@ -314,21 +317,20 @@ index 0000000..e30f81e
 +
 +void CotabbyEmbeddingEngine::unloadModel() {
 +    if (!impl_) return;
-+    impl_->cancelled.store(true);
++    impl_->cancel_generation.fetch_add(1);
 +    std::lock_guard<std::mutex> lock(impl_->mutex);
 +    impl_->release();
-+    impl_->cancelled.store(false);
 +}
 +
 +void CotabbyEmbeddingEngine::cancel() {
-+    if (impl_) impl_->cancelled.store(true);
++    if (impl_) impl_->cancel_generation.fetch_add(1);
 +}
 +
 +EngineStatus CotabbyEmbeddingEngine::embedBatch(const char* bytes, const int32_t* offsets, int count,
 +                                                float* out, int out_capacity) {
 +    if (!impl_) return EngineStatus::error;
++    const uint64_t generation = impl_->cancel_generation.load();
 +    std::lock_guard<std::mutex> lock(impl_->mutex);
-+    impl_->cancelled.store(false);
 +    if (!impl_->ctx) return EngineStatus::not_loaded;
 +    if (count <= 0) return EngineStatus::ok;
 +    if (!bytes || !offsets || !out) return EngineStatus::error;
@@ -352,7 +354,7 @@ index 0000000..e30f81e
 +    // decodes, reads one pooled vector per sequence, then clears the cells for the next pack.
 +    int next = 0;
 +    while (next < count && status == EngineStatus::ok) {
-+        if (impl_->cancelled.load()) {
++        if (impl_->cancel_generation.load() != generation) {
 +            status = EngineStatus::cancelled;
 +            break;
 +        }
@@ -1112,7 +1114,7 @@ index 0000000..15712fb
 +} // namespace cotabby
 diff --git a/Sources/CotabbyInferenceEngine/include/CotabbyEmbeddingEngine.h b/Sources/CotabbyInferenceEngine/include/CotabbyEmbeddingEngine.h
 new file mode 100644
-index 0000000..4499f44
+index 0000000..75ebb60
 --- /dev/null
 +++ b/Sources/CotabbyInferenceEngine/include/CotabbyEmbeddingEngine.h
 @@ -0,0 +1,51 @@
@@ -1150,8 +1152,8 @@ index 0000000..4499f44
 +    // Embeds `count` UTF-8 texts stored back to back in `bytes`; text i is
 +    // bytes[offsets[i] ..< offsets[i + 1]] (so `offsets` has count + 1 entries). Writes
 +    // count * getDimensions() floats to `out`, each vector L2-normalized. Returns `cancelled`
-+    // when `cancel()` was called during the call, `not_loaded` without a model, and `error`
-+    // when `out_capacity` is too small or a decode fails.
++    // when `cancel()` was called after the call began (also while it waited for another call),
++    // `not_loaded` without a model, and `error` when `out_capacity` is too small or a decode fails.
 +    EngineStatus embedBatch(const char* bytes, const int32_t* offsets, int count, float* out,
 +                            int out_capacity);
 +
@@ -1220,7 +1222,7 @@ index a33aa08..3ee5b34 100644
  }
 diff --git a/Tests/CotabbyInferenceTests/EmbeddingEngineTests.swift b/Tests/CotabbyInferenceTests/EmbeddingEngineTests.swift
 new file mode 100644
-index 0000000..0368776
+index 0000000..430b6fb
 --- /dev/null
 +++ b/Tests/CotabbyInferenceTests/EmbeddingEngineTests.swift
 @@ -0,0 +1,164 @@
@@ -1332,7 +1334,7 @@ index 0000000..0368776
 +        XCTAssertEqual(engine.loadModel(path, -1, 512, Int32(ProcessInfo.processInfo.environment["COTABBY_TEST_EMBEDDING_BATCH"] ?? "2048") ?? 2048, 16), EngineStatus.ok)
 +        defer { engine.unloadModel() }
 +        let dims = Int(engine.getDimensions())
-+        let words = "the proposal for the security operations platform covers detection playbooks budget and timeline for the pilot".split(separator: " ")
++        let words = "the proposal for the new office space covers furniture lighting budget and timeline for the move".split(separator: " ")
 +        let passages = (0..<64).map { index in (0..<220).map { String(words[($0 + index) % words.count]) }.joined(separator: " ") }
 +        var footprints: [Double] = []
 +        let started = Date()
