@@ -277,6 +277,11 @@ final class MemoryLegacyMigrationTests: XCTestCase {
             conversationID: MailAudience.conversationID(thread: "7", people: ["x|y@example.com"]), by: ["7"]
         ))
         XCTAssertTrue(MemoryEngine.isExcluded(conversationID: "hx-topic:invoice|evil|ayse@example.com", by: ["hx-topic:invoice"]))
+        // A sender containing "|", in the id New Outlook's reader builds.
+        let fromSender = OutlookHistoryReader.hxConversation(
+            messageID: "m1", topic: "Invoice", sender: "mallory|x@example.org", isOwnAddress: false
+        ).id
+        XCTAssertTrue(MemoryEngine.isExcluded(conversationID: fromSender, by: ["hx-topic:invoice"]))
         // A thread or topic that itself contains "|".
         XCTAssertTrue(MemoryEngine.isExcluded(conversationID: "hx-topic:q3|budget|ayse@example.com", by: ["hx-topic:q3|budget"]))
         XCTAssertTrue(MemoryEngine.isExcluded(conversationID: "thread|7|ayse@example.com", by: ["thread|7"]))
