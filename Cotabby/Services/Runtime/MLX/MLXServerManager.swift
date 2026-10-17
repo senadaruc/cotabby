@@ -396,9 +396,13 @@ final class MLXServerManager: ObservableObject {
         let failedGeneration = generation
         let tail = running.process.stderrTail()
         // Clearing `current` makes the process's own exit callback a no-op; `.starting` makes new
-        // requests fail fast with "loading" instead of hitting the broken server.
+        // requests fail fast with "loading" instead of hitting the broken server. SIGTERM goes out
+        // and the process is recorded as stopping before the task below is scheduled, so a quit
+        // that lands first still finds it in `shutdownSync` (which then waits and SIGKILLs).
         current = nil
         state = .starting(modelID: running.launch.modelID)
+        stoppingProcess = running.process
+        running.process.terminate()
         CotabbyLogger.runtime.error("MLX generator stopped working", metadata: [
             "reason": .string(reason),
             "port": .stringConvertible(port),
@@ -406,7 +410,7 @@ final class MLXServerManager: ObservableObject {
         ])
         Task { [weak self] in
             guard let self else { return }
-            await self.terminateTracked(running.process)
+            await self.waitForExitTracked(running.process)
             self.removePIDFile(ownedBy: running.process.processIdentifier)
             // A stop, model change or shutdown can land during the SIGTERM grace; it owns the
             // state then, so no failure is recorded for a server the user no longer wants.
@@ -472,10 +476,17 @@ final class MLXServerManager: ObservableObject {
         CotabbyLogger.runtime.info("MLX server stopped", metadata: ["model": .string(running.launch.modelID)])
     }
 
-    /// Runs `terminate` while keeping the process visible to `shutdownSync`.
+    /// Sends SIGTERM and waits for the exit while keeping the process visible to `shutdownSync`.
     private func terminateTracked(_ process: any MLXRunningProcess) async {
         stoppingProcess = process
-        await Self.terminate(process, sleep: sleep)
+        process.terminate()
+        await waitForExitTracked(process)
+    }
+
+    /// The second half of a stop, for a process that has already had its SIGTERM: waits out the
+    /// grace period, SIGKILLs it if needed, then stops tracking it.
+    private func waitForExitTracked(_ process: any MLXRunningProcess) async {
+        await Self.waitForExit(process, sleep: sleep)
         if stoppingProcess === process { stoppingProcess = nil }
     }
 
@@ -485,8 +496,7 @@ final class MLXServerManager: ObservableObject {
         if pidFile.read() == pid { pidFile.remove() }
     }
 
-    private static func terminate(_ process: any MLXRunningProcess, sleep: Sleep) async {
-        process.terminate()
+    private static func waitForExit(_ process: any MLXRunningProcess, sleep: Sleep) async {
         var waited: Duration = .zero
         while process.isRunning, waited < stopGrace {
             try? await sleep(stopPoll)
@@ -498,15 +508,19 @@ final class MLXServerManager: ObservableObject {
 
 // MARK: - Live process and probe
 
-/// Starts the real `mlx_lm.server` with stdout discarded. Its stderr is kept two ways: a tail in
-/// memory for the failure message, and the full stream appended to `mlx-server.log` so a failure
-/// can still be diagnosed afterwards. `label` names the server ("autocomplete" or "rewrite") in the
-/// log's header line.
+/// Starts the real `mlx_lm.server` with stdout discarded. Its stderr always feeds an in-memory tail
+/// for the failure message. Under `-cotabby-debug` the full stream is also appended to
+/// `mlx-server.log`, like the app's other on-disk logs, so a failure can be diagnosed afterwards;
+/// a normal run writes nothing to disk. `label` names the server ("autocomplete" or "rewrite") in
+/// the log's header line.
 final class MLXLiveProcessLauncher: MLXProcessLaunching {
     private let label: String
-    private let logWriter: MLXServerLogWriter
+    private let logWriter: MLXServerLogWriter?
 
-    init(label: String = "autocomplete", logWriter: MLXServerLogWriter = .shared) {
+    init(
+        label: String = "autocomplete",
+        logWriter: MLXServerLogWriter? = CotabbyDebugOptions.isEnabled ? .shared : nil
+    ) {
         self.label = label
         self.logWriter = logWriter
     }
@@ -518,10 +532,15 @@ final class MLXLiveProcessLauncher: MLXProcessLaunching {
         onExit: @escaping @MainActor (Int32) -> Void
     ) throws -> any MLXRunningProcess {
         // The exit arrives on a background thread; hop to the main actor for the manager.
-        let (process, output, stderr) = Self.configuredProcess(
+        let stderr = Pipe()
+        // Raw lines are kept generously (300) because the filter in `stderrTail()` drops
+        // access-log lines and disconnect tracebacks, which are most of what the server prints.
+        let output = MLXOutputCollector(tailLines: 300)
+        let process = Self.configuredProcess(
             executable: executable,
             arguments: arguments,
             environment: environment,
+            stderr: stderr,
             onExit: { @Sendable status in
                 Task { @MainActor in onExit(status) }
             }
@@ -529,7 +548,7 @@ final class MLXLiveProcessLauncher: MLXProcessLaunching {
         try process.run()
         // The header needs the pid, so the reader starts after `run()`; the pipe buffers whatever
         // the server wrote in between.
-        logWriter.writeHeader(
+        logWriter?.writeHeader(
             label: label, pid: process.processIdentifier,
             model: Self.value(after: "--model", in: arguments) ?? "?",
             port: Int(Self.value(after: "--port", in: arguments) ?? "") ?? 0)
@@ -544,27 +563,25 @@ final class MLXLiveProcessLauncher: MLXProcessLaunching {
         executable: URL,
         arguments: [String],
         environment: [String: String],
+        stderr: Pipe,
         onExit: @escaping @Sendable (Int32) -> Void
-    ) -> (Process, MLXOutputCollector, Pipe) {
+    ) -> Process {
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
         process.environment = environment
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
-        let stderr = Pipe()
         process.standardError = stderr
-        // Raw lines are kept generously (300) because the filter below drops access-log lines and
-        // disconnect tracebacks, which are most of what the server prints.
-        let output = MLXOutputCollector(tailLines: 300)
         process.terminationHandler = { finished in onExit(finished.terminationStatus) }
-        return (process, output, stderr)
+        return process
     }
 
-    /// Drains stderr off the main actor: each chunk goes to the in-memory collector and the log file.
+    /// Drains stderr off the main actor: each chunk goes to the in-memory collector and, when one
+    /// is given, the log file.
     /// At EOF the handler is called with empty data, and it keeps being called until it is removed.
     /// Removing it there and recording the close matches `MLXProcessRunner`.
-    nonisolated private static func startReading(_ pipe: Pipe, into output: MLXOutputCollector, log: MLXServerLogWriter) {
+    nonisolated private static func startReading(_ pipe: Pipe, into output: MLXOutputCollector, log: MLXServerLogWriter?) {
         pipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
@@ -572,7 +589,7 @@ final class MLXLiveProcessLauncher: MLXProcessLaunching {
                 output.markStderrClosed()
             } else {
                 output.appendStderr(data)
-                log.write(data)
+                log?.write(data)
             }
         }
     }
@@ -650,7 +667,24 @@ nonisolated struct MLXHTTPReadinessProbe: MLXReadinessProbing {
 
     Hi Dana,
 
-    Thanks for sending the revised timeline on Monday. I went through it line by line with the team this morning, and most of the dates hold up well against what we are seeing in the build pipeline. The integration work for the storage layer finished ahead of schedule, which gives us a little room at the end of the month for the reviewer feedback that we always seem to collect late. I still have concerns about the migration step, though. The current plan assumes that every customer account can be moved in a single window on the weekend, but the account export we ran last Thursday took almost twice as long as we estimated, and it only covered about a third of the records. If the remaining records scale the same way, the window will not be long enough, and we would have to split the work across two weekends. That is not a disaster, but it changes who needs to be on call and how we communicate the maintenance notice to customers, so I would like to settle it before we commit to the calendar invitations. Ibrahim has offered to rerun the export with the new indexes enabled, and I think his numbers will tell us quickly whether the single window is realistic. In the meantime, I would suggest we keep the draft schedule as it is, mark the migration as a risk in the tracker, and avoid sending anything to the customer success team until we have the new figures. I know this is not the answer you were hoping for on a Monday morning, and I appreciate that you have been patient while we worked through the details. If it helps, I can join a short call tomorrow to walk through the export log together and agree on the fallback plan before the end of the week, so that everyone leaves the meeting with the same picture of what happens next and who owns each
+    Thanks for sending the revised timeline on Monday. I went through it line by line with the team this \
+    morning, and most of the dates hold up well against what we are seeing in the build pipeline. The \
+    integration work for the storage layer finished ahead of schedule, which gives us a little room at the \
+    end of the month for the reviewer feedback that we always seem to collect late. I still have concerns \
+    about the migration step, though. The current plan assumes that every customer account can be moved in a \
+    single window on the weekend, but the account export we ran last Thursday took almost twice as long as \
+    we estimated, and it only covered about a third of the records. If the remaining records scale the same \
+    way, the window will not be long enough, and we would have to split the work across two weekends. That \
+    is not a disaster, but it changes who needs to be on call and how we communicate the maintenance notice \
+    to customers, so I would like to settle it before we commit to the calendar invitations. Ibrahim has \
+    offered to rerun the export with the new indexes enabled, and I think his numbers will tell us quickly \
+    whether the single window is realistic. In the meantime, I would suggest we keep the draft schedule as \
+    it is, mark the migration as a risk in the tracker, and avoid sending anything to the customer success \
+    team until we have the new figures. I know this is not the answer you were hoping for on a Monday \
+    morning, and I appreciate that you have been patient while we worked through the details. If it helps, I \
+    can join a short call tomorrow to walk through the export log together and agree on the fallback plan \
+    before the end of the week, so that everyone leaves the meeting with the same picture of what happens \
+    next and who owns each
     """
 
     /// Sends one streamed completion shaped like a real suggestion and reads it to `[DONE]` or the
@@ -686,8 +720,8 @@ nonisolated struct MLXHTTPReadinessProbe: MLXReadinessProbing {
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 200 else { throw MLXServerError.warmUpFailed(statusCode: status) }
         // The server finishes generation only once the client has read the stream, so drain it.
-        for try await line in bytes.lines {
-            if line == "data: [DONE]" { break }
+        for try await line in bytes.lines where line == "data: [DONE]" {
+            break
         }
     }
 

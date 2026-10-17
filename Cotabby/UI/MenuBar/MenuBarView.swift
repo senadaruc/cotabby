@@ -207,7 +207,7 @@ struct MenuBarView: View {
                         .foregroundStyle(.orange)
                 }
 
-                // MLX pauses suggestions until its server is ready, so say why (spec section 8).
+                // MLX pauses suggestions until its server is ready, so say why.
                 if suggestionSettings.selectedEngine == .mlx {
                     if let problem = mlxServerManager.state.problem {
                         Text(problem)
@@ -240,7 +240,8 @@ struct MenuBarView: View {
                     .pickerStyle(.menu)
                 }
 
-                // Live usage, refreshed only while this popover is visible (see `onAppear`).
+                // Live usage, refreshed only while this popover is visible (see the presentation
+                // observer above).
                 if let summary = menuResourceMonitor.summary {
                     Text(ResourceUsageSummary.menuLine(summary))
                         .font(.caption)

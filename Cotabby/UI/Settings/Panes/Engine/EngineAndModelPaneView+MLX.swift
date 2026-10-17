@@ -52,7 +52,8 @@ extension EngineAndModelPaneView {
         case .notInstalled:
             return "Cotabby installs Apple's mlx-lm and runs it on this Mac (about 250 MB, plus a model)."
         case .tooOld(let version, let path):
-            return "Found mlx-lm \(version) at \(path). Cotabby needs \(MLXToolchainRules.minimumVersion) or newer; Install adds Cotabby's own copy."
+            return "Found mlx-lm \(version) at \(path). Cotabby needs \(MLXToolchainRules.minimumVersion) " +
+                "or newer; Install adds Cotabby's own copy."
         case .installing(let phase):
             return phase.label
         case .ready(let toolchain):
@@ -114,7 +115,8 @@ extension EngineAndModelPaneView {
                     mlxModelRow(option)
                 }
             }
-            mlxCustomRepoRow
+            mlxCustomRepoRow(downloadWithoutRow: MLXModelCatalog.downloadWithoutRow(
+                mlxModelDownloader.download, options: options))
         }
         .alert(
             "Delete MLX Model?",
@@ -145,19 +147,25 @@ extension EngineAndModelPaneView {
                     .joined(separator: " · "))
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                if let download, download.isActive {
-                    if let fraction = download.fraction {
-                        ProgressView(value: fraction)
-                    } else {
-                        ProgressView().progressViewStyle(.linear)
-                    }
-                }
-                if let failure = download?.failure {
-                    Text(failure).font(.caption).foregroundStyle(.red)
-                }
+                if let download { mlxDownloadStatus(download) }
             }
             Spacer(minLength: 8)
             mlxModelActions(option, isDownloading: download?.isActive == true)
+        }
+    }
+
+    /// Progress while a download runs, and its error once it failed.
+    @ViewBuilder
+    private func mlxDownloadStatus(_ download: MLXDownloadState) -> some View {
+        if download.isActive {
+            if let fraction = download.fraction {
+                ProgressView(value: fraction)
+            } else {
+                ProgressView().progressViewStyle(.linear)
+            }
+        }
+        if let failure = download.failure {
+            Text(failure).font(.caption).foregroundStyle(.red)
         }
     }
 
@@ -188,11 +196,14 @@ extension EngineAndModelPaneView {
         }
     }
 
-    private var mlxCustomRepoRow: some View {
+    /// `downloadWithoutRow` is a custom model's download, which has no catalog row until it is
+    /// cached; its progress, Cancel and failure are shown here instead.
+    private func mlxCustomRepoRow(downloadWithoutRow: MLXDownloadState?) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             SettingsRowLabel(
                 title: "Other MLX Model",
-                description: "A Hugging Face model id or link, for example mlx-community/Qwen3-4B-4bit. Base models complete text better than chat models.",
+                description: "A Hugging Face model id or link, for example mlx-community/Qwen3-4B-4bit. " +
+                    "Base models complete text better than chat models.",
                 systemImage: "plus.circle"
             )
             HStack(spacing: 8) {
@@ -220,6 +231,18 @@ extension EngineAndModelPaneView {
             } else if let message = mlxCustomValidation?.message {
                 Text(message).font(.caption).foregroundStyle(.orange)
             }
+            if let download = downloadWithoutRow {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(download.repoID.value).font(.caption)
+                        mlxDownloadStatus(download)
+                    }
+                    Spacer(minLength: 8)
+                    if download.isActive {
+                        Button("Cancel") { mlxModelDownloader.cancelDownload() }
+                    }
+                }
+            }
         }
         .settingsItem(.mlxCustomModel)
     }
@@ -239,7 +262,8 @@ extension EngineAndModelPaneView {
                 } label: {
                     SettingsRowLabel(
                         title: "Prompt Cache Memory",
-                        description: "The most memory MLX keeps for reusing recent prompts. More can speed up suggestions in long documents; changing it restarts MLX.",
+                        description: "The most memory MLX keeps for reusing recent prompts. More can speed up " +
+                            "suggestions in long documents; changing it restarts MLX.",
                         systemImage: "memorychip"
                     )
                 }

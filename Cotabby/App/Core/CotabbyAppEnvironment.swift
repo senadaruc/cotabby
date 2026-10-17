@@ -972,7 +972,7 @@ final class CotabbyAppEnvironment {
                 mlxToolchainProvisioner.$state, mlxModelDownloader.$cachedModels, mlxModelDownloader.$rejectedModels)
         )
         .map { engine, modelID, cacheBytes, toolchainAndCache in
-            MLXServerDesireResolver.desire(
+            MLXServerDesireResolver.desire(for: .init(
                 engine: engine,
                 isAppleSilicon: MLXHardware.isAppleSilicon,
                 toolchain: toolchainAndCache.0,
@@ -980,7 +980,7 @@ final class CotabbyAppEnvironment {
                 cachedModels: toolchainAndCache.1,
                 promptCacheBytes: cacheBytes,
                 rejectedModels: toolchainAndCache.2
-            )
+            ))
         }
         .removeDuplicates()
         .sink { [weak self] desire in

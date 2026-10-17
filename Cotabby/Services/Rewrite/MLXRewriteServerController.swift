@@ -66,7 +66,7 @@ final class MLXRewriteServerController {
     /// What the server should do for `modelID` right now. `.mlx` is passed as the engine because
     /// this server runs whenever a rewrite needs it, independent of the autocomplete engine.
     private func desire(modelID: String) -> MLXServerDesire {
-        MLXServerDesireResolver.desire(
+        MLXServerDesireResolver.desire(for: .init(
             engine: .mlx,
             isAppleSilicon: isAppleSilicon,
             toolchain: toolchain(),
@@ -74,7 +74,7 @@ final class MLXRewriteServerController {
             cachedModels: cachedModels(),
             promptCacheBytes: Self.promptCacheBytes,
             rejectedModels: rejectedModels()
-        )
+        ))
     }
 
     /// Whether a rewrite on `modelID` could start a server: the provider's `isAvailable`.
