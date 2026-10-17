@@ -111,7 +111,7 @@ struct SuggestionConfiguration: Equatable, Sendable {
     let focusPollIntervalMilliseconds: Int
 
     /// Output ceiling reserved out of the llama context window when sizing the prompt budget:
-    /// the largest realistic per-request token budget (multi-line doubles the 26-token default).
+    /// the largest realistic per-request token budget (multi-line doubles the 26-token 12-20 preset).
     static let llamaPromptOutputCeilingTokens = 50
     /// Margin for BOS plus token-estimator error; the estimator skews conservative, so real
     /// prompts land under the derived budget.
@@ -166,7 +166,12 @@ struct SuggestionConfiguration: Equatable, Sendable {
         // endpoint backend can carry that prompt off the Mac, so a real name is an explicit opt-in
         // and a placeholder would sign every user's mail with someone else's name.
         defaultUserName: nil,
-        defaultWordCountPreset: .twelveToTwenty,
+        // Short by default: at ~15-20 ms per generated token on a 4B-class model, a 12-20 word
+        // budget (26 tokens) spent most of each request decoding words the user rarely kept, while
+        // the next keystroke was already cancelling it. A 4-7 word suggestion (10 tokens) lands in
+        // a fraction of that, is right more often, and accepting it schedules the continuation
+        // that extends it. Longer presets stay one selection away in Settings.
+        defaultWordCountPreset: .fourToSeven,
         focusPollIntervalMilliseconds: 50
     )
 }
