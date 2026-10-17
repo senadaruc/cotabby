@@ -26,15 +26,17 @@ extension SuggestionCoordinator {
             return
         }
 
-        // The debounce window adapts to the last generation latency: snappier when the model is
-        // fast, calmer when it is slow (fewer doomed generations to cancel). The configured value
-        // is the fallback until a first latency exists.
+        // The debounce window adapts to how quickly the engine produces text: none when a warm
+        // request shows its first text fast, calmer when the model is slow (fewer doomed
+        // generations to cancel). The configured value is the fallback until a latency exists.
         // Under pressure the tuner raises the floor so a typing burst ends in one decode instead
         // of several cancelled ones.
         let debounceMilliseconds = max(
             DebouncePolicy.milliseconds(
                 lastGenerationLatencyMilliseconds:
                     lastLatencyByEngine[settingsSnapshot.selectedEngine],
+                lastFirstTextLatencyMilliseconds:
+                    lastFirstTextLatencyByEngine[settingsSnapshot.selectedEngine],
                 fallback: settingsSnapshot.debounceMilliseconds,
                 engine: settingsSnapshot.selectedEngine
             ),
