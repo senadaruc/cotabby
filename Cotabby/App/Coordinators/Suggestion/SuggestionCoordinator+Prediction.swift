@@ -36,7 +36,7 @@ extension SuggestionCoordinator {
                 lastGenerationLatencyMilliseconds:
                     lastLatencyByEngine[settingsSnapshot.selectedEngine],
                 lastFirstTextLatencyMilliseconds:
-                    lastFirstTextLatencyByEngine[settingsSnapshot.selectedEngine],
+                    typicalFirstTextLatency(engine: settingsSnapshot.selectedEngine),
                 fallback: settingsSnapshot.debounceMilliseconds,
                 engine: settingsSnapshot.selectedEngine
             ),
