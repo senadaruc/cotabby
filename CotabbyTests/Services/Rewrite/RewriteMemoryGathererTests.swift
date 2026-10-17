@@ -20,49 +20,49 @@ final class RewriteMemoryGathererTests: XCTestCase {
         func latestMessages(source: String, conversationID: String, limit: Int) async -> [MemoryStore.StoredMessage] { messages }
     }
 
-    private let conversation = MemoryConversation(source: "whatsapp", conversationId: "c1", title: "Richard",
-                                                  participants: ["Richard"], lastTimestamp: 0)
+    private let conversation = MemoryConversation(source: "whatsapp", conversationId: "c1", title: "Charlie",
+                                                  participants: ["Charlie"], lastTimestamp: 0)
 
-    private func hit(_ text: String, sender: String = "Richard", fromMe: Bool = false) -> MemorySearchResult.Hit {
-        MemorySearchResult.Hit(recordId: UUID().uuidString, source: "whatsapp", conversationId: "c1", conversationTitle: "Richard",
+    private func hit(_ text: String, sender: String = "Charlie", fromMe: Bool = false) -> MemorySearchResult.Hit {
+        MemorySearchResult.Hit(recordId: UUID().uuidString, source: "whatsapp", conversationId: "c1", conversationTitle: "Charlie",
                                sender: sender, isFromMe: fromMe, timestamp: 0, subject: nil, text: text, score: 1,
                                similarity: 0.8, via: "vector")
     }
 
     private func message(_ text: String, fromMe: Bool) -> MemoryStore.StoredMessage {
         MemoryStore.StoredMessage(recordID: UUID().uuidString, source: "whatsapp", conversationID: "c1", conversationKey: "k",
-                                  sender: fromMe ? "Me" : "Richard", isFromMe: fromMe, timestamp: 0, subject: nil, text: text)
+                                  sender: fromMe ? "Me" : "Charlie", isFromMe: fromMe, timestamp: 0, subject: nil, text: text)
     }
 
     private func input() -> FocusedInputSnapshot {
-        CotabbyTestFixtures.focusedInputSnapshot(bundleIdentifier: "net.whatsapp.WhatsApp", windowTitle: "Richard")
+        CotabbyTestFixtures.focusedInputSnapshot(bundleIdentifier: "net.whatsapp.WhatsApp", windowTitle: "Charlie")
     }
 
     func test_factsAndOwnStyleFromTheAppsConversation() async {
         let search = StubSearch()
         search.resultsBySources[["whatsapp"]] = MemorySearchResult(scope: "conversation", conversation: conversation, elapsedMs: 1,
                                                                    hits: (1...8).map { hit("fact \($0)") })
-        search.messages = [message("Hi Richard, see you then. Best regards, Senad", fromMe: true),
+        search.messages = [message("Hi Charlie, see you then. Best regards, Alex", fromMe: true),
                            message("Great, the 28th works", fromMe: false)]
         let gatherer = RewriteMemoryGatherer(search: search, sourcesByBundle: { ["net.whatsapp.WhatsApp": ["whatsapp"], "com.apple.mail": ["apple_mail"]] })
         Self.retained.append(gatherer)
 
         let memory = await gatherer.gather(for: input(), selection: "dinner 27th or 28th")
         XCTAssertEqual(memory?.facts.count, 6)
-        XCTAssertEqual(memory?.styleExamples, ["Hi Richard, see you then. Best regards, Senad"])
+        XCTAssertEqual(memory?.styleExamples, ["Hi Charlie, see you then. Best regards, Alex"])
         XCTAssertFalse(search.scopes.contains { $0.global })
     }
 
     func test_fallsBackToOtherSourcesWithoutStyle() async {
         let search = StubSearch()
         search.resultsBySources[["apple_mail"]] = MemorySearchResult(scope: "conversation", conversation: conversation, elapsedMs: 1,
-                                                                     hits: [hit("Richard asked about cigars")])
-        search.messages = [message("Dear Richard, …", fromMe: true)]
+                                                                     hits: [hit("Charlie asked about hiking")])
+        search.messages = [message("Dear Charlie, …", fromMe: true)]
         let gatherer = RewriteMemoryGatherer(search: search, sourcesByBundle: { ["com.apple.mail": ["apple_mail"]] })
         Self.retained.append(gatherer)
 
-        let memory = await gatherer.gather(for: input(), selection: "the book for cigars")
-        XCTAssertEqual(memory?.facts.map(\.text), ["Richard asked about cigars"])
+        let memory = await gatherer.gather(for: input(), selection: "the book for hiking")
+        XCTAssertEqual(memory?.facts.map(\.text), ["Charlie asked about hiking"])
         XCTAssertEqual(memory?.styleExamples, [], "Mail must not stand as the style of a chat message")
         XCTAssertFalse(search.scopes.contains { $0.global })
     }

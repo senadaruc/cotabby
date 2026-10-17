@@ -35,6 +35,8 @@ final class TemporaryKeyTap {
         self.suppressionController = suppressionController
     }
 
+    nonisolated deinit {}
+
     var isInstalled: Bool { tap != nil }
 
     /// Installs the tap (or replaces its decision when installed). `decide` runs on the main thread
@@ -42,6 +44,11 @@ final class TemporaryKeyTap {
     func install(_ decide: @escaping (_ keyCode: CGKeyCode, _ flags: CGEventFlags) -> Decision) {
         self.decide = decide
         guard tap == nil else { return }
+        // The C callback cannot capture Swift context, so `self` travels as the tap's `userInfo`
+        // pointer. `passUnretained` adds no retain: the owner (built once by the environment) outlives
+        // the tap, and `remove()` invalidates the tap before anything could release it. The run loop
+        // source is added to the main run loop, so the callback runs on the main thread and
+        // `MainActor.assumeIsolated` holds.
         let callback: CGEventTapCallBack = { _, type, event, userInfo in
             guard let userInfo else { return Unmanaged.passUnretained(event) }
             let owner = Unmanaged<TemporaryKeyTap>.fromOpaque(userInfo).takeUnretainedValue()

@@ -98,12 +98,12 @@ final class MLXRewriteProviderTests: XCTestCase {
 
     func test_baseModelOnTheOnDemandServerUsesTheCompletionsRouteAndBasePrompt() async throws {
         let rig = makeRig(modelID: baseModel)
-        let request = RewriteRequest(selection: "fixd text", action: .fixOnly, memory: .empty)
+        let request = RewriteRequest(selection: "fixd text", action: .fixOnly)
         okHandler { httpRequest in
             let body = (try? JSONSerialization.jsonObject(with: Self.bodyData(httpRequest)) as? [String: Any]) ?? [:]
             XCTAssertEqual(body["prompt"] as? String, RewritePromptBuilder.basePrompt(request))
             XCTAssertEqual(body["stop"] as? [String], RewritePromptBuilder.baseStopSequences)
-            XCTAssertEqual(body["max_tokens"] as? Int, RewritePromptBuilder.completionTokenBudget(for: request))
+            XCTAssertEqual(body["max_tokens"] as? Int, RewritePromptBuilder.tokenBudget(request))
             XCTAssertNil(body["messages"])
         }
         async let result = rig.provider.rewrite(request, onPartial: { _ in })
@@ -114,13 +114,33 @@ final class MLXRewriteProviderTests: XCTestCase {
         XCTAssertEqual(MLXRewriteStubURLProtocol.requested, ["http://127.0.0.1:50300/v1/completions"])
     }
 
+    /// The base path cuts at the first stop sequence like the llama path, so "Draft:" never reaches
+    /// the preview even if the server streams it.
+    func test_baseModelOutputIsCutAtTheStopText() async throws {
+        let rig = makeRig(modelID: baseModel)
+        MLXRewriteStubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                                           headerFields: ["Content-Type": "text/event-stream"])!
+            let body = "data: {\"choices\":[{\"text\":\"Fixed text.\\n\\nDraft: next\"}]}\n\ndata: [DONE]\n\n"
+            return (response, Data(body.utf8))
+        }
+        var partials: [String] = []
+        async let result = rig.provider.rewrite(
+            RewriteRequest(selection: "fixd text", action: .fixOnly), onPartial: { partials.append($0) })
+        await waitUntil { rig.probe.waiting >= 1 }
+        rig.probe.succeedNext()
+        let text = try await result
+        XCTAssertEqual(text, "Fixed text.")
+        XCTAssertFalse(partials.contains { $0.contains("Draft") }, "\(partials)")
+    }
+
     func test_aReadyAutocompleteServerIsReusedWithoutStartingASecondOne() async throws {
         let rig = makeRig(autocomplete: .mlx)
         await readyAutocompleteServer(rig, modelID: model)
         okHandler()
         var partials: [String] = []
         let text = try await rig.provider.rewrite(
-            RewriteRequest(selection: "fixd text", action: .fixOnly, memory: .empty), onPartial: { partials.append($0) })
+            RewriteRequest(selection: "fixd text", action: .fixOnly), onPartial: { partials.append($0) })
         XCTAssertEqual(text, "Fixed text.")
         XCTAssertEqual(MLXRewriteStubURLProtocol.requested, ["http://127.0.0.1:50400/v1/chat/completions"])
         XCTAssertTrue(rig.launcher.launches.isEmpty, "no second server")
@@ -132,7 +152,7 @@ final class MLXRewriteProviderTests: XCTestCase {
         await readyAutocompleteServer(rig, modelID: baseModel)
         okHandler()
         _ = try await rig.provider.rewrite(
-            RewriteRequest(selection: "fixd text", action: .fixOnly, memory: .empty), onPartial: { _ in })
+            RewriteRequest(selection: "fixd text", action: .fixOnly), onPartial: { _ in })
         XCTAssertEqual(MLXRewriteStubURLProtocol.requested, ["http://127.0.0.1:50400/v1/completions"])
         XCTAssertTrue(rig.launcher.launches.isEmpty)
     }
@@ -147,7 +167,7 @@ final class MLXRewriteProviderTests: XCTestCase {
         okHandler()
         var partials: [String] = []
         async let result = rig.provider.rewrite(
-            RewriteRequest(selection: "fixd", action: .fixOnly, memory: .empty), onPartial: { partials.append($0) })
+            RewriteRequest(selection: "fixd", action: .fixOnly), onPartial: { partials.append($0) })
         for _ in 0..<5 { await Task.yield() }
         XCTAssertTrue(MLXRewriteStubURLProtocol.requested.isEmpty, "nothing is sent before the server is ready")
         rig.sharedProbe.succeedNext()
@@ -165,7 +185,7 @@ final class MLXRewriteProviderTests: XCTestCase {
         XCTAssertFalse(rig.provider.isAvailable)
         XCTAssertEqual(rig.provider.unavailableReason, MLXUnavailableReason.notInstalled.message)
         do {
-            _ = try await rig.provider.rewrite(RewriteRequest(selection: "x", action: .fixOnly, memory: .empty), onPartial: { _ in })
+            _ = try await rig.provider.rewrite(RewriteRequest(selection: "x", action: .fixOnly), onPartial: { _ in })
             XCTFail("expected an error")
         } catch {
             XCTAssertEqual(error as? RewriteError, .unavailable(MLXUnavailableReason.notInstalled.message))
@@ -179,7 +199,7 @@ final class MLXRewriteProviderTests: XCTestCase {
         let rig = makeRig(autocomplete: .mlx)
         XCTAssertFalse(rig.provider.isAvailable)
         do {
-            _ = try await rig.provider.rewrite(RewriteRequest(selection: "x", action: .fixOnly, memory: .empty), onPartial: { _ in })
+            _ = try await rig.provider.rewrite(RewriteRequest(selection: "x", action: .fixOnly), onPartial: { _ in })
             XCTFail("expected an error")
         } catch {
             XCTAssertEqual(error as? RewriteError, .unavailable("MLX is not running."))
@@ -193,7 +213,7 @@ final class MLXRewriteProviderTests: XCTestCase {
         await readyAutocompleteServer(rig, modelID: model)
         okHandler()
         async let result = rig.provider.rewrite(
-            RewriteRequest(selection: "fixd", action: .fixOnly, memory: .empty), onPartial: { _ in })
+            RewriteRequest(selection: "fixd", action: .fixOnly), onPartial: { _ in })
         await waitUntil { rig.probe.waiting >= 1 }
         rig.probe.succeedNext()
         _ = try await result
@@ -216,7 +236,7 @@ final class MLXRewriteProviderTests: XCTestCase {
         }
         do {
             _ = try await rig.provider.rewrite(
-                RewriteRequest(selection: "fixd", action: .fixOnly, memory: .empty), onPartial: { _ in })
+                RewriteRequest(selection: "fixd", action: .fixOnly), onPartial: { _ in })
             XCTFail("expected an error")
         } catch {
             XCTAssertEqual(error as? RewriteError, .unavailable("MLX is restarting…"))
@@ -245,7 +265,7 @@ final class MLXRewriteProviderTests: XCTestCase {
             return (response, Data("data: {\"choices\":[{\"delta\":{\"content\":\"Fixed text.\"}}]}\n\ndata: [DONE]\n\n".utf8))
         }
         var partials: [String] = []
-        let request = RewriteRequest(selection: "fixd text", action: .fixOnly, memory: .empty)
+        let request = RewriteRequest(selection: "fixd text", action: .fixOnly)
         async let result = rig.provider.rewrite(request, onPartial: { partials.append($0) })
         await waitUntil { rig.probe.waiting >= 1 }
         rig.probe.succeedNext()
@@ -262,7 +282,7 @@ final class MLXRewriteProviderTests: XCTestCase {
             (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!, Data())
         }
         async let result = rig.provider.rewrite(
-            RewriteRequest(selection: "fixd", action: .fixOnly, memory: .empty), onPartial: { _ in })
+            RewriteRequest(selection: "fixd", action: .fixOnly), onPartial: { _ in })
         await waitUntil { rig.probe.waiting >= 1 }
         rig.probe.succeedNext()
         do {
@@ -306,7 +326,7 @@ final class MLXRewriteProviderTests: XCTestCase {
         }
         let task = Task {
             try await rig.provider.rewrite(
-                RewriteRequest(selection: "fixd", action: .fixOnly, memory: .empty), onPartial: { _ in })
+                RewriteRequest(selection: "fixd", action: .fixOnly), onPartial: { _ in })
         }
         await waitUntil { rig.probe.waiting >= 1 }
         rig.probe.succeedNext()
@@ -326,7 +346,7 @@ final class MLXRewriteProviderTests: XCTestCase {
     func test_unavailableServerThrowsWithoutAnyHTTPTraffic() async {
         let rig = makeRig(toolchain: .notInstalled)
         do {
-            _ = try await rig.provider.rewrite(RewriteRequest(selection: "x", action: .fixOnly, memory: .empty), onPartial: { _ in })
+            _ = try await rig.provider.rewrite(RewriteRequest(selection: "x", action: .fixOnly), onPartial: { _ in })
             XCTFail("expected an error")
         } catch {
             XCTAssertEqual(error as? RewriteError, .unavailable(MLXUnavailableReason.notInstalled.message))

@@ -440,10 +440,7 @@ final class CotabbyAppEnvironment {
             ),
             localEndpoint: LocalEndpointRewriteProvider(
                 client: openAICompatibleClient,
-                configuration: { [weak suggestionSettings] in
-                    guard let suggestionSettings else { throw OpenAICompatibleClientError.invalidResponse }
-                    return try suggestionSettings.openAICompatibleConfiguration
-                },
+                configuration: { [weak suggestionSettings] in try Self.endpointConfiguration(of: suggestionSettings) },
                 apiKey: { [weak suggestionSettings] in try suggestionSettings?.openAICompatibleAPIKey() }
             ),
             mlx: MLXRewriteProvider(
@@ -462,10 +459,15 @@ final class CotabbyAppEnvironment {
                 }
             ),
             autocompleteEngine: { [weak suggestionSettings] in suggestionSettings?.selectedEngine ?? .llamaOpenSource },
+            // "Same as autocomplete" stays on this Mac when autocomplete's endpoint is on another host.
+            endpointHostScope: { [weak suggestionSettings] in try? Self.endpointConfiguration(of: suggestionSettings).hostScope },
             preferences: { [weak rewritePreferences] in rewritePreferences?.preferences ?? .defaults }
         )
         let selectionRewriteCoordinator = SelectionRewriteCoordinator(
             snapshots: focusModel.$snapshot.eraseToAnyPublisher(),
+            // `@Published` emits the new value before the store's property changes, so the coordinator
+            // acts on the emitted value; `dropFirst` skips the replayed current one.
+            enabledChanges: rewritePreferences.$preferences.map(\.isEnabled).removeDuplicates().dropFirst().eraseToAnyPublisher(),
             currentSnapshot: { [weak focusModel] in focusModel?.snapshot ?? .inactive },
             refreshFocus: { [weak focusModel] in focusModel?.refreshNow() },
             presenter: SelectionRewritePanelController(indicator: activationIndicatorController),
@@ -483,12 +485,13 @@ final class CotabbyAppEnvironment {
                 }
             ),
             preferences: { [weak rewritePreferences] in rewritePreferences?.preferences ?? .defaults },
-            isAppAllowed: { [weak suggestionSettings, weak lowPowerModeMonitor] bundleIdentifier in
-                guard let suggestionSettings else { return false }
-                let settings = suggestionSettings.snapshot
-                let lowPower = (lowPowerModeMonitor?.isLowPowerModeEnabled ?? false) && settings.isLowPowerModeAutoDisableEnabled
-                return settings.isGloballyEnabled && !settings.isTemporarilyPaused && !lowPower
-                    && !settings.disabledAppBundleIdentifiers.contains(bundleIdentifier)
+            isAppAllowed: { [weak suggestionSettings, weak lowPowerModeMonitor] input in
+                SelectionRewriteEligibility.isAppAllowed(
+                    for: input,
+                    settings: suggestionSettings?.snapshot,
+                    isLowPowerModeEnabled: lowPowerModeMonitor?.isLowPowerModeEnabled ?? false,
+                    disabledDomains: PerDomainDisableSettings.disabledDomains()
+                )
             },
             hotkey: TranslationHotkeyTap(suppressionController: suppressionController),
             keyTap: TemporaryKeyTap(suppressionController: suppressionController),
@@ -856,6 +859,15 @@ final class CotabbyAppEnvironment {
         }
     }
 
+    /// Autocomplete's endpoint as the Local Endpoint rewrite provider reads it per rewrite. A torn
+    /// down settings model reads as "not configured" (the provider maps any throw to that).
+    private static func endpointConfiguration(
+        of settings: SuggestionSettingsModel?
+    ) throws -> OpenAICompatibleEndpointConfiguration {
+        guard let settings else { throw OpenAICompatibleEndpointError.emptyModelName }
+        return try settings.openAICompatibleConfiguration
+    }
+
     /// Connect once when the endpoint engine becomes active. Only server identity and credentials
     /// invalidate discovery: the selected model and generation route do not affect `GET /models`,
     /// so changing either must keep the catalog and connected status alive. Settings still owns
@@ -944,7 +956,7 @@ final class CotabbyAppEnvironment {
 
         // The on-demand rewrite server serves autocomplete's MLX model, and only while autocomplete
         // is not on MLX (otherwise rewrites share autocomplete's server). Stop it whenever what it
-        // is for changes: the resolved rewrite provider, autocomplete moving to or from MLX, or
+        // is for changes: Rewrite moving to or from MLX, autocomplete moving to or from MLX, or
         // that model (the next rewrite restarts it).
         Publishers.CombineLatest3(
             rewritePreferences.$preferences.map(\.provider),
@@ -952,7 +964,7 @@ final class CotabbyAppEnvironment {
             suggestionSettings.$mlxModelID
         )
         .map { provider, engine, model in
-            (RewriteProviderResolver.resolve(provider, autocompleteEngine: engine), engine == .mlx, model)
+            (RewriteProviderResolver.usesMLX(provider, autocompleteEngine: engine), engine == .mlx, model)
         }
         .removeDuplicates { $0 == $1 }
         .dropFirst()
@@ -988,6 +1000,10 @@ final class CotabbyAppEnvironment {
             let previous = self.mlxApplyChain
             self.mlxApplyChain = Task { [weak self] in
                 await previous?.value
+                // Rewrite's on-demand server runs this same MLX model, and only while autocomplete
+                // is not on MLX. Before autocomplete's server starts, wait for that one to stop
+                // (after a rewrite still streaming on it), so the weights are never loaded twice.
+                if case .running = desire { await self?.mlxRewriteServer.stop() }
                 await self?.mlxServerManager.apply(desire)
             }
         }

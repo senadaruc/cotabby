@@ -1,15 +1,14 @@
 import XCTest
 @testable import Cotabby
 
-/// The rewrite names the draft's language because Apple's model otherwise drifts into English:
-/// "selam beraber cigar iceriz wihiskey" came back as "hey let's smoke cigars with whiskey"
-/// (2026-10-10). Detection is limited to the languages the user writes in, because unconstrained
-/// recognition called that draft Indonesian.
+/// The rewrite names the draft's language because Apple's model otherwise can drift into English on
+/// a draft that mixes in English words. Detection is limited to the languages the user writes in,
+/// because unconstrained recognition can misname a short draft typed without accents.
 final class RewriteLanguageDetectorTests: XCTestCase {
     private let languages = ["English", "Turkish"]
 
-    func test_turkishDraftWithEnglishLoanwordsIsTurkish() {
-        XCTAssertEqual(RewriteLanguageDetector.language(of: "selam beraber cigar iceriz wihiskey", among: languages), "Turkish")
+    func test_turkishDraftWithEnglishWordsIsTurkish() {
+        XCTAssertEqual(RewriteLanguageDetector.language(of: "bu aksam party var, sen de gel lutfen", among: languages), "Turkish")
     }
 
     func test_englishDraftIsEnglish() {

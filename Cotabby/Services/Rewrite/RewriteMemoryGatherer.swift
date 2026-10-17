@@ -8,8 +8,8 @@ import Foundation
 /// 1. The conversation the focused window names, within the focused app's own memory sources
 ///    (`ConversationScopeResolver`, the same rule autocomplete uses). Style examples come only from
 ///    here, so a chat is never styled after mail.
-/// 2. The same title in the user's other enabled sources (a WhatsApp chat named "Richard" finds
-///    Richard's mail thread). Facts only.
+/// 2. The same title in the user's other enabled sources (a WhatsApp chat named "Charlie" finds
+///    Charlie's mail thread). Facts only.
 /// Nil when neither finds anything: the popup then says "No memory for this person".
 /// Built by `CotabbyAppEnvironment`; used by `SelectionRewriteCoordinator`.
 @MainActor

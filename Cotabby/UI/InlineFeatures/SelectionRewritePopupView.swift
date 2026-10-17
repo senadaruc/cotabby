@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import SwiftUI
 
@@ -108,17 +109,41 @@ struct SelectionRewritePopupView: View {
         model.onAction(.custom(instruction))
     }
 
-    /// The rewrite as plain wrapped text at its full height. Not a ScrollView: the panel sizes itself
-    /// to the view's fitting size, and a ScrollView has no ideal height, so the preview collapsed to
-    /// nothing and only its scroller showed (2026-10-10). A selection is at most 2,000 characters, and
-    /// the panel's placement keeps it on screen. `final` false means the text is still streaming in,
-    /// so it is drawn dimmed.
+    /// The rewrite as wrapped text. Short text is shown at its full height; text taller than
+    /// `maximumPreviewHeight` scrolls inside a frame of exactly that height, so the buttons below
+    /// always stay on screen. The height is given explicitly because the panel sizes itself to the
+    /// view's fitting size, and a bare ScrollView has no ideal height (it would collapse to nothing).
+    /// `final` false means the text is still streaming in, so it is drawn dimmed.
+    @ViewBuilder
     private func preview(_ text: String, final: Bool) -> some View {
-        Text(text)
+        let label = Text(text)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
             .foregroundStyle(final ? .primary : .secondary)
+        if Self.previewNeedsScrolling(text) {
+            ScrollView { label }.frame(height: Self.maximumPreviewHeight)
+        } else {
+            label
+        }
+    }
+
+    /// The tallest the preview grows before it scrolls: about 18 lines, which with the rest of the
+    /// popup fits on the smallest screens Cotabby supports.
+    static let maximumPreviewHeight: CGFloat = 300
+    /// The text's width inside the popup: the 360 pt card minus its 12 pt padding on each side.
+    static let previewWidth: CGFloat = 336
+
+    /// Whether `text` laid out at the preview's width and the system body font is taller than
+    /// `maximumPreviewHeight`. Measured with TextKit rather than SwiftUI so the answer is known
+    /// before layout and pinned by tests.
+    static func previewNeedsScrolling(_ text: String) -> Bool {
+        let attributed = NSAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: NSFont.systemFontSize)])
+        let bounds = attributed.boundingRect(
+            with: CGSize(width: previewWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading]
+        )
+        return bounds.height > maximumPreviewHeight
     }
 
     private func previewResult(_ text: String, unsupported: [String]) -> some View {
@@ -172,15 +197,15 @@ private struct WrapLayout: Layout {
     }
 
     func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
-        var y = bounds.minY
+        var rowTop = bounds.minY
         for row in arrange(subviews, width: bounds.width) {
-            var x = bounds.minX
+            var cursorX = bounds.minX
             for index in row.indices {
                 let size = subviews[index].sizeThatFits(.unspecified)
-                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
-                x += size.width + spacing
+                subviews[index].place(at: CGPoint(x: cursorX, y: rowTop), proposal: ProposedViewSize(size))
+                cursorX += size.width + spacing
             }
-            y += row.height + spacing
+            rowTop += row.height + spacing
         }
     }
 

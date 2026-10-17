@@ -67,6 +67,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
     case translationLanguages
     case contextLivePreview
     // Rewrite
+    case rewriteEnabled
     case rewriteProvider
     case rewriteMemory
     case rewriteButton
@@ -179,6 +180,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .translationEnabled: return "Translate Messages"
         case .translationApps: return "Translation Apps"
         case .translationLanguages: return "Translation Languages"
+        case .rewriteEnabled: return "Rewrite Selected Text"
         case .rewriteProvider: return "Rewrite Model"
         case .rewriteMemory: return "Rewrite with Memory"
         case .rewriteButton: return "Rewrite Button"
@@ -285,6 +287,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .translationEnabled: return "character.bubble"
         case .translationApps: return "app.badge"
         case .translationLanguages: return "globe"
+        case .rewriteEnabled: return "wand.and.stars"
         case .rewriteProvider: return "cpu"
         case .rewriteMemory: return "brain"
         case .rewriteButton: return "wand.and.stars"
@@ -365,7 +368,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
             return .memory
         case .translationEnabled, .translationApps, .translationLanguages:
             return .translation
-        case .rewriteProvider, .rewriteMemory, .rewriteButton:
+        case .rewriteEnabled, .rewriteProvider, .rewriteMemory, .rewriteButton:
             return .rewrite
         case .engine, .appleIntelligenceAvailability, .appleLanguageFallback, .appleLanguageFallbackModel, .modelStatus, .selectedModel,
              .lowPowerModeAutoDisable, .powerBasedModelSwitching, .batteryModel, .pluggedInModel,
@@ -441,6 +444,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .translationEnabled: return "Translate incoming messages and offer replies in the chat's language."
         case .translationApps: return "Apps whose chats are translated."
         case .translationLanguages: return "Which languages translate on this Mac, and how."
+        case .rewriteEnabled: return "Turn selection rewrite on or off."
         case .rewriteProvider: return "Rewrite with the engine autocomplete uses, another local engine, or your API model."
         case .rewriteMemory: return "Let rewrites use facts and your style from memory."
         case .rewriteButton: return "Show a button when you select text, or use ⌃⌥R."
@@ -636,6 +640,8 @@ enum SettingsItem: String, CaseIterable, Identifiable {
             return ["translate", "translation apps", "whatsapp", "teams", "telegram", "slack", "outlook", "mail"]
         case .translationLanguages:
             return ["translation languages", "apple translation", "download languages", "offline translation"]
+        case .rewriteEnabled:
+            return ["rewrite", "selection", "turn off", "disable", "enable", "rephrase"]
         case .rewriteProvider:
             return ["rewrite", "rephrase", "api", "openai", "cloud", "model", "polish", "mlx", "apple intelligence", "endpoint", "ollama", "open source"]
         case .rewriteMemory:
