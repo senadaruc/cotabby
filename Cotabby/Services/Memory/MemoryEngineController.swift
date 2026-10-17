@@ -3,6 +3,7 @@ import Combine
 import CoreGraphics
 import CryptoKit
 import Foundation
+import Logging
 
 /// File overview:
 /// Owns conversation memory's lifecycle: on or off, the embedding model download, the encryption
@@ -45,6 +46,8 @@ final class MemoryEngineController: ObservableObject {
     private var startGeneration = 0
     /// The start in flight, awaited before the store's files are deleted.
     private var startTask: Task<Void, Never>?
+    /// Whether this run already logged the sources whose "Use for answers" was never set.
+    private var didLogUnsetAnswerSources = false
 
     /// Opens the store and starts an engine (off the main actor). Injected by tests.
     typealias EngineFactory = @Sendable (
@@ -244,6 +247,28 @@ final class MemoryEngineController: ObservableObject {
         status = engine.status
         self.engine = engine
         state = .running
+        logUnsetAnswerSourcesOnce(engine.configuration)
+    }
+
+    /// An unset "Use for answers" means off (`MemorySourceCatalog.isAnswerSource`); earlier builds
+    /// of this fork read it as on for most sources. Said once per run, at info level (Console, and
+    /// `cotabby.jsonl` under `-cotabby-debug`), so the user can find which sources answers stopped
+    /// drawing on. Nothing is written to the settings: the choice stays the user's to make.
+    private func logUnsetAnswerSourcesOnce(_ configuration: MemoryConfiguration) {
+        guard !didLogUnsetAnswerSources else { return }
+        didLogUnsetAnswerSources = true
+        let unset = MemorySourceCatalog.sourcesWithUnsetAnswerChoice(in: configuration)
+        guard !unset.isEmpty else { return }
+        let titles = unset.map { MemorySourceCatalog.descriptor($0)?.title ?? $0 }
+        let message = "Memory: answers do not use \(titles.joined(separator: ", ")): their \"Use for answers\" was "
+            + "never set, and unset is off. Turn it on per source in Settings → Memory → Sources."
+        CotabbyLogger.app.info(
+            "\(message)",
+            metadata: [
+                "category": "memory", "answers_enabled": .string("\(configuration.answers.enabled)"),
+                "unset_answer_sources": .string(unset.joined(separator: ","))
+            ]
+        )
     }
 
     /// What the indexing policy needs, read on the main actor (the power monitor lives there).

@@ -46,8 +46,8 @@ nonisolated struct MemoryIndexSettings: Codable, Equatable, Sendable {
 nonisolated struct MemorySourceSettings: Codable, Equatable, Sendable {
     var enabled: Bool
     var options: [String: String]
-    /// Whether answers to questions may use this source's facts; nil follows the source's default
-    /// (`MemorySourceCatalog.isAnswerSource`).
+    /// Whether answers to questions may quote this source's other conversations; nil (never set) is
+    /// off (`MemorySourceCatalog.isAnswerSource`).
     var answerSource: Bool?
 
     init(enabled: Bool, options: [String: String] = [:], answerSource: Bool? = nil) {

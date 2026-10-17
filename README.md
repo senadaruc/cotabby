@@ -74,13 +74,22 @@ conversation and with the same people.
 
 **Answer cards**: when a message asks you something and your reply is still empty, Cotabby drafts
 an answer from memory.
-- The draft appears on a card with the messages it is based on. **Tab** inserts it; **Esc**
-  dismisses it.
-- It only answers from facts it found. It abstains rather than guess, and treats the question as
-  untrusted text.
+- Only in Mail and Outlook replies (from the quoted message below the caret) and in WhatsApp and
+  Teams chats whose memory source is on; never in a browser or another app. Off per app or per
+  window from the field icon.
+- Facts come from the chat you reply in and from the sources you turned **Use for answers** on for
+  (off for every source until you turn it on). A quoted mail is only the question, never a way
+  into another thread, so a mail answer draws only on those sources.
+- The draft appears on a card that names what it answers and every message it was given, each
+  from another conversation marked. A click or **Tab** in an empty reply pastes it for you to edit
+  (nothing is sent); **Esc** dismisses it.
+- It only answers from facts it found and abstains rather than guess. The question and every fact
+  are treated as quoted, untrusted text, and a message that reads like instructions to an
+  assistant gets no answer.
 - "Are you free Thursday?" is answered from your calendar, with busy and free times only, never
-  what or with whom.
-- It uses Apple Intelligence or the local model, never the remote endpoint.
+  what or with whom. Calendar events themselves are never answer facts.
+- It uses Apple Intelligence, or the local model when Open Source is your engine; never the remote
+  endpoint.
 
 **Other additions** (also offered upstream as pull requests):
 - Translation of incoming messages, and of your replies.

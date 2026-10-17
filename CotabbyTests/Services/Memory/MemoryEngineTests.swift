@@ -305,14 +305,57 @@ final class MemoryEngineTests: XCTestCase {
                        "WhatsApp is not an answer source here, and the question is not its own answer")
     }
 
-    /// A source the user never decided on follows its default: work sources yes, personal chats
-    /// (WhatsApp) and Calendar no; the user's own choice wins either way.
-    func test_answerSourcesFollowTheUsersChoiceElseTheSourcesDefault() {
-        XCTAssertTrue(MemorySourceCatalog.isAnswerSource("outlook", settings: MemorySourceSettings(enabled: true)))
-        XCTAssertFalse(MemorySourceCatalog.isAnswerSource("whatsapp", settings: nil))
-        XCTAssertFalse(MemorySourceCatalog.isAnswerSource("calendar", settings: nil))
-        XCTAssertFalse(MemorySourceCatalog.isAnswerSource("outlook", settings: MemorySourceSettings(enabled: true, answerSource: false)))
+    /// Other conversations are opt-in: with no answer source turned on, only the conversation being
+    /// answered can supply facts, and with none identified, nothing can.
+    func test_answerSourcesAreOffByDefaultAndOnlyTheCurrentConversationIsSearched() throws {
+        XCTAssertFalse(MemorySourceCatalog.all.contains { MemorySourceCatalog.isAnswerSource($0.id, settings: nil) })
+        XCTAssertFalse(MemorySourceCatalog.isAnswerSource("outlook", settings: MemorySourceSettings(enabled: true)))
+        XCTAssertTrue(MemorySourceCatalog.isAnswerSource("outlook", settings: MemorySourceSettings(enabled: true, answerSource: true)))
+
+        let engine = try makeEngine(sources: ["outlook"])
+        try engine.ingest(source: "outlook", records: [
+            record("pilot", "The Acme pilot passed all acceptance tests", sender: "Sam", title: "Pilot - Acme"),
+            record("board", "The Acme pilot budget is confidential", sender: "Priya", title: "Board"),
+        ], cursor: nil)
+        let current = engine.answerSearch(question: "How did the Acme pilot go?", sources: [],
+                                          currentConversation: ("outlook", "pilot"), excludingRecordIDs: [])
+        XCTAssertEqual(current.hits.map(\.text), ["The Acme pilot passed all acceptance tests"])
+        XCTAssertTrue(engine.answerSearch(question: "How did the Acme pilot go?", sources: [], currentConversation: nil,
+                                          excludingRecordIDs: []).hits.isEmpty)
+    }
+
+    /// A choice the user made is kept exactly, on or off; one they never made is off, and the
+    /// enabled sources left unset are the ones the controller names once in its log.
+    func test_anExplicitAnswerChoiceIsKeptAndUnsetSourcesAreListed() throws {
         XCTAssertTrue(MemorySourceCatalog.isAnswerSource("whatsapp", settings: MemorySourceSettings(enabled: true, answerSource: true)))
+        XCTAssertFalse(MemorySourceCatalog.isAnswerSource("outlook", settings: MemorySourceSettings(enabled: true, answerSource: false)))
+
+        let json = """
+        {"sources": {"outlook": {"enabled": true, "answer_source": true}, "teams": {"enabled": true, "answer_source": false},
+                     "documents": {"enabled": true}, "apple_mail": {"enabled": true}, "whatsapp": {"enabled": false},
+                     "calendar": {"enabled": true}}}
+        """
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let configuration = try decoder.decode(MemoryConfiguration.self, from: Data(json.utf8))
+        XCTAssertEqual(configuration.sources["outlook"]?.answerSource, true)
+        XCTAssertEqual(configuration.sources["teams"]?.answerSource, false)
+        XCTAssertNil(configuration.sources["documents"]?.answerSource)
+        // Calendar can never answer, and a source that is off is not memory's at all.
+        XCTAssertEqual(MemorySourceCatalog.sourcesWithUnsetAnswerChoice(in: configuration), ["apple_mail", "documents"])
+    }
+
+    /// Calendar events hold what a meeting is and who is in it; answers say only busy and free, so
+    /// no event ever becomes a fact, even with "Use for answers" switched on for Calendar.
+    func test_calendarEventsAreNeverAnswerFacts() throws {
+        XCTAssertFalse(MemorySourceCatalog.isAnswerSource("calendar", settings: MemorySourceSettings(enabled: true, answerSource: true)))
+        let engine = try makeEngine(sources: ["calendar"])
+        try engine.ingest(source: "calendar", records: [
+            record("event:1", "Meeting: Northwind restructuring review\nWhen: Thu 8 Oct 2026, 10:00–11:00", sender: "Priya",
+                   title: "Northwind restructuring review"),
+        ], cursor: nil)
+        XCTAssertTrue(engine.answerSearch(question: "Are you free Thursday for the Northwind review?", sources: ["calendar"],
+                                          currentConversation: nil, excludingRecordIDs: []).hits.isEmpty)
     }
 
     func test_chatsAreFoundByTitleAndReadNewestFirst() throws {

@@ -2,10 +2,10 @@ import Foundation
 
 /// File overview:
 /// The sources conversation memory can read, described once: what each is, which apps it serves,
-/// what it needs, and whether answers may use it by default.
+/// what it needs, and whether answers may ever use it.
 ///
 /// Why a catalog: the pane lists sources, suggestions map the focused app to sources, and the answer
-/// feature needs each source's default. One table keeps those three agreeing. Reading a source is a
+/// feature needs to know which sources can answer at all. One table keeps those three agreeing. Reading a source is a
 /// separate concern (the readers in `Services/Memory/Readers`).
 
 nonisolated struct MemorySourceDescriptor: Equatable, Sendable {
@@ -15,9 +15,6 @@ nonisolated struct MemorySourceDescriptor: Equatable, Sendable {
     let appBundleIds: [String]
     let requirements: [MemorySource.Requirement]
     let optionsSchema: [String: String]
-    /// Whether facts from this source may answer questions unless the user decides otherwise. Work
-    /// sources yes; personal chats no, since an answer can put them in front of other people.
-    let answerSourceByDefault: Bool
     /// Documents, not messages: kept whatever their date. Retention ("keep messages for N days")
     /// would otherwise drop a handbook or contract because the file was last edited long ago.
     var keepsAllDates = false
@@ -38,45 +35,38 @@ nonisolated enum MemorySourceCatalog {
         MemorySourceDescriptor(
             id: "whatsapp", title: "WhatsApp",
             description: "Chats from WhatsApp for Mac, read from its local database.",
-            appBundleIds: ["net.whatsapp.WhatsApp"], requirements: [fullDiskAccess], optionsSchema: [:],
-            answerSourceByDefault: false
+            appBundleIds: ["net.whatsapp.WhatsApp"], requirements: [fullDiskAccess], optionsSchema: [:]
         ),
         MemorySourceDescriptor(
             id: "apple_mail", title: "Apple Mail",
             description: "Mail from all accounts in the Mail app, read from its local store.",
-            appBundleIds: ["com.apple.mail"], requirements: [fullDiskAccess], optionsSchema: [:],
-            answerSourceByDefault: true
+            appBundleIds: ["com.apple.mail"], requirements: [fullDiskAccess], optionsSchema: [:]
         ),
         MemorySourceDescriptor(
             id: "outlook", title: "Outlook",
             description: "Mail from Outlook for Mac, read from its local files: New Outlook's store and the classic " +
                 "database. Mail Outlook keeps only online is not included.",
-            appBundleIds: ["com.microsoft.Outlook"], requirements: [fullDiskAccess], optionsSchema: [:],
-            answerSourceByDefault: true
+            appBundleIds: ["com.microsoft.Outlook"], requirements: [fullDiskAccess], optionsSchema: [:]
         ),
         MemorySourceDescriptor(
             id: "teams", title: "Microsoft Teams",
             description: "Chats, meeting chats and channels the Teams app has cached on this Mac (usually the recent " +
                 "months; older history stays in Microsoft 365).",
-            appBundleIds: ["com.microsoft.teams2", "com.microsoft.teams"], requirements: [fullDiskAccess], optionsSchema: [:],
-            answerSourceByDefault: true
+            appBundleIds: ["com.microsoft.teams2", "com.microsoft.teams"], requirements: [fullDiskAccess], optionsSchema: [:]
         ),
         MemorySourceDescriptor(
             id: "calendar", title: "Calendar",
             description: "Events from every calendar in the Calendar app, including work accounts added there: what, " +
                 "when, where and with whom, from the past year to three months ahead. When someone asks when you " +
                 "are free, answers check these calendars for busy and free times only.",
-            appBundleIds: ["com.apple.iCal"], requirements: [calendarAccess], optionsSchema: [:],
-            // Off: "all calendars" includes personal ones. Free/busy answers do not depend on this.
-            answerSourceByDefault: false
+            appBundleIds: ["com.apple.iCal"], requirements: [calendarAccess], optionsSchema: [:]
         ),
         MemorySourceDescriptor(
             id: "documents", title: "Documents Folder",
             description: "Plain-text and Markdown files in a folder you choose: reference notes answers can draw on.",
             appBundleIds: [], requirements: [MemorySource.Requirement(kind: "folder", title: "Folder",
                                                                        detail: "The folder whose .txt and .md files are remembered.")],
-            optionsSchema: ["folder": "Folder"],
-            answerSourceByDefault: true, keepsAllDates: true
+            optionsSchema: ["folder": "Folder"], keepsAllDates: true
         ),
     ] + [("icloud_drive", "iCloud Drive"), ("google_drive", "Google Drive"), ("onedrive", "OneDrive")].map { cloudDrive(id: $0.0, title: $0.1) }
 
@@ -87,8 +77,7 @@ nonisolated enum MemorySourceCatalog {
             description: "Documents in \(title) on this Mac, every account: PDF, Word, PowerPoint, Excel, RTF, " +
                 "text and Markdown. Online-only files are downloaded by \(title) to be read, then given back. " +
                 "Google Docs, Sheets and Slides stay in the cloud and are not read.",
-            appBundleIds: [], requirements: [fullDiskAccess], optionsSchema: [:],
-            answerSourceByDefault: true, keepsAllDates: true
+            appBundleIds: [], requirements: [fullDiskAccess], optionsSchema: [:], keepsAllDates: true
         )
     }
 
@@ -100,9 +89,11 @@ nonisolated enum MemorySourceCatalog {
         all.first { $0.id == id }
     }
 
-    /// Whether `id` may answer questions under `settings` (the user's choice, else the default).
+    /// Whether answers may quote facts from `id`'s other conversations: only when the user turned
+    /// "Use for answers" on for it. Off for every source by default, because an answer goes to
+    /// someone else and could carry what was said in a conversation they were never part of.
     static func isAnswerSource(_ id: String, settings: MemorySourceSettings?) -> Bool {
-        canAnswer(id) && (settings?.answerSource ?? descriptor(id)?.answerSourceByDefault ?? false)
+        canAnswer(id) && (settings?.answerSource ?? false)
     }
 
     /// Whether a source can be an answer source at all. Never Calendar: its records hold what an
@@ -110,5 +101,16 @@ nonisolated enum MemorySourceCatalog {
     /// read live from EventKit, not from memory).
     static func canAnswer(_ id: String) -> Bool {
         id != "calendar"
+    }
+
+    /// Enabled sources whose "Use for answers" the user never set, so answers do not use them.
+    /// Earlier builds of this fork read an unset choice as on for Mail, Outlook, Teams, Documents
+    /// and the cloud drives; it is off now (the injection hardening), and this list is what the
+    /// memory controller logs once so the user can find which sources to turn back on.
+    static func sourcesWithUnsetAnswerChoice(in configuration: MemoryConfiguration) -> [String] {
+        all.map(\.id).filter { id in
+            guard canAnswer(id), let settings = configuration.sources[id], settings.enabled else { return false }
+            return settings.answerSource == nil
+        }
     }
 }
