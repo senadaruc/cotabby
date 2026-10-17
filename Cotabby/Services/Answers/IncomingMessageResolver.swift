@@ -53,9 +53,11 @@ final class IncomingMessageResolver {
     }
 
     func latestIncoming(for context: FocusedInputSnapshot) async -> IncomingMessage? {
+        // Mail gets no scope (`ConversationScopeResolver`): a quoted mail is read as data only,
+        // with no memory conversation of its own.
         let scope = ConversationScopeResolver.scope(
             bundleIdentifier: context.bundleIdentifier, conversationTitle: context.featureScopeWindowTitle,
-            trailingText: context.trailingText, sourcesByBundle: sourcesByBundle()
+            sourcesByBundle: sourcesByBundle()
         )
         if let quoted = QuotedReplyParser.quotedMessage(in: context.trailingText) {
             let conversation = scope.flatMap { scope in

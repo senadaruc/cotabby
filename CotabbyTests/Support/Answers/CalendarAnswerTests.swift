@@ -87,43 +87,5 @@ final class CalendarAnswerTests: XCTestCase {
         XCTAssertEqual(AvailabilityFacts.language(of: "Perşembe öğleden sonra müsait misin?"), .turkish)
     }
 
-    // MARK: - Memory records
-
-    func test_anEventBecomesARecordWithoutCallBoilerplate() throws {
-        let notes = "Agenda: pilot scope and pricing\n\n________________\nMicrosoft Teams meeting\nJoin on your computer\nhttps://teams.microsoft.com/l/x\nPasscode: abc123"
-        let record = try XCTUnwrap(CalendarEventText.record(
-            event("THY review", date(8, 10), date(8, 11), attendees: [me, ayse], organizer: ayse, notes: notes, id: "E1"),
-            timeZone: calendar.timeZone
-        ))
-        XCTAssertEqual(record.text, """
-        Meeting: THY review
-        When: Thu 8 Oct 2026, 10:00–11:00
-        Organizer: Ayşe Yılmaz
-        Agenda: pilot scope and pricing
-        """)
-        XCTAssertEqual(record.conversationID, "event:E1")
-        XCTAssertEqual(record.participants, ["ayse@client.com"], "the user is not a participant")
-        XCTAssertFalse(record.isFromMe, "an event is not something the user said")
-        let cancelled = try XCTUnwrap(CalendarEventText.record(event("Sync", date(9, 9), date(9, 10), cancelled: true),
-                                                               timeZone: calendar.timeZone))
-        XCTAssertTrue(cancelled.text.contains("Status: cancelled"), "replaces the stored meeting instead of vanishing")
-    }
-
-    func test_theReaderReadsChangedEventsAndOnesEnteringTheHorizon() throws {
-        let lastSync = now.addingTimeInterval(-86_400)
-        let events = [
-            event("Old unchanged", date(1, 10), date(1, 11), modified: date(1)),
-            event("Moved", date(9, 10), date(9, 11), modified: now.addingTimeInterval(-600)),
-            event("Far ahead", lastSync.addingTimeInterval(91 * 86_400), lastSync.addingTimeInterval(91 * 86_400 + 3_600), modified: date(1)),
-        ]
-        let reader = CalendarHistoryReader(events: { _, _ in events }, isAuthorized: { true }, now: { self.now })
-        let first = try reader.read(after: nil, since: nil, limit: 500)
-        XCTAssertEqual(first.records.count, 3, "the first sync reads the whole window")
-        let next = try reader.read(after: String(Int64(lastSync.timeIntervalSince1970 * 1000)), since: nil, limit: 500)
-        XCTAssertEqual(next.records.map(\.conversationTitle), ["Moved", "Far ahead"])
-        XCTAssertEqual(next.nextCursor, String(Int64(now.timeIntervalSince1970 * 1000)))
-        let denied = CalendarHistoryReader(events: { _, _ in events }, isAuthorized: { false }, now: { self.now })
-        XCTAssertFalse(denied.readiness().isReady)
-        XCTAssertTrue(try denied.read(after: nil, since: nil, limit: 10).records.isEmpty)
-    }
+    // The memory records an event becomes and the reader's window: `CalendarMemoryTests`.
 }

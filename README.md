@@ -55,10 +55,17 @@ feed, which would replace these features.
 **Conversation memory**: suggestions and answers can draw on what was said before, in the same
 conversation and with the same people.
 - Reads WhatsApp, Apple Mail, Outlook (New Outlook and the classic database), Microsoft Teams'
-  local cache, your calendars, and a folder of notes you choose. Each source is opt-in.
+  local cache, your calendars, a folder of notes you choose, and documents in iCloud Drive, Google
+  Drive and OneDrive. Each source is opt-in.
+- Suggestions use it in WhatsApp and Teams chats (the open chat, then chats with exactly the same
+  people; a group never stands for a 1:1 chat). Mail and Outlook are synced and searchable, but a
+  mail reply gets no conversation memory yet: neither its subject nor its quoted text can say who
+  it is for, so this waits for reading the compose window's To and Cc fields.
 - Everything stays on your Mac:
-  - Messages are encrypted in Cotabby's folder.
-  - Embeddings are computed on-device with llama.cpp (Qwen3-Embedding-0.6B).
+  - Message contents, names and titles are encrypted in Cotabby's folder (timestamps, sources and
+    the settings file are not).
+  - Embeddings are computed on-device with llama.cpp (Qwen3-Embedding-0.6B), downloaded once from
+    Hugging Face.
   - Memory is never sent to a remote model endpoint.
 - Hybrid search (meaning plus exact words) with retention limits and per-person or
   per-conversation exclusions.

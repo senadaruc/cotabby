@@ -6,7 +6,7 @@ import Foundation
 /// `CalendarEventSnapshot` values.
 ///
 /// EventKit sees every calendar the Calendar app has (iCloud, Google, Exchange and CalDAV accounts
-/// added in System Settings), which is how the corporate calendar reaches Cotabby without reading
+/// added in System Settings), which is how a work calendar reaches Cotabby without reading
 /// New Outlook's files. Access is macOS's "Full Access" to Calendars, asked for once from the memory
 /// settings (`NSCalendarsFullAccessUsageDescription`); the hardened runtime also needs the app's
 /// Calendars entitlement (`Cotabby.entitlements`).

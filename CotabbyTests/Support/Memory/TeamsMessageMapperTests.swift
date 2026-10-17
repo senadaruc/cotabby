@@ -5,12 +5,11 @@ import XCTest
 /// Pins the rules that turn Teams' cached rows into memory messages: titles, participants (with the
 /// group marker that keeps groups from sharing a 1:1's memory), which messages are kept, the cursor,
 /// sender names and the HTML-to-text conversion. The fixtures are plain dictionaries shaped like
-/// Teams' IndexedDB values, and the cases are those of the Python service's `test_teams.py`, which
-/// these rules were ported from.
+/// Teams' IndexedDB values.
 final class TeamsMessageMapperTests: XCTestCase {
     private let me = "8:orgid:aaaaaaaa-0000-0000-0000-000000000001"
-    private let ali = "8:orgid:bbbbbbbb-0000-0000-0000-000000000002"
-    private let valon = "8:orgid:cccccccc-0000-0000-0000-000000000003"
+    private let avery = "8:orgid:bbbbbbbb-0000-0000-0000-000000000002"
+    private let vic = "8:orgid:cccccccc-0000-0000-0000-000000000003"
     private let oneToOne = "19:aaaaaaaa-0000-0000-0000-000000000001_bbbbbbbb-0000-0000-0000-000000000002@unq.gbl.spaces"
     private let group = "19:group0001@thread.v2"
     private let meeting = "19:meeting_abc@thread.v2"
@@ -30,29 +29,31 @@ final class TeamsMessageMapperTests: XCTestCase {
 
     private func fixture() -> (conversations: [[String: Any]], messages: [[String: Any]], profiles: [String: String]) {
         let conversations: [[String: Any]] = [
-            ["id": oneToOne, "type": "Chat", "members": [["id": me], ["id": ali]],
-             "chatTitle": ["longTitle": "Ali Pakkan, Senad Aruc"]],
+            ["id": oneToOne, "type": "Chat", "members": [["id": me], ["id": avery]],
+             "chatTitle": ["longTitle": "Avery Stone, Sam Archer"]],
             // Teams' cached title names this group after one member; its members list is partial.
-            ["id": group, "type": "Chat", "members": [["id": me], ["id": ali]],
-             "chatTitle": ["longTitle": "Ali Pakkan, Senad Aruc"]],
+            ["id": group, "type": "Chat", "members": [["id": me], ["id": avery]],
+             "chatTitle": ["longTitle": "Avery Stone, Sam Archer"]],
             ["id": meeting, "type": "Meeting", "threadProperties": ["topic": "POC Planning"],
-             "members": [["id": me], ["id": ali], ["id": valon]]]
+             "members": [["id": me], ["id": avery], ["id": vic]]],
+            // A chat without Avery: the user is then the one member of every conversation.
+            ["id": "19:other@thread.v2", "type": "Chat", "members": [["id": me], ["id": vic]]]
         ]
         let messages: [[String: Any]] = [
-            message(oneToOne, ali, "Ali Pakkan", "<p>The <b>POC</b> passed&nbsp;today</p>", at: t0 + 1_000),
-            message(oneToOne, me, "Senad Aruc",
+            message(oneToOne, avery, "Avery Stone", "<p>The <b>POC</b> passed&nbsp;today</p>", at: t0 + 1_000),
+            message(oneToOne, me, "Sam Archer",
                     "<p>Great news</p><blockquote itemtype=\"http://schema.skype.com/Reply\">The POC passed today</blockquote>",
                     at: t0 + 2_000),
-            message(group, valon, "Valon Dauti", "Budget is approved", at: t0 + 3_000, kind: "Text"),
-            message(group, me, "Senad Aruc", "Thanks Valon", at: t0 + 4_000),
-            message(meeting, me, "Senad Aruc", "Agenda is in the invite", at: t0 + 5_000),
-            message(oneToOne, ali, "Ali Pakkan", "", at: t0 + 6_000, kind: "Event/Call"),
-            message(oneToOne, ali, "Ali Pakkan", "removed", at: t0 + 7_000, deleted: true),
-            message("48:notifications", ali, "Ali Pakkan", "You were mentioned", at: t0 + 8_000),
+            message(group, vic, "Vic Dalton", "Budget is approved", at: t0 + 3_000, kind: "Text"),
+            message(group, me, "Sam Archer", "Thanks Vic", at: t0 + 4_000),
+            message(meeting, me, "Sam Archer", "Agenda is in the invite", at: t0 + 5_000),
+            message(oneToOne, avery, "Avery Stone", "", at: t0 + 6_000, kind: "Event/Call"),
+            message(oneToOne, avery, "Avery Stone", "removed", at: t0 + 7_000, deleted: true),
+            message("48:notifications", avery, "Avery Stone", "You were mentioned", at: t0 + 8_000),
             // A message the user sent on someone's behalf carries that person's name.
-            message(meeting, me, "Valon Dauti", "Forwarded note", at: t0 + 9_000)
+            message(meeting, me, "Vic Dalton", "Forwarded note", at: t0 + 9_000)
         ]
-        return (conversations, messages, [ali: "Ali Pakkan"])
+        return (conversations, messages, [avery: "Avery Stone"])
     }
 
     private func mapFixture(after: Double = 0) -> TeamsMessageMapper.Result {
@@ -67,17 +68,17 @@ final class TeamsMessageMapperTests: XCTestCase {
     func test_titlesComeFromTopicsAndTheOneToOneIdNeverFromCachedTitles() {
         let result = mapFixture()
         let grouped = byConversation(result.messages)
-        XCTAssertEqual(grouped[oneToOne]?.first?.conversationTitle, "Ali Pakkan")
+        XCTAssertEqual(grouped[oneToOne]?.first?.conversationTitle, "Avery Stone")
         XCTAssertEqual(grouped[meeting]?.first?.conversationTitle, "POC Planning")
-        // The group is titled by everyone in it, so it can never pass for the 1:1 with Ali.
-        XCTAssertEqual(grouped[group]?.first?.conversationTitle, "Ali Pakkan, Valon Dauti")
+        // The group is titled by everyone in it, so it can never pass for the 1:1 with Avery.
+        XCTAssertEqual(grouped[group]?.first?.conversationTitle, "Avery Stone, Vic Dalton")
         XCTAssertEqual(result.newestMilliseconds, t0 + 9_000)
     }
 
     func test_participantsIncludeEveryoneWhoWroteAndNeverTheUser() {
         let grouped = byConversation(mapFixture().messages)
-        XCTAssertEqual(grouped[oneToOne]?.first?.participants, [ali])
-        XCTAssertEqual(grouped[group]?.first?.participants, [ali, valon, TeamsMessageMapper.groupMarker + group])
+        XCTAssertEqual(grouped[oneToOne]?.first?.participants, [avery])
+        XCTAssertEqual(grouped[group]?.first?.participants, [avery, vic, TeamsMessageMapper.groupMarker + group])
         XCTAssertTrue(grouped[group]?.allSatisfy { $0.participants == grouped[group]?.first?.participants } ?? false)
         XCTAssertEqual(grouped[oneToOne]?.map(\.isFromMe), [false, true])
     }
@@ -99,62 +100,68 @@ final class TeamsMessageMapperTests: XCTestCase {
     func test_senderNamesFollowThePersonNotOneMessage() throws {
         let forwarded = try XCTUnwrap(mapFixture().messages.first { $0.text == "Forwarded note" })
         XCTAssertTrue(forwarded.isFromMe)
-        XCTAssertEqual(forwarded.sender, "Senad Aruc")
+        XCTAssertEqual(forwarded.sender, "Sam Archer")
     }
 
     func test_idsJoinTheConversationAndTheMessageId() {
         let ids = mapFixture().messages.map(\.sourceMessageID)
         XCTAssertEqual(ids.first, "\(oneToOne)/\(Int64(t0 + 1_000))")
         // A message without a string id falls back to its arrival time.
-        var unnamed = message(group, valon, "Valon Dauti", "No id", at: t0 + 10_000)
+        var unnamed = message(group, vic, "Vic Dalton", "No id", at: t0 + 10_000)
         unnamed["id"] = 42.0
         let result = TeamsMessageMapper.map(conversations: [], messages: [unnamed], profiles: [:], afterMilliseconds: 0)
         XCTAssertEqual(result.messages.first?.sourceMessageID, "\(group)/\(Int64(t0 + 10_000))")
     }
 
     func test_aGroupNeverSharesParticipantsWithAOneToOneEvenWhenOnlyThatPersonWrote() {
-        // The cached member list of a group is often partial: here only Ali has written in it.
+        // The cached member list of a group is often partial: here only Avery has written in it.
         let conversations: [[String: Any]] = [
             ["id": group, "type": "Chat", "members": [["id": me]], "threadProperties": ["topic": "Ops"]]
         ]
         let messages = [
-            message(oneToOne, ali, "Ali Pakkan", "my salary negotiation is private", at: t0 + 1_000),
-            message(group, ali, "Ali Pakkan", "the release is on Friday", at: t0 + 2_000),
-            message(group, me, "Senad Aruc", "thanks", at: t0 + 3_000)
+            message(oneToOne, avery, "Avery Stone", "my salary negotiation is private", at: t0 + 1_000),
+            message(group, avery, "Avery Stone", "the release is on Friday", at: t0 + 2_000),
+            message(group, me, "Sam Archer", "thanks", at: t0 + 3_000)
         ]
         let grouped = byConversation(
             TeamsMessageMapper.map(conversations: conversations, messages: messages, profiles: [:], afterMilliseconds: 0).messages
         )
-        XCTAssertEqual(grouped[oneToOne]?.first?.participants, [ali])
-        XCTAssertEqual(grouped[group]?.first?.participants, [ali, TeamsMessageMapper.groupMarker + group])
+        XCTAssertEqual(grouped[oneToOne]?.first?.participants, [avery])
+        XCTAssertEqual(grouped[group]?.first?.participants, [avery, TeamsMessageMapper.groupMarker + group])
         XCTAssertEqual(grouped[group]?.last?.isFromMe, true)
         XCTAssertEqual(grouped[group]?.first?.conversationTitle, "Ops")
     }
 
-    func test_meIsTheMemberOfMostConversationsAndTiesGoToTheMostFrequentSender() {
+    func test_meIsTheMemberOfMostConversationsAndNobodyOnATie() {
         let chats = [
-            TeamsMessageMapper.Conversation(id: "a", topic: "", members: [ali, me]),
-            TeamsMessageMapper.Conversation(id: "b", topic: "", members: [ali, me])
+            TeamsMessageMapper.Conversation(id: "a", topic: "", members: [avery, me]),
+            TeamsMessageMapper.Conversation(id: "b", topic: "", members: [avery, me])
         ]
-        // Tied at two conversations each: the user is whoever wrote more.
+        // Tied at two conversations each: whoever wrote more is no evidence of who the user is,
+        // so nobody is labelled "You" and the chats keep both names.
         let messages = [
-            message("a", me, "Senad Aruc", "one", at: t0),
-            message("b", me, "Senad Aruc", "two", at: t0 + 1),
-            message("b", ali, "Ali Pakkan", "three", at: t0 + 2)
+            message("a", me, "Sam Archer", "one", at: t0),
+            message("b", me, "Sam Archer", "two", at: t0 + 1),
+            message("b", avery, "Avery Stone", "three", at: t0 + 2)
         ]
-        XCTAssertEqual(TeamsMessageMapper.me(chats: chats, messages: messages), me)
-        // Nobody wrote: the first of the tied, in the order they were counted.
-        XCTAssertEqual(TeamsMessageMapper.me(chats: chats, messages: []), ali)
+        XCTAssertEqual(TeamsMessageMapper.me(chats: chats, messages: messages), "")
+        let mapped = TeamsMessageMapper.map(
+            conversations: chats.map { ["id": $0.id, "members": $0.members.map { ["id": $0] }] },
+            messages: messages, profiles: [:], afterMilliseconds: 0
+        )
+        XCTAssertFalse(mapped.messages.contains(where: \.isFromMe))
+        let third = TeamsMessageMapper.Conversation(id: "c", topic: "", members: [me, vic])
+        XCTAssertEqual(TeamsMessageMapper.me(chats: chats + [third], messages: messages), me)
         XCTAssertEqual(TeamsMessageMapper.me(chats: [], messages: []), "")
     }
 
     func test_oneToOneIdsAndSenderURLsResolveToMemberIds() {
         XCTAssertEqual(
             TeamsMessageMapper.oneToOneMembers("19:AAAAAAAA-0000-0000-0000-000000000001_bbbbbbbb-0000-0000-0000-000000000002@unq.gbl.spaces"),
-            [me, ali]
+            [me, avery]
         )
         XCTAssertEqual(TeamsMessageMapper.oneToOneMembers(group), [])
-        XCTAssertEqual(TeamsMessageMapper.mri("https://emea.ng.msg.teams.microsoft.com/v1/users/ME/contacts/\(ali) "), ali)
+        XCTAssertEqual(TeamsMessageMapper.mri("https://emea.ng.msg.teams.microsoft.com/v1/users/ME/contacts/\(avery) "), avery)
     }
 
     func test_arrivalTimesAcceptMillisecondsSecondsAndStrings() {
@@ -173,8 +180,8 @@ final class TeamsMessageMapperTests: XCTestCase {
 
     func test_htmlToTextKeepsLineBreaksAndMentions() {
         XCTAssertEqual(
-            TeamsMessageHTML.text("<div>Hi <span itemtype=\"http://schema.skype.com/Mention\">Ali</span>,</div><div>see you</div>"),
-            "Hi Ali,\nsee you"
+            TeamsMessageHTML.text("<div>Hi <span itemtype=\"http://schema.skype.com/Mention\">Avery</span>,</div><div>see you</div>"),
+            "Hi Avery,\nsee you"
         )
         XCTAssertEqual(TeamsMessageHTML.text("plain &amp; simple"), "plain & simple")
         XCTAssertEqual(TeamsMessageHTML.text(""), "")

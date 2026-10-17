@@ -27,7 +27,7 @@ nonisolated struct HxMailRecord: Equatable, Sendable {
     /// The body as stored (HTML), straight from the parser.
     var bodyHTML: String?
     /// The body as text, set by `HxStoreFile` (which drops the HTML to keep memory small).
-    var bodyText: String? = nil
+    var bodyText: String?
     let sent: Date?
 
     /// The thread's title: the subject without reply and forward prefixes.
@@ -83,7 +83,7 @@ nonisolated enum HxStoreRecordParser {
             .filter { $0.count >= 20 && $0 != subject && $0 != subject.map(strippingPrefixes) && $0 != senderName }
             .max { $0.count < $1.count }
 
-        let body = htmlStart.flatMap { start in htmlEnd.map { String(decoding: bytes[start..<$0], as: UTF8.self) } }
+        let body = htmlStart.flatMap { start in htmlEnd.map { String(lossyUTF8: bytes[start..<$0]) } }
         let leading = min(htmlStart ?? bytes.count, classOffset, 4096)
         return HxMailRecord(
             messageID: messageID, messageClass: messageClass, subject: subject, senderAddress: senderAddress,
@@ -191,23 +191,26 @@ nonisolated enum HxStoreRecordParser {
         var index = 0
         var consumed = 0
         while true {
-            var cursor = index
-            while cursor < characters.count, characters[cursor] == " " { cursor += 1 }
+            var cursor = skipSpaces(characters, from: index)
             let wordStart = cursor
             while cursor < characters.count, characters[cursor].isLetter, cursor - wordStart < 4 { cursor += 1 }
             guard replyPrefixes.contains(String(characters[wordStart..<cursor]).lowercased()) else { return consumed }
-            while cursor < characters.count, characters[cursor] == " " { cursor += 1 }
+            cursor = skipSpaces(characters, from: cursor)
             if cursor < characters.count, characters[cursor] == "[" {
                 while cursor < characters.count, characters[cursor] != "]" { cursor += 1 }
-                cursor += 1
-                while cursor < characters.count, characters[cursor] == " " { cursor += 1 }
+                cursor = skipSpaces(characters, from: cursor + 1)
             }
             guard cursor < characters.count, characters[cursor] == ":" else { return consumed }
-            cursor += 1
-            while cursor < characters.count, characters[cursor] == " " { cursor += 1 }
+            cursor = skipSpaces(characters, from: cursor + 1)
             index = cursor
             consumed = cursor
         }
+    }
+
+    private static func skipSpaces(_ characters: [Character], from start: Int) -> Int {
+        var cursor = start
+        while cursor < characters.count, characters[cursor] == " " { cursor += 1 }
+        return cursor
     }
 
     private static func isName(_ text: String) -> Bool {
@@ -227,8 +230,11 @@ nonisolated enum HxStoreRecordParser {
             total += 1
             let value = scalar.value
             if value == 0xFFFD { return false }
-            if value < 0x20 || (0x7F...0x9F).contains(value) || (0xE000...0xF8FF).contains(value) { unprintable += 1 }
-            if (0x3400...0x9FFF).contains(value) || (0xAC00...0xD7AF).contains(value) { ideographs += 1 }
+            switch value {
+            case 0..<0x20, 0x7F...0x9F, 0xE000...0xF8FF: unprintable += 1
+            case 0x3400...0x9FFF, 0xAC00...0xD7AF: ideographs += 1
+            default: break
+            }
         }
         return unprintable * 100 <= total * 5 && ideographs * 2 < total
     }
@@ -257,7 +263,7 @@ nonisolated enum HxStoreRecordParser {
     }
 }
 
-private extension String {
+nonisolated private extension String {
     var utf16LittleEndianBytes: [UInt8] {
         utf16.flatMap { [UInt8($0 & 0xFF), UInt8($0 >> 8)] }
     }

@@ -4,8 +4,8 @@ import Foundation
 /// The values conversation memory's engine, its settings file and the Memory pane share.
 ///
 /// `MemoryConfiguration` is the user's memory settings, persisted as `config.json` in the memory
-/// data folder with snake_case keys (the file the earlier Python service wrote, which still loads:
-/// unknown keys are ignored and missing ones take their defaults). The rest are read-only values the
+/// data folder with snake_case keys (unknown keys are ignored and missing ones take their defaults,
+/// so a file written by another version still loads). The rest are read-only values the
 /// engine produces for the pane and for suggestions. Keeping them in one file makes a change to
 /// what memory exposes one reviewable diff.
 
@@ -26,7 +26,19 @@ nonisolated struct MemoryIndexSettings: Codable, Equatable, Sendable {
         topK = min(max(try container.decodeIfPresent(Int.self, forKey: .topK) ?? 4, 1), 20)
         vectorWeight = min(max(try container.decodeIfPresent(Double.self, forKey: .vectorWeight) ?? 0.7, 0), 1)
         chunkSize = min(max(try container.decodeIfPresent(Int.self, forKey: .chunkSize) ?? PassageChunker.defaultSize, 64), 400)
-        chunkOverlap = min(max(try container.decodeIfPresent(Int.self, forKey: .chunkOverlap) ?? PassageChunker.defaultOverlap, 0), chunkSize / 2)
+        let overlap = try container.decodeIfPresent(Int.self, forKey: .chunkOverlap) ?? PassageChunker.defaultOverlap
+        chunkOverlap = min(max(overlap, 0), chunkSize / 2)
+    }
+
+    /// The same settings within their bounds, the overlap at most half a passage (a smaller
+    /// passage size must take a larger overlap down with it).
+    func clamped() -> MemoryIndexSettings {
+        var settings = self
+        settings.topK = min(max(topK, 1), 20)
+        settings.vectorWeight = min(max(vectorWeight, 0), 1)
+        settings.chunkSize = min(max(chunkSize, 64), 400)
+        settings.chunkOverlap = min(max(chunkOverlap, 0), settings.chunkSize / 2)
+        return settings
     }
 }
 
@@ -34,7 +46,8 @@ nonisolated struct MemoryIndexSettings: Codable, Equatable, Sendable {
 nonisolated struct MemorySourceSettings: Codable, Equatable, Sendable {
     var enabled: Bool
     var options: [String: String]
-    /// Whether answers to questions may use this source's facts; nil follows the source's default.
+    /// Whether answers to questions may use this source's facts; nil follows the source's default
+    /// (`MemorySourceCatalog.isAnswerSource`).
     var answerSource: Bool?
 
     init(enabled: Bool, options: [String: String] = [:], answerSource: Bool? = nil) {
@@ -43,8 +56,8 @@ nonisolated struct MemorySourceSettings: Codable, Equatable, Sendable {
         self.answerSource = answerSource
     }
 
-    /// Options were free-form JSON in older files; any non-string value is kept as its text rather
-    /// than failing the whole configuration.
+    /// Options are free-form JSON in the file; any non-string value is kept as its text rather than
+    /// failing the whole configuration.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
@@ -71,7 +84,9 @@ nonisolated struct MemoryPrivacySettings: Codable, Equatable, Sendable {
     }
 }
 
-/// `config.answers`: drafting answers to questions from memory.
+/// `config.answers`: drafting answers to questions from memory (`AnswerCoordinator`). Off by
+/// default: an answer card puts drafted words in front of the user to send to someone else, so it
+/// is opt-in on top of memory itself.
 nonisolated struct MemoryAnswerSettings: Codable, Equatable, Sendable {
     var enabled = false
     /// Similarity (0-1) the best fact must reach before a draft is offered.
@@ -213,7 +228,7 @@ nonisolated struct MemoryEngineStatus: Equatable, Sendable {
     var dimensions = 0
 }
 
-/// A JSON value of any type, for the free-form option values older settings files may hold.
+/// A JSON value of any type, for the free-form option values a settings file may hold.
 nonisolated enum MemoryJSONValue: Decodable, Equatable, Sendable {
     case string(String)
     case number(Double)
@@ -236,7 +251,9 @@ nonisolated enum MemoryJSONValue: Decodable, Equatable, Sendable {
     var text: String {
         switch self {
         case .string(let value): return value
-        case .number(let value): return value.rounded() == value ? String(Int(value)) : String(value)
+        // `Int(exactly:)`: a whole number beyond Int's range (1e20 in a hand-edited file) stays a
+        // Double instead of trapping at launch.
+        case .number(let value): return Int(exactly: value).map(String.init) ?? String(value)
         case .bool(let value): return value ? "true" : "false"
         case .other(let value): return value
         }

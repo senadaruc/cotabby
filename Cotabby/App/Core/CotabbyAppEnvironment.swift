@@ -392,8 +392,11 @@ final class CotabbyAppEnvironment {
 
         // Conversation memory. Constructing the controller loads nothing: it reads paths and the
         // enabled flag. `AppDelegate` starts it after launch.
+        // Indexing waits while a suggestion is generating: both use the GPU, and the suggestion
+        // is what the user is waiting for.
         let memoryController = MemoryEngineController(
-            isOnACPower: { [weak powerSourceMonitor] in powerSourceMonitor?.isPluggedIn ?? false }
+            isOnACPower: { [weak powerSourceMonitor] in powerSourceMonitor?.isPluggedIn ?? false },
+            isGenerating: { [weak router] in (router?.generationsInFlight ?? 0) > 0 }
         )
         let memoryHistorySync = MemoryHistorySync(
             engine: { [weak memoryController] in memoryController?.engine },
@@ -742,7 +745,7 @@ final class CotabbyAppEnvironment {
             .store(in: &cancellables)
 
         observePowerSourceProfileSwitching()
-        observeMemoryService()
+        observeMemoryEngine()
         observeOpenAICompatibleSelection()
     }
 
@@ -754,7 +757,7 @@ final class CotabbyAppEnvironment {
     /// Extracted from `init` to keep the initializer's complexity bounded.
     /// Memory sources sync once the engine is running and every 15 minutes on AC after that;
     /// nothing runs while memory is off.
-    private func observeMemoryService() {
+    private func observeMemoryEngine() {
         memoryController.$state
             .map { $0 == .running }
             .removeDuplicates()

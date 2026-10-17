@@ -9,10 +9,6 @@ import XCTest
 /// V8 values (every supported tag, back-references, malformed input), and finally a whole Teams
 /// cache read through `TeamsCacheReader`, including blob-stored and compressed values, the cursor
 /// and its look-back.
-///
-/// `test_goldenCacheMatchesThePythonReader` compares a real cache with the Python reader's output
-/// when `COTABBY_TEST_TEAMS_CACHE` (the `.leveldb` folder) and `COTABBY_TEST_TEAMS_GOLDEN` (its JSON)
-/// are set (prefix them with `TEST_RUNNER_` for xcodebuild); it prints counts only, never content.
 final class TeamsIndexedDBTests: XCTestCase {
     private var directory: URL!
 
@@ -33,13 +29,14 @@ final class TeamsIndexedDBTests: XCTestCase {
         // A 2-byte-offset copy and a 4-byte-offset copy of "hello".
         let hello = Array("hello world ".utf8)
         XCTAssertEqual(
-            try SnappyDecoder.decompress([22, UInt8(11 << 2)] + hello + [0x12, 12, 0, 0x13, 17, 0, 0, 0]),
-            hello + Array("hellohello".utf8)
+            try SnappyDecoder.decompress(Self.concat([22, UInt8(11 << 2)], hello, [0x12, 12, 0, 0x13, 17, 0, 0, 0])),
+            Self.concat(hello, Array("hellohello".utf8))
         )
         // A literal longer than 60 bytes carries its length in the next byte.
         let long = [UInt8](repeating: 7, count: 100)
-        XCTAssertEqual(try SnappyDecoder.decompress([100, 60 << 2, 99] + long), long)
-        XCTAssertEqual(try SnappyDecoder.decompress(Self.snappyLiterals(long + hello)), long + hello)
+        XCTAssertEqual(try SnappyDecoder.decompress(Self.concat([100, 60 << 2, 99], long)), long)
+        let longThenHello = Self.concat(long, hello)
+        XCTAssertEqual(try SnappyDecoder.decompress(Self.snappyLiterals(longThenHello)), longThenHello)
         XCTAssertEqual(try SnappyDecoder.decompress([0]), [])
     }
 
@@ -78,6 +75,17 @@ final class TeamsIndexedDBTests: XCTestCase {
         XCTAssertEqual(snapshot.versionsRead, 5)
     }
 
+    /// A damaged batch header with a sequence at the top of the range must not trap on the
+    /// per-entry sequence (the reader promises a corrupt file throws or is skipped, never crashes).
+    func test_aSequenceAtTheTopOfTheRangeDoesNotTrap() throws {
+        let folder = try makeFolder("overflow", files: [
+            "000005.log": Self.logFile([
+                Self.batch(sequence: UInt64.max, [(Array("a".utf8), Array("1".utf8)), (Array("b".utf8), Array("2".utf8))])
+            ])
+        ])
+        XCTAssertEqual(Set(Self.strings(try LevelDBReader(folder: folder).read()).keys), ["a", "b"])
+    }
+
     func test_logRecordsFragmentedAcrossBlocksAreJoined() throws {
         let big = [UInt8]((0..<70_000).map { UInt8($0 % 251) })
         let folder = try makeFolder("fragments", files: [
@@ -96,7 +104,7 @@ final class TeamsIndexedDBTests: XCTestCase {
     func test_aTornLogTailIsIgnored() throws {
         var log = Self.logFile([Self.batch(sequence: 1, [(Array("kept".utf8), [1])])])
         // A FULL fragment announcing more bytes than were written: Teams is mid-write.
-        log += [0, 0, 0, 0, 200, 0, 1] + Self.batch(sequence: 2, [(Array("torn".utf8), [2])])
+        log += Self.concat([0, 0, 0, 0, 200, 0, 1], Self.batch(sequence: 2, [(Array("torn".utf8), [2])]))
         let folder = try makeFolder("torn", files: ["000002.log": log])
         XCTAssertEqual(Self.strings(try LevelDBReader(folder: folder).read()).keys.sorted(), ["kept"])
     }
@@ -161,21 +169,21 @@ final class TeamsIndexedDBTests: XCTestCase {
         // array, a dense array with a hole, a Map, a Set, wrapped primitives, an ArrayBuffer with a
         // view, a Blink blob-index host object and an integer property key.
         var bytes: [UInt8] = [0xFF, 0x0F, 0x00, UInt8(ascii: "o")]
-        func key(_ name: String) -> [UInt8] { [UInt8(ascii: "\"")] + Self.varint(UInt64(name.utf8.count)) + Array(name.utf8) }
-        bytes += key("u") + [UInt8(ascii: "U")] + Self.varint(300)
-        bytes += key("date") + [UInt8(ascii: "D")] + Self.doubleLE(1_790_000_000_000)
-        bytes += key("big") + [UInt8(ascii: "Z"), 0x10] + [0x01, 0, 0, 0, 0, 0, 0, 0] // +1 in one 8-byte digit
-        bytes += key("inner") + [UInt8(ascii: "o")] + key("x") + [UInt8(ascii: "T"), UInt8(ascii: "{"), 1]
-        bytes += key("again") + [UInt8(ascii: "^"), 2] // ids: 0 outer object, 1 date, 2 inner
-        bytes += key("sparse") + [UInt8(ascii: "a"), 5, UInt8(ascii: "I"), 8, UInt8(ascii: "F"), UInt8(ascii: "@"), 1, 5]
-        bytes += key("dense") + [UInt8(ascii: "A"), 2, UInt8(ascii: "-"), UInt8(ascii: "0"), UInt8(ascii: "$"), 0, 2]
-        bytes += key("map") + [UInt8(ascii: ";")] + key("k") + [UInt8(ascii: "I"), 2, UInt8(ascii: ":"), 2]
-        bytes += key("set") + [UInt8(ascii: "'"), UInt8(ascii: "I"), 2, UInt8(ascii: "I"), 4, UInt8(ascii: ","), 2]
-        bytes += key("wrapped") + [UInt8(ascii: "s")] + key("text")
-        bytes += key("number") + [UInt8(ascii: "n")] + Self.doubleLE(2.5)
-        bytes += key("buffer") + [UInt8(ascii: "B"), 3, 1, 2, 3, UInt8(ascii: "V"), UInt8(ascii: "B"), 0, 3, 0]
-        bytes += key("blob") + [UInt8(ascii: "\\"), UInt8(ascii: "i"), 0]
-        bytes += [UInt8(ascii: "I"), 14] + [UInt8(ascii: "T")] // integer key 7
+        func key(_ name: String) -> [UInt8] { Self.concat([UInt8(ascii: "\"")], Self.varint(UInt64(name.utf8.count)), Array(name.utf8)) }
+        bytes += Self.concat(key("u"), [UInt8(ascii: "U")], Self.varint(300))
+        bytes += Self.concat(key("date"), [UInt8(ascii: "D")], Self.doubleLE(1_790_000_000_000))
+        bytes += Self.concat(key("big"), [UInt8(ascii: "Z"), 0x10], [0x01, 0, 0, 0, 0, 0, 0, 0]) // +1 in one 8-byte digit
+        bytes += Self.concat(key("inner"), [UInt8(ascii: "o")], key("x"), [UInt8(ascii: "T"), UInt8(ascii: "{"), 1])
+        bytes += Self.concat(key("again"), [UInt8(ascii: "^"), 2]) // ids: 0 outer object, 1 date, 2 inner
+        bytes += Self.concat(key("sparse"), [UInt8(ascii: "a"), 5, UInt8(ascii: "I"), 8, UInt8(ascii: "F"), UInt8(ascii: "@"), 1, 5])
+        bytes += Self.concat(key("dense"), [UInt8(ascii: "A"), 2, UInt8(ascii: "-"), UInt8(ascii: "0"), UInt8(ascii: "$"), 0, 2])
+        bytes += Self.concat(key("map"), [UInt8(ascii: ";")], key("k"), [UInt8(ascii: "I"), 2, UInt8(ascii: ":"), 2])
+        bytes += Self.concat(key("set"), [UInt8(ascii: "'"), UInt8(ascii: "I"), 2, UInt8(ascii: "I"), 4, UInt8(ascii: ","), 2])
+        bytes += Self.concat(key("wrapped"), [UInt8(ascii: "s")], key("text"))
+        bytes += Self.concat(key("number"), [UInt8(ascii: "n")], Self.doubleLE(2.5))
+        bytes += Self.concat(key("buffer"), [UInt8(ascii: "B"), 3, 1, 2, 3, UInt8(ascii: "V"), UInt8(ascii: "B"), 0, 3, 0])
+        bytes += Self.concat(key("blob"), [UInt8(ascii: "\\"), UInt8(ascii: "i"), 0])
+        bytes += [UInt8(ascii: "I"), 14, UInt8(ascii: "T")] // integer key 7
         bytes += [UInt8(ascii: "{"), 14]
         let object = try XCTUnwrap(try V8ValueDeserializer.deserialize(bytes[...]).object)
         XCTAssertEqual(object["u"], .number(300))
@@ -204,21 +212,22 @@ final class TeamsIndexedDBTests: XCTestCase {
             [0xFF, 0x0F, UInt8(ascii: "A"), 0xFF, 0xFF, 0xFF, 0xFF, 0x0F], // absurd array length
             [0xFF, 0x0F, 0x01],                              // unknown tag
             [0xFF, 0x0F, UInt8(ascii: "\\"), UInt8(ascii: "?")], // unknown Blink host object
-            [0xFF, 0x0F] + [UInt8](repeating: UInt8(ascii: "A"), count: 1000).flatMap { [$0, 1] } // too deep
+            Self.concat([0xFF, 0x0F], [UInt8](repeating: UInt8(ascii: "A"), count: 1000).flatMap { [$0, 1] }) // too deep
         ]
         for bytes in cases {
             XCTAssertThrowsError(try V8ValueDeserializer.deserialize(bytes[...]), "\(bytes.prefix(8))")
         }
         // A cycle (an object containing itself) decodes, with the inner reference undefined.
-        let cyclic: [UInt8] = [0xFF, 0x0F, UInt8(ascii: "o"), UInt8(ascii: "\""), 4] + Array("self".utf8)
-            + [UInt8(ascii: "^"), 0, UInt8(ascii: "{"), 1]
+        let cyclic = Self.concat(
+            [0xFF, 0x0F, UInt8(ascii: "o"), UInt8(ascii: "\""), 4], Array("self".utf8), [UInt8(ascii: "^"), 0, UInt8(ascii: "{"), 1]
+        )
         XCTAssertEqual(try V8ValueDeserializer.deserialize(cyclic[...]), .object(V8Object([("self", .undefined)])))
     }
 
     // MARK: - Teams cache, end to end
 
     private let me = "8:orgid:aaaaaaaa-0000-0000-0000-000000000001"
-    private let ali = "8:orgid:bbbbbbbb-0000-0000-0000-000000000002"
+    private let avery = "8:orgid:bbbbbbbb-0000-0000-0000-000000000002"
     private let oneToOne = "19:aaaaaaaa-0000-0000-0000-000000000001_bbbbbbbb-0000-0000-0000-000000000002@unq.gbl.spaces"
     private let group = "19:ops@thread.v2"
     private let t0: Double = 1_790_000_000_000
@@ -242,33 +251,33 @@ final class TeamsIndexedDBTests: XCTestCase {
         let profiles = (database: UInt64(3), name: "Teams:profiles:tenant")
 
         let oneToOneRow = JS.object([
-            ("id", .string(oneToOne)), ("members", .array([.object([("id", .string(me))]), .object([("id", .string(ali))])]))
+            ("id", .string(oneToOne)), ("members", .array([.object([("id", .string(me))]), .object([("id", .string(avery))])]))
         ])
         let groupRow = JS.object([
             ("id", .string(group)), ("threadProperties", .object([("topic", .string("Ops"))])),
             ("members", .array([.object([("id", .string(me))])]))
         ])
         let chainA = JS.object([("messageMap", .object([
-            chatMessage("m1", oneToOne, ali, "Ali P.", "<p>Grüße aus Berlin</p>", at: t0 + 1_000),
-            chatMessage("m2", oneToOne, me, "Senad Aruc", "<div>Thanks</div>", at: t0 + 2_000)
+            chatMessage("m1", oneToOne, avery, "Avery P.", "<p>Grüße aus Berlin</p>", at: t0 + 1_000),
+            chatMessage("m2", oneToOne, me, "Sam Archer", "<div>Thanks</div>", at: t0 + 2_000)
         ]))])
         let chainB = JS.object([("messageMap", .object([
-            chatMessage("m3", group, ali, "Ali P.", "Budget approved", at: t0 + 3_000)
+            chatMessage("m3", group, avery, "Avery P.", "Budget approved", at: t0 + 3_000)
         ]))])
         let chainC = JS.object([("messageMap", .object([
-            chatMessage("m4", group, me, "Senad Aruc", "See you", at: t0 + 4_000)
+            chatMessage("m4", group, me, "Sam Archer", "See you", at: t0 + 4_000)
         ]))])
         let chainD = JS.object([("messageMap", .object([
-            chatMessage("m5", group, ali, "Ali P.", "a chain Teams deleted", at: t0 + 5_000)
+            chatMessage("m5", group, avery, "Avery P.", "a chain Teams deleted", at: t0 + 5_000)
         ]))])
 
         // Blob 5 of database 2 holds chain C (blob files are named in hex under the database id).
-        let blobContents = [0xFF, 20] + Self.v8(chainC)
+        let blobContents = Self.concat([0xFF, 20], Self.v8(chainC))
         let blobFolder = directory.appendingPathComponent("\(origin).indexeddb.blob/2/00")
         try FileManager.default.createDirectory(at: blobFolder, withIntermediateDirectories: true)
         try Data(blobContents).write(to: blobFolder.appendingPathComponent("5"))
 
-        let compressedEnvelope = [0xFF, 20] + Self.v8(chainB)
+        let compressedEnvelope = Self.concat([0xFF, 20], Self.v8(chainB))
         let metadata: [([UInt8], [UInt8]?)] = [
             (Self.databaseNameKey(origin: "https://teams.microsoft.com", name: conversations.name), [1]),
             (Self.databaseNameKey(origin: "https://teams.microsoft.com", name: chains.name), [2]),
@@ -282,14 +291,17 @@ final class TeamsIndexedDBTests: XCTestCase {
             (Self.recordKey(database: 1, store: 1, key: oneToOne), Self.recordValue(oneToOneRow)),
             (Self.recordKey(database: 1, store: 1, key: group), Self.recordValue(groupRow, blinkVersion: 21)),
             (Self.recordKey(database: 2, store: 2, key: "c2"),
-             [1, 0xFF, 0x11, 0x02] + Self.snappyLiterals(compressedEnvelope)),
+             Self.concat([1, 0xFF, 0x11, 0x02], Self.snappyLiterals(compressedEnvelope))),
             (Self.recordKey(database: 2, store: 1, key: "c3"),
-             [1, 0xFF, 0x11, 0x01] + Self.varint(UInt64(blobContents.count)) + [0]),
-            (IndexedDBReader.makePrefix(databaseID: 2, objectStoreID: 1, indexID: 3) + Self.idbStringKey("c3"),
-             [0, 5, 0] + Self.varint(UInt64(blobContents.count))),
+             Self.concat([1, 0xFF, 0x11, 0x01], Self.varint(UInt64(blobContents.count)), [0])),
+            (Self.concat(IndexedDBReader.makePrefix(databaseID: 2, objectStoreID: 1, indexID: 3), Self.idbStringKey("c3")),
+             Self.concat([0, 5, 0], Self.varint(UInt64(blobContents.count)))),
             (Self.recordKey(database: 2, store: 1, key: "c9"), [1, 0x00, 0x01]),
-            (Self.recordKey(database: 3, store: 1, key: ali),
-             Self.recordValue(.object([("mri", .string(ali)), ("displayName", .string(" Ali Pakkan "))])))
+            // A blob index beyond Int's range: skipped as corrupt, never a trap.
+            (Self.recordKey(database: 2, store: 1, key: "c8"),
+             Self.concat([1, 0xFF, 0x11, 0x01], Self.varint(5), Self.varint(UInt64.max))),
+            (Self.recordKey(database: 3, store: 1, key: avery),
+             Self.recordValue(.object([("mri", .string(avery)), ("displayName", .string(" Avery Stone "))])))
         ]
         // The table holds chain A and the chain D that the log then deletes.
         let tableRows: [([UInt8], UInt64, [UInt8]?)] = [
@@ -317,30 +329,26 @@ final class TeamsIndexedDBTests: XCTestCase {
         let byID = Dictionary(uniqueKeysWithValues: page.records.map { ($0.sourceMessageID, $0) })
         let greeting = try XCTUnwrap(byID["\(oneToOne)/m1"])
         XCTAssertEqual(greeting.text, "Grüße aus Berlin", "a Latin-1 string decodes to its text")
-        XCTAssertEqual(greeting.sender, "Ali Pakkan", "the profile name wins over the message's")
-        XCTAssertEqual(greeting.conversationTitle, "Ali Pakkan")
-        XCTAssertEqual(greeting.participants, [ali])
+        XCTAssertEqual(greeting.sender, "Avery Stone", "the profile name wins over the message's")
+        XCTAssertEqual(greeting.conversationTitle, "Avery Stone")
+        XCTAssertEqual(greeting.participants, [avery])
         XCTAssertEqual(greeting.timestamp.timeIntervalSince1970, (t0 + 1_000) / 1000)
         XCTAssertFalse(greeting.isFromMe)
         XCTAssertTrue(try XCTUnwrap(byID["\(oneToOne)/m2"]).isFromMe)
         let budget = try XCTUnwrap(byID["\(group)/m3"])
         XCTAssertEqual(budget.text, "Budget approved", "Snappy-wrapped value")
         XCTAssertEqual(budget.conversationTitle, "Ops")
-        XCTAssertEqual(budget.participants, [ali, TeamsMessageMapper.groupMarker + group])
+        XCTAssertEqual(budget.participants, [avery, TeamsMessageMapper.groupMarker + group])
         XCTAssertEqual(byID["\(group)/m4"]?.text, "See you", "value stored in a blob file")
         XCTAssertNil(byID["\(group)/m5"], "a chain deleted in the log is gone")
         XCTAssertEqual(page.nextCursor, String(Int64(t0 + 4_000)))
         XCTAssertFalse(page.hasMore)
 
-        // The Python reader's Latin-1 behaviour, kept only for the golden comparison, drops m1.
-        var legacy = reader
-        legacy.decodingOptions = V8ValueDeserializer.Options(latin1AsOpaqueBytes: true)
-        XCTAssertEqual(try legacy.read(after: nil, since: nil, limit: 10).records.count, 3)
     }
 
     func test_teamsCursorLooksBackTwoDaysAndNeverMovesBack() throws {
         let reader = TeamsCacheReader(indexedDBFolders: [try makeTeamsCache().path])
-        // Re-reading from the cursor (as the Python service stored it) finds the last two days again.
+        // Re-reading from a stored cursor (the "1790000000000.0" form parses too) finds the last two days again.
         let again = try reader.read(after: "\(Int64(t0 + 4_000)).0", since: nil, limit: 10)
         XCTAssertEqual(again.records.count, 4)
         XCTAssertNil(again.nextCursor, "nothing newer than the cursor")
@@ -360,107 +368,6 @@ final class TeamsIndexedDBTests: XCTestCase {
         XCTAssertEqual(empty.readiness(), .notFound("Teams has not cached any chats yet."))
     }
 
-    // MARK: - Golden comparison with the Python reader
-
-    func test_goldenCacheMatchesThePythonReader() throws {
-        let environment = ProcessInfo.processInfo.environment
-        guard let cache = environment["COTABBY_TEST_TEAMS_CACHE"], let goldenPath = environment["COTABBY_TEST_TEAMS_GOLDEN"] else {
-            throw XCTSkip("Set COTABBY_TEST_TEAMS_CACHE and COTABBY_TEST_TEAMS_GOLDEN to compare with the Python reader.")
-        }
-        // JSONDecoder, not JSONSerialization: the latter drops a U+FEFF at the start of a string
-        // value, which three of the reference messages begin with.
-        let golden = try JSONDecoder().decode(GoldenFile.self, from: Data(contentsOf: URL(fileURLWithPath: goldenPath)))
-        let goldenRecords = golden.records
-        let goldenByID = Dictionary(goldenRecords.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-
-        // 1. With the Python reader's Latin-1 behaviour: must match record for record.
-        var legacy = TeamsCacheReader(indexedDBFolders: [cache])
-        legacy.decodingOptions = V8ValueDeserializer.Options(latin1AsOpaqueBytes: true)
-        var started = Date()
-        let legacyResult = try legacy.readCache(afterMilliseconds: 0)
-        let legacySeconds = Date().timeIntervalSince(started)
-        var usage = rusage()
-        getrusage(RUSAGE_SELF, &usage)
-        print("TEAMS-GOLDEN peak memory of the test process so far: \(usage.ru_maxrss / 1_048_576) MB")
-        let mismatches = Self.compare(legacyResult.messages, with: goldenByID)
-        let legacyIDs = Set(legacyResult.messages.map(\.sourceMessageID))
-        print("""
-        TEAMS-GOLDEN python-compatible: records \(legacyResult.messages.count) (golden \(goldenRecords.count)), \
-        same ids \(legacyIDs == Set(goldenByID.keys)), field matches \(mismatches.matched)/\(goldenRecords.count), \
-        mismatched fields \(mismatches.byField), newest \(legacyResult.newestMilliseconds) \
-        (golden \(golden.newest)), read \(String(format: "%.2f", legacySeconds)) s
-        """)
-        XCTAssertEqual(legacyResult.messages.count, goldenRecords.count)
-        XCTAssertEqual(legacyIDs, Set(goldenByID.keys))
-        XCTAssertEqual(mismatches.matched, goldenRecords.count, "mismatched fields: \(mismatches.byField)")
-        XCTAssertEqual(legacyResult.newestMilliseconds, golden.newest)
-
-        // 2. As Cotabby reads it: every golden message is still there, plus those the Python reader
-        // lost to its Latin-1 handling; names and titles may improve for the same reason.
-        started = Date()
-        let fixed = try TeamsCacheReader(indexedDBFolders: [cache]).readCache(afterMilliseconds: 0)
-        let fixedSeconds = Date().timeIntervalSince(started)
-        let fixedIDs = Set(fixed.messages.map(\.sourceMessageID))
-        let fixedComparison = Self.compare(fixed.messages.filter { goldenByID[$0.sourceMessageID] != nil }, with: goldenByID)
-        print("""
-        TEAMS-GOLDEN latin1-decoded: records \(fixed.messages.count), golden ids kept \
-        \(goldenByID.keys.filter(fixedIDs.contains).count)/\(goldenRecords.count), added \(fixedIDs.subtracting(goldenByID.keys).count), \
-        unchanged golden records \(fixedComparison.matched), changed fields \(fixedComparison.byField), \
-        read \(String(format: "%.2f", fixedSeconds)) s
-        """)
-        XCTAssertTrue(Set(goldenByID.keys).isSubset(of: fixedIDs))
-        // Every sender or title that changed did so because a name with a Latin-1 letter is now read.
-        let latin1 = { (text: String) in text.unicodeScalars.contains { (0x80...0xFF).contains($0.value) } }
-        let unexplained = fixed.messages.filter { message in
-            guard let expected = goldenByID[message.sourceMessageID] else { return false }
-            return (Array(expected.sender.unicodeScalars) != Array(message.sender.unicodeScalars) && !latin1(message.sender))
-                || (Array(expected.title.unicodeScalars) != Array(message.conversationTitle.unicodeScalars)
-                    && !latin1(message.conversationTitle))
-        }
-        print("TEAMS-GOLDEN latin1-decoded: changes not explained by a Latin-1 name \(unexplained.count)")
-        XCTAssertTrue(unexplained.isEmpty)
-    }
-
-    private struct GoldenFile: Decodable {
-        let newest: Double
-        let records: [GoldenRecord]
-    }
-
-    private struct GoldenRecord: Decodable {
-        let id: String
-        let conversation_id: String
-        let title: String
-        let sender: String
-        let is_from_me: Bool
-        let timestamp: Double
-        let text: String
-        let participants: [String]
-    }
-
-    /// Field-by-field equality, comparing strings by Unicode scalars (Swift's `==` would treat
-    /// differently normalized text as equal; Python would not).
-    private static func compare(_ messages: [TeamsMessageMapper.Message], with golden: [String: GoldenRecord])
-        -> (matched: Int, byField: [String: Int]) {
-        func same(_ lhs: String, _ rhs: String) -> Bool { Array(lhs.unicodeScalars) == Array(rhs.unicodeScalars) }
-        func scalars(_ list: [String]) -> Set<[UInt32]> { Set(list.map { $0.unicodeScalars.map(\.value) }) }
-        var matched = 0
-        var byField: [String: Int] = [:]
-        for message in messages {
-            guard let expected = golden[message.sourceMessageID] else { continue }
-            var fields: [String] = []
-            if !same(expected.conversation_id, message.conversationID) { fields.append("conversation_id") }
-            if !same(expected.title, message.conversationTitle) { fields.append("title") }
-            if !same(expected.sender, message.sender) { fields.append("sender") }
-            if expected.is_from_me != message.isFromMe { fields.append("is_from_me") }
-            if !same(expected.text, message.text) { fields.append("text") }
-            if scalars(expected.participants) != scalars(message.participants) { fields.append("participants") }
-            if abs(expected.timestamp * 1000 - message.arrivalMilliseconds) > 1 { fields.append("timestamp") }
-            if fields.isEmpty { matched += 1 }
-            for field in fields { byField[field, default: 0] += 1 }
-        }
-        return (matched, byField)
-    }
-
     // MARK: - Fixture builders
 
     private func makeFolder(_ name: String, files: [String: [UInt8]]) throws -> URL {
@@ -474,6 +381,14 @@ final class TeamsIndexedDBTests: XCTestCase {
         Dictionary(uniqueKeysWithValues: snapshot.entries.map { (String(decoding: $0.key, as: UTF8.self), String(decoding: $0.value, as: UTF8.self)) })
     }
 
+    /// Joins byte runs. Fixtures use this rather than chains of `+` on array literals, which older
+    /// Swift compilers take seconds to type-check (or give up on) in a test build.
+    static func concat(_ parts: [UInt8]...) -> [UInt8] {
+        var bytes: [UInt8] = []
+        for part in parts { bytes.append(contentsOf: part) }
+        return bytes
+    }
+
     static func varint(_ value: UInt64) -> [UInt8] {
         var bytes: [UInt8] = []
         var remaining = value
@@ -481,7 +396,8 @@ final class TeamsIndexedDBTests: XCTestCase {
             bytes.append(UInt8(remaining & 0x7F) | 0x80)
             remaining >>= 7
         }
-        return bytes + [UInt8(remaining)]
+        bytes.append(UInt8(remaining))
+        return bytes
     }
 
     static func littleEndian<T: FixedWidthInteger>(_ value: T) -> [UInt8] {
@@ -496,7 +412,7 @@ final class TeamsIndexedDBTests: XCTestCase {
         var index = 0
         while index < bytes.count {
             let chunk = min(65_536, bytes.count - index)
-            output += [61 << 2] + littleEndian(UInt16(chunk - 1)) + bytes[index..<(index + chunk)]
+            output += concat([61 << 2], littleEndian(UInt16(chunk - 1)), Array(bytes[index..<(index + chunk)]))
             index += chunk
         }
         return output
@@ -504,12 +420,12 @@ final class TeamsIndexedDBTests: XCTestCase {
 
     /// A write batch: sequence, count, then puts (with a value) and deletions (nil).
     static func batch(sequence: UInt64, _ entries: [([UInt8], [UInt8]?)]) -> [UInt8] {
-        var bytes = littleEndian(sequence) + littleEndian(UInt32(entries.count))
+        var bytes = concat(littleEndian(sequence), littleEndian(UInt32(entries.count)))
         for (key, value) in entries {
             if let value {
-                bytes += [1] + varint(UInt64(key.count)) + key + varint(UInt64(value.count)) + value
+                bytes += concat([1], varint(UInt64(key.count)), key, varint(UInt64(value.count)), value)
             } else {
-                bytes += [0] + varint(UInt64(key.count)) + key
+                bytes += concat([0], varint(UInt64(key.count)), key)
             }
         }
         return bytes
@@ -531,7 +447,7 @@ final class TeamsIndexedDBTests: XCTestCase {
                 let length = min(left - 7, remaining.count)
                 let last = length == remaining.count
                 let type: UInt8 = first ? (last ? 1 : 2) : (last ? 4 : 3)
-                output += [0, 0, 0, 0] + littleEndian(UInt16(length)) + [type] + remaining.prefix(length)
+                output += concat([0, 0, 0, 0], littleEndian(UInt16(length)), [type], Array(remaining.prefix(length)))
                 remaining = remaining.dropFirst(length)
                 first = false
             }
@@ -555,37 +471,38 @@ final class TeamsIndexedDBTests: XCTestCase {
                 } else {
                     while shared < min(previous.count, key.count), previous[shared] == key[shared] { shared += 1 }
                 }
-                bytes += varint(UInt64(shared)) + varint(UInt64(key.count - shared)) + varint(UInt64(value.count))
-                bytes += key[shared...] + value
+                bytes += concat(varint(UInt64(shared)), varint(UInt64(key.count - shared)), varint(UInt64(value.count)))
+                bytes += concat(Array(key[shared...]), value)
                 previous = key
             }
             if restarts.isEmpty { restarts = [0] }
-            return bytes + restarts.flatMap { littleEndian($0) } + littleEndian(UInt32(restarts.count))
+            return concat(bytes, restarts.flatMap { littleEndian($0) }, littleEndian(UInt32(restarts.count)))
         }
         var file: [UInt8] = []
         var index: [([UInt8], [UInt8])] = []
         func append(_ contents: [UInt8], compress: Bool) -> (UInt64, UInt64) {
             let stored = compress ? snappyLiterals(contents) : contents
             let handle = (UInt64(file.count), UInt64(stored.count))
-            file += stored + [compress ? 1 : 0, 0, 0, 0, 0]
+            file += concat(stored, [compress ? 1 : 0, 0, 0, 0, 0])
             return handle
         }
-        let internalEntries = entries.map { key, sequence, value in
-            (key + littleEndian(sequence << 8 | (value == nil ? 0 : 1)), value ?? [])
+        let internalEntries: [([UInt8], [UInt8])] = entries.map { key, sequence, value in
+            let tag: UInt64 = value == nil ? 0 : 1
+            return (concat(key, littleEndian(sequence << 8 | tag)), value ?? [])
         }
         var blockNumber = 0
         for start in stride(from: 0, to: internalEntries.count, by: entriesPerBlock) {
             let items = Array(internalEntries[start..<min(start + entriesPerBlock, internalEntries.count)])
             let compress = blockNumber < compressBlocks.count && compressBlocks[blockNumber]
             let handle = append(block(items), compress: compress)
-            index.append((items.last!.0, varint(handle.0) + varint(handle.1)))
+            index.append((items.last!.0, concat(varint(handle.0), varint(handle.1))))
             blockNumber += 1
         }
         let metaIndex = append(block([]), compress: false)
         let indexHandle = append(block(index), compress: false)
-        var footer = varint(metaIndex.0) + varint(metaIndex.1) + varint(indexHandle.0) + varint(indexHandle.1)
+        var footer = concat(varint(metaIndex.0), varint(metaIndex.1), varint(indexHandle.0), varint(indexHandle.1))
         footer += [UInt8](repeating: 0, count: 40 - footer.count)
-        return file + footer + littleEndian(LevelDBReader.tableMagic)
+        return concat(file, footer, littleEndian(LevelDBReader.tableMagic))
     }
 
     // MARK: IndexedDB and V8
@@ -606,28 +523,30 @@ final class TeamsIndexedDBTests: XCTestCase {
         func string(_ text: String) -> [UInt8] {
             let scalars = Array(text.unicodeScalars)
             if scalars.allSatisfy({ $0.value <= 0xFF }) {
-                return [UInt8(ascii: "\"")] + varint(UInt64(scalars.count)) + scalars.map { UInt8($0.value) }
+                return concat([UInt8(ascii: "\"")], varint(UInt64(scalars.count)), scalars.map { UInt8($0.value) })
             }
             let units = Array(text.utf16)
-            return [UInt8(ascii: "c")] + varint(UInt64(units.count * 2)) + units.flatMap { littleEndian($0) }
+            return concat([UInt8(ascii: "c")], varint(UInt64(units.count * 2)), units.flatMap { littleEndian($0) })
         }
         func encode(_ value: JS) -> [UInt8] {
             switch value {
             case .string(let text): return string(text)
-            case .number(let number): return [UInt8(ascii: "N")] + doubleLE(number)
-            case .int(let int): return [UInt8(ascii: "I")] + varint(UInt64(UInt32(bitPattern: (int << 1) ^ (int >> 31))))
+            case .number(let number): return concat([UInt8(ascii: "N")], doubleLE(number))
+            case .int(let int):
+                let zigzag = UInt32(bitPattern: (int << 1) ^ (int >> 31))
+                return concat([UInt8(ascii: "I")], varint(UInt64(zigzag)))
             case .bool(let flag): return [UInt8(ascii: flag ? "T" : "F")]
             case .null: return [UInt8(ascii: "0")]
             case .undefined: return [UInt8(ascii: "_")]
             case .object(let pairs):
-                return [UInt8(ascii: "o")] + pairs.flatMap { string($0.0) + encode($0.1) } + [UInt8(ascii: "{")]
-                    + varint(UInt64(pairs.count))
+                let properties: [UInt8] = pairs.flatMap { concat(string($0.0), encode($0.1)) }
+                return concat([UInt8(ascii: "o")], properties, [UInt8(ascii: "{")], varint(UInt64(pairs.count)))
             case .array(let items):
-                return [UInt8(ascii: "A")] + varint(UInt64(items.count)) + items.flatMap(encode) + [UInt8(ascii: "$"), 0]
-                    + varint(UInt64(items.count))
+                let elements: [UInt8] = items.flatMap(encode)
+                return concat([UInt8(ascii: "A")], varint(UInt64(items.count)), elements, [UInt8(ascii: "$"), 0], varint(UInt64(items.count)))
             }
         }
-        return [0xFF, 0x0F] + encode(value)
+        return concat([0xFF, 0x0F], encode(value))
     }
 
     static func utf16BE(_ text: String) -> [UInt8] {
@@ -635,35 +554,37 @@ final class TeamsIndexedDBTests: XCTestCase {
     }
 
     static func databaseNameKey(origin: String, name: String) -> [UInt8] {
-        [0, 0, 0, 0, 201] + varint(UInt64(origin.utf16.count)) + utf16BE(origin) + varint(UInt64(name.utf16.count)) + utf16BE(name)
+        concat([0, 0, 0, 0, 201], varint(UInt64(origin.utf16.count)), utf16BE(origin), varint(UInt64(name.utf16.count)), utf16BE(name))
     }
 
     static func storeNameKey(database: UInt64, store: UInt64) -> [UInt8] {
-        IndexedDBReader.makePrefix(databaseID: database, objectStoreID: 0, indexID: 0) + [50] + varint(store) + [0]
+        concat(IndexedDBReader.makePrefix(databaseID: database, objectStoreID: 0, indexID: 0), [50], varint(store), [0])
     }
 
     /// An IndexedDB string key: type 1, length in UTF-16 units, big-endian UTF-16.
     static func idbStringKey(_ key: String) -> [UInt8] {
-        [1] + varint(UInt64(key.utf16.count)) + utf16BE(key)
+        concat([1], varint(UInt64(key.utf16.count)), utf16BE(key))
     }
 
     static func recordKey(database: UInt64, store: UInt64, key: String) -> [UInt8] {
-        IndexedDBReader.makePrefix(databaseID: database, objectStoreID: store, indexID: 1) + idbStringKey(key)
+        concat(IndexedDBReader.makePrefix(databaseID: database, objectStoreID: store, indexID: 1), idbStringKey(key))
     }
 
     /// A record value: version varint, Blink envelope (with the v21 trailer when asked), V8 bytes.
     static func recordValue(_ value: JS, blinkVersion: UInt8 = 20) -> [UInt8] {
-        let trailer: [UInt8] = blinkVersion >= 21 ? [0xFE] + [UInt8](repeating: 0, count: 12) : []
-        return [1, 0xFF, blinkVersion] + trailer + v8(value)
+        let trailer: [UInt8] = blinkVersion >= 21 ? concat([0xFE], [UInt8](repeating: 0, count: 12)) : []
+        return concat([1, 0xFF, blinkVersion], trailer, v8(value))
     }
 
     func test_aHugelySparseArrayIsNotExpandedToItsClaimedLength() throws {
         // [0xFF 0x0F] version, 'a' sparse array of length 4,000,000,000 with one element at index
         // 2,000,000,000 (int key, zigzag varint), then '@' with 1 property and the length again.
         let length = Self.varint(4_000_000_000)
-        let bytes: [UInt8] = [0xFF, 0x0F, UInt8(ascii: "a")] + length
-            + [UInt8(ascii: "I")] + Self.varint(4_000_000_000) + [UInt8(ascii: "T")]
-            + [UInt8(ascii: "@"), 1] + length
+        let bytes = Self.concat(
+            [0xFF, 0x0F, UInt8(ascii: "a")], length,
+            [UInt8(ascii: "I")], Self.varint(4_000_000_000), [UInt8(ascii: "T")],
+            [UInt8(ascii: "@"), 1], length
+        )
         let started = Date()
         let value = try V8ValueDeserializer.deserialize(bytes[...])
         XCTAssertLessThan(Date().timeIntervalSince(started), 1)

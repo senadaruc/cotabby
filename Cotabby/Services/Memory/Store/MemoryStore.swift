@@ -7,13 +7,14 @@ import Foundation
 ///
 /// Why one SQLite file: messages, scope keys and vectors change together (an edited message must
 /// lose its old vector, a forgotten source its conversations), and transactions keep them consistent.
-/// The schema is the one the earlier Python service created (`store.py`), so the existing store opens
-/// as-is, plus `vectors` and the keyword `terms` tables.
+/// Tables: `messages`, `conversations` and `participants` (the scope keys), `cursors`, `vectors`
+/// (one per passage) and the keyword `terms`.
 ///
-/// What is readable on disk: nothing personal. Text, senders, subjects, titles, conversation ids,
-/// participants, cursors and vectors are sealed with `MemoryVault` (AES-GCM); lookups use HMAC tags
-/// (`conv_key`, `title_tag`, `participant_tag`, keyword `tag`). Sources and timestamps stay plain,
-/// so ordering and per-source counts need no decryption.
+/// What is on disk: text, senders, subjects, titles, conversation ids, participants, cursors and
+/// vectors are sealed with `MemoryVault` (AES-GCM); lookups use HMAC tags (`conv_key`, `title_tag`,
+/// `participant_tag`, keyword `tag`, record ids). Sources, timestamps and per-message term counts
+/// stay plain, so ordering and per-source counts need no decryption. (The settings file next to
+/// the store, `config.json`, is plain JSON, never-remember lists included.)
 ///
 /// Thread safety: one connection behind one lock. Callers keep work under the lock short; bulk
 /// writes arrive in batches, so a search never waits behind a whole sync.
@@ -28,6 +29,9 @@ nonisolated final class MemoryStore: @unchecked Sendable {
         let timestamp: Double
         let subject: String?
         let text: String
+        /// The content tag the message had when read: indexing saves its vectors only if the stored
+        /// message still has it (`saveIndexEntries`).
+        var textTag: String = ""
     }
 
     /// One passage's vector as stored: decrypted, with the keys a search filters on.
@@ -46,6 +50,10 @@ nonisolated final class MemoryStore: @unchecked Sendable {
     let vault: MemoryVault
     private let database: MemoryDatabase
     private let lock = NSRecursiveLock()
+    /// Called (under the store's lock) just before rows are removed, replaced or moved, so the
+    /// engine can mark earlier search results stale before the change lands. Set once by the
+    /// engine before the store is shared.
+    var willRemove: (@Sendable () -> Void)?
     /// Decrypted (conversation id, title) per (source, conv_key): small, and read on every search.
     private var conversationNames: [String: (id: String, title: String)] = [:]
 
@@ -118,6 +126,8 @@ nonisolated final class MemoryStore: @unchecked Sendable {
         PRIMARY KEY (tag, record_id)
     ) WITHOUT ROWID;
     CREATE INDEX IF NOT EXISTS terms_record ON terms(record_id);
+    -- Earlier builds kept own-address tags here for mail scope; nothing uses them now.
+    DROP TABLE IF EXISTS own_addresses;
     CREATE TABLE IF NOT EXISTS term_documents (
         record_id TEXT PRIMARY KEY,
         source TEXT NOT NULL,
@@ -127,7 +137,8 @@ nonisolated final class MemoryStore: @unchecked Sendable {
 
     /// A store written before encryption (plaintext columns, no `conv_key`) cannot be upgraded in
     /// place; it is dropped and the next sync rebuilds it from the sources. VACUUM rewrites the file
-    /// so the dropped plaintext pages do not linger.
+    /// so the dropped plaintext pages do not linger. (Stores from the earlier Python service only;
+    /// every encrypted store is left as it is.)
     private func migratePlaintextSchema() throws {
         let tables = Set(try database.rows("SELECT name FROM sqlite_master WHERE type = 'table'").compactMap { $0["name"]?.string })
         guard tables.contains("messages") else { return }
@@ -140,15 +151,6 @@ nonisolated final class MemoryStore: @unchecked Sendable {
         try database.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     }
 
-    private func checkKey() throws {
-        if let row = try database.rows("SELECT value FROM meta WHERE key = 'key_check'").first, let value = row["value"]?.data {
-            try vault.verify(value)
-            return
-        }
-        try database.run("INSERT INTO meta(key, value) VALUES ('key_check', ?)", [.blob(try vault.checkValue())])
-        try database.run("INSERT OR REPLACE INTO meta(key, value) VALUES ('schema', ?)", [.blob(Data("2".utf8))])
-    }
-
     /// The Python service marked messages `indexed` when LEANN had them; the native engine indexes
     /// into `vectors` and `terms`, so the first open by it resets the marks once.
     private func switchToNativeEngineOnce() throws {
@@ -157,6 +159,15 @@ nonisolated final class MemoryStore: @unchecked Sendable {
             try database.run("UPDATE messages SET indexed = 0")
             try database.run("INSERT INTO meta(key, value) VALUES ('engine', ?)", [.blob(Data("native-1".utf8))])
         }
+    }
+
+    private func checkKey() throws {
+        if let row = try database.rows("SELECT value FROM meta WHERE key = 'key_check'").first, let value = row["value"]?.data {
+            try vault.verify(value)
+            return
+        }
+        try database.run("INSERT INTO meta(key, value) VALUES ('key_check', ?)", [.blob(try vault.checkValue())])
+        try database.run("INSERT OR REPLACE INTO meta(key, value) VALUES ('schema', ?)", [.blob(Data("2".utf8))])
     }
 
     // MARK: - Keys
@@ -178,10 +189,10 @@ nonisolated final class MemoryStore: @unchecked Sendable {
     }
 
     /// A record's stable id across syncs, derived from the source's own message id, so re-reading a
-    /// source replaces rows instead of duplicating them (same derivation as the Python service).
-    static func recordID(source: String, sourceMessageID: String) -> String {
-        let digest = Insecure.SHA1.hash(data: Data("\(source)\u{1f}\(sourceMessageID)".utf8))
-        return "\(source):" + digest.map { String(format: "%02x", $0) }.joined().prefix(20)
+    /// source replaces rows instead of duplicating them. Keyed (an HMAC tag, not a plain hash), so
+    /// someone holding the file cannot test whether a known Message-ID or file path is remembered.
+    func recordID(source: String, sourceMessageID: String) -> String {
+        "\(source):" + vault.tag("record\u{1f}\(source)\u{1f}\(sourceMessageID)")
     }
 
     // MARK: - Writing
@@ -202,19 +213,29 @@ nonisolated final class MemoryStore: @unchecked Sendable {
         return try database.transaction {
             var changed = 0
             var replaced: [String] = []
+            var leftConversations = Set<String>()
             for record in records {
-                let recordID = Self.recordID(source: source, sourceMessageID: record.sourceMessageID)
+                let recordID = self.recordID(source: source, sourceMessageID: record.sourceMessageID)
                 let convKey = conversationKey(source: source, conversationID: record.conversationID)
                 // Unchanged messages are recognized by a tag of their content, since sealed bytes
                 // differ on every write (random nonce).
                 let textTag = vault.tag("msg\u{1f}\(record.sender)\u{1f}\(record.subject ?? "")\u{1f}\(record.text)")
-                let existing = try database.rows("SELECT text_tag FROM messages WHERE record_id = ?", [.text(recordID)]).first
-                if existing?["text_tag"]?.string != textTag {
+                let existing = try database.rows(
+                    "SELECT text_tag, conv_key, is_from_me FROM messages WHERE record_id = ?", [.text(recordID)]
+                ).first
+                // A later read can also correct where a message belongs (its mail audience) or who
+                // wrote it; either is a change, and the message moves with its vectors redone.
+                let moved = existing.map { $0["conv_key"]?.string != convKey } ?? false
+                let owner = existing.map { ($0["is_from_me"]?.int ?? 0) != (record.isFromMe ? 1 : 0) } ?? false
+                if existing?["text_tag"]?.string != textTag || moved || owner {
+                    if existing != nil { willRemove?() }
+                    if moved, let old = existing?["conv_key"]?.string { leftConversations.insert(old) }
                     try database.run(
                         """
                         INSERT INTO messages(record_id, source, conv_key, sender, is_from_me, timestamp, subject, text, text_tag, indexed)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                         ON CONFLICT(record_id) DO UPDATE SET
+                          conv_key = excluded.conv_key, is_from_me = excluded.is_from_me,
                           sender = excluded.sender, subject = excluded.subject, text = excluded.text,
                           text_tag = excluded.text_tag, timestamp = excluded.timestamp, indexed = 0
                         """,
@@ -222,7 +243,7 @@ nonisolated final class MemoryStore: @unchecked Sendable {
                             .text(recordID), .text(source), .text(convKey), .blob(try vault.seal(record.sender)),
                             .integer(record.isFromMe ? 1 : 0), .real(record.timestamp.timeIntervalSince1970),
                             try record.subject.map { .blob(try vault.seal($0)) } ?? .null,
-                            .blob(try vault.seal(record.text)), .text(textTag),
+                            .blob(try vault.seal(record.text)), .text(textTag)
                         ]
                     )
                     if existing != nil {
@@ -235,6 +256,18 @@ nonisolated final class MemoryStore: @unchecked Sendable {
                     changed += 1
                 }
                 try upsertConversation(source: source, record: record, conversationKey: convKey)
+            }
+            // A conversation every message moved out of is gone: left behind it would still match
+            // its title (making the title ambiguous) and its people.
+            for key in leftConversations {
+                let remaining = try database.rows(
+                    "SELECT 1 FROM messages WHERE source = ? AND conv_key = ? LIMIT 1", [.text(source), .text(key)]
+                )
+                guard remaining.isEmpty else { continue }
+                for table in ["conversations", "participants"] {
+                    try database.run("DELETE FROM \(table) WHERE source = ? AND conv_key = ?", [.text(source), .text(key)])
+                }
+                conversationNames[source + "\u{1f}" + key] = nil
             }
             return UpsertResult(changed: changed, replacedRecordIDs: replaced)
         }
@@ -279,8 +312,10 @@ nonisolated final class MemoryStore: @unchecked Sendable {
         // The other people in the conversation: its listed participants plus whoever sent a message
         // that is not the user's own. The user is never a participant of their own conversations,
         // or the audience rule would match every chat.
+        // Mail (a record with a subject) lists its people by address; its sender's display name is
+        // the sender's to choose and never becomes an identity.
         var people = Set(record.participants)
-        if !record.isFromMe, !record.sender.isEmpty { people.insert(record.sender) }
+        if !record.isFromMe, !record.sender.isEmpty, record.subject == nil { people.insert(record.sender) }
         for person in people {
             let normalized = ParticipantNormalizer.normalize(person)
             guard !normalized.isEmpty else { continue }
@@ -300,18 +335,29 @@ nonisolated final class MemoryStore: @unchecked Sendable {
     }
 
     /// Stores one message's passage vectors and keyword terms and marks it indexed, in one
-    /// transaction: a message is either fully searchable or not at all.
-    func saveIndexEntries(_ entries: [(message: StoredMessage, passages: [(passageID: String, vector: [UInt16])])], model: String) throws {
+    /// transaction: a message is either fully searchable or not at all. A message deleted, edited
+    /// or moved since it was read for embedding is skipped (its vectors would describe the old
+    /// text, and it stays pending). Returns the record ids saved.
+    @discardableResult
+    func saveIndexEntries(
+        _ entries: [(message: StoredMessage, passages: [(passageID: String, vector: [UInt16])])], model: String
+    ) throws -> Set<String> {
         lock.lock()
         defer { lock.unlock() }
-        try database.transaction {
+        return try database.transaction {
+            var saved = Set<String>()
             for entry in entries {
                 let message = entry.message
+                guard let current = try database.rows(
+                    "SELECT text_tag, conv_key FROM messages WHERE record_id = ?", [.text(message.recordID)]
+                ).first, current["text_tag"]?.string == message.textTag,
+                    current["conv_key"]?.string == message.conversationKey else { continue }
                 try removeIndexEntries(recordIDs: [message.recordID])
                 for passage in entry.passages {
                     let bytes = passage.vector.withUnsafeBufferPointer { Data(buffer: $0) }
                     try database.run(
-                        "INSERT OR REPLACE INTO vectors(passage_id, record_id, source, conv_key, timestamp, model, vector) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT OR REPLACE INTO vectors(passage_id, record_id, source, conv_key, timestamp, model, vector) "
+                            + "VALUES (?, ?, ?, ?, ?, ?, ?)",
                         [.text(passage.passageID), .text(message.recordID), .text(message.source), .text(message.conversationKey),
                          .real(message.timestamp), .text(model), .blob(try vault.sealData(bytes))]
                     )
@@ -319,7 +365,9 @@ nonisolated final class MemoryStore: @unchecked Sendable {
                 // Rewritten here too, for messages stored before terms existed.
                 try writeTerms(recordID: message.recordID, source: message.source, text: message.text + " " + (message.subject ?? ""))
                 try database.run("UPDATE messages SET indexed = 1 WHERE record_id = ?", [.text(message.recordID)])
+                saved.insert(message.recordID)
             }
+            return saved
         }
     }
 
@@ -358,6 +406,7 @@ nonisolated final class MemoryStore: @unchecked Sendable {
     func deleteSource(_ source: String) throws {
         lock.lock()
         defer { lock.unlock() }
+        willRemove?()
         try database.transaction {
             for table in ["messages", "conversations", "participants", "cursors", "vectors", "term_documents"] {
                 try database.run("DELETE FROM \(table) WHERE source = ?", [.text(source)])
@@ -386,7 +435,10 @@ nonisolated final class MemoryStore: @unchecked Sendable {
                 }
             }
             for person in excludedParticipants {
-                for row in try database.rows("SELECT source, conv_key FROM participants WHERE participant_tag = ?", [.text(participantTag(person))]) {
+                let conversations = try database.rows(
+                    "SELECT source, conv_key FROM participants WHERE participant_tag = ?", [.text(participantTag(person))]
+                )
+                for row in conversations {
                     doomed += try database.rows("SELECT record_id FROM messages WHERE source = ? AND conv_key = ?",
                                                 [row["source"] ?? .null, row["conv_key"] ?? .null])
                 }
@@ -399,12 +451,27 @@ nonisolated final class MemoryStore: @unchecked Sendable {
                 )
             }
             let ids = Set(doomed.compactMap { $0["record_id"]?.string })
+            if !ids.isEmpty { willRemove?() }
             for id in ids {
                 try database.run("DELETE FROM messages WHERE record_id = ?", [.text(id)])
             }
             try removeIndexEntries(recordIDs: Array(ids))
+            // An excluded conversation or person leaves nothing behind: no sealed title or name,
+            // no title or participant tag that would still match.
+            if !ids.isEmpty { try deleteEmptyConversations() }
             return ids.count
         }
+    }
+
+    /// Deletes the conversations (and their people) that no message is left in.
+    private func deleteEmptyConversations() throws {
+        for table in ["conversations", "participants"] {
+            try database.run(
+                "DELETE FROM \(table) WHERE NOT EXISTS "
+                    + "(SELECT 1 FROM messages m WHERE m.source = \(table).source AND m.conv_key = \(table).conv_key)"
+            )
+        }
+        conversationNames.removeAll()
     }
 
     /// For conversations read whole again (`MemoryReadPage.completeConversations`), deletes the
@@ -421,8 +488,10 @@ nonisolated final class MemoryStore: @unchecked Sendable {
                                              [.text(source), .text(conversationKey(source: source, conversationID: conversationID))])
                 doomed += rows.compactMap { $0["record_id"]?.string }.filter { !kept.contains($0) }
             }
+            if !doomed.isEmpty { willRemove?() }
             for id in doomed { try database.run("DELETE FROM messages WHERE record_id = ?", [.text(id)]) }
             try removeIndexEntries(recordIDs: doomed)
+            if !doomed.isEmpty { try deleteEmptyConversations() }
             return doomed
         }
     }
@@ -437,6 +506,7 @@ nonisolated final class MemoryStore: @unchecked Sendable {
             let gone = try database.rows("SELECT conv_key FROM conversations WHERE source = ?", [.text(source)])
                 .compactMap { $0["conv_key"]?.string }.filter { !liveKeys.contains($0) }
             var doomed: [String] = []
+            if !gone.isEmpty { willRemove?() }
             for key in gone {
                 doomed += try database.rows("SELECT record_id FROM messages WHERE source = ? AND conv_key = ?", [.text(source), .text(key)])
                     .compactMap { $0["record_id"]?.string }
@@ -454,6 +524,7 @@ nonisolated final class MemoryStore: @unchecked Sendable {
     func deleteEverything() throws {
         lock.lock()
         defer { lock.unlock() }
+        willRemove?()
         try database.transaction {
             for table in ["messages", "conversations", "participants", "cursors", "vectors", "terms", "term_documents"] {
                 try database.run("DELETE FROM \(table)")
@@ -467,7 +538,8 @@ nonisolated final class MemoryStore: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         try database.run(
-            "INSERT INTO cursors(source, cursor, updated_at) VALUES (?, ?, ?) ON CONFLICT(source) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at",
+            "INSERT INTO cursors(source, cursor, updated_at) VALUES (?, ?, ?) "
+                + "ON CONFLICT(source) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at",
             [.text(source), .blob(try vault.seal(cursor)), .real(Date().timeIntervalSince1970)]
         )
     }
@@ -495,7 +567,8 @@ nonisolated final class MemoryStore: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         let row = try database.rows(
-            "SELECT COUNT(*) AS n, SUM(indexed = 0) AS pending, COUNT(DISTINCT conv_key) AS conversations, MAX(timestamp) AS newest FROM messages WHERE source = ?",
+            "SELECT COUNT(*) AS n, SUM(indexed = 0) AS pending, COUNT(DISTINCT conv_key) AS conversations, "
+                + "MAX(timestamp) AS newest FROM messages WHERE source = ?",
             [.text(source)]
         ).first ?? [:]
         let lastSync = try database.rows("SELECT updated_at FROM cursors WHERE source = ?", [.text(source)]).first?["updated_at"]?.double
@@ -617,7 +690,9 @@ nonisolated final class MemoryStore: @unchecked Sendable {
     /// surface if the people being written to now are exactly the people who were in that one. A
     /// superset rule is not safe, because member lists do not say when someone joined or left, so a
     /// group cannot vouch for what any one member saw. A 1:1 with Ayşe can draw on another 1:1 with
-    /// Ayşe (her mail thread), groups only on groups with the same members, never one into the other.
+    /// Ayşe (her mail thread); a mail thread with several people only on threads with exactly them.
+    /// Chat groups (Teams, WhatsApp) carry a marker of their own among their participants, so a
+    /// group never matches a 1:1 chat or another group.
     func conversationsSeenBy(audience: [String], excluding: (source: String, conversationKey: String)?, limit: Int = 50) throws
         -> [(source: String, conversationKey: String)] {
         let tags = Array(Set(audience.filter { !ParticipantNormalizer.normalize($0).isEmpty }.map(participantTag))).sorted()
@@ -677,7 +752,8 @@ nonisolated final class MemoryStore: @unchecked Sendable {
         let scope = conversations.map { _ in "(m.source = ? AND m.conv_key = ?)" }.joined(separator: " OR ")
         let scopeValues = conversations.flatMap { [MemoryDatabase.Value.text($0.source), .text($0.conversationKey)] }
         let totals = try database.rows(
-            "SELECT COUNT(*) AS n, AVG(d.length) AS average FROM term_documents d JOIN messages m ON m.record_id = d.record_id WHERE \(scope)",
+            "SELECT COUNT(*) AS n, AVG(d.length) AS average FROM term_documents d "
+                + "JOIN messages m ON m.record_id = d.record_id WHERE \(scope)",
             scopeValues
         ).first
         let documents = Double(totals?["n"]?.int ?? 0)
@@ -696,7 +772,7 @@ nonisolated final class MemoryStore: @unchecked Sendable {
             )
             guard !rows.isEmpty else { continue }
             let df = Double(rows.count)
-            let idf = log(1 + (documents - df + 0.5) / (df + 0.5))
+            let idf: Double = Foundation.log(1 + (documents - df + 0.5) / (df + 0.5))
             for row in rows {
                 guard let recordID = row["record_id"]?.string else { continue }
                 let tf = row["tf"]?.double ?? 0
@@ -733,7 +809,7 @@ nonisolated final class MemoryStore: @unchecked Sendable {
             )
             guard !rows.isEmpty else { continue }
             let df = Double(rows.count)
-            let idf = log(1 + (documents - df + 0.5) / (df + 0.5))
+            let idf: Double = Foundation.log(1 + (documents - df + 0.5) / (df + 0.5))
             for row in rows {
                 guard let recordID = row["record_id"]?.string else { continue }
                 let tf = row["tf"]?.double ?? 0
@@ -758,7 +834,8 @@ nonisolated final class MemoryStore: @unchecked Sendable {
             conversationID: conversationName(source: source, conversationKey: convKey).id, conversationKey: convKey,
             sender: row["sender"]?.data.flatMap { try? vault.open($0) } ?? "",
             isFromMe: (row["is_from_me"]?.int ?? 0) != 0, timestamp: row["timestamp"]?.double ?? 0,
-            subject: row["subject"]?.data.flatMap { try? vault.open($0) }, text: text
+            subject: row["subject"]?.data.flatMap { try? vault.open($0) }, text: text,
+            textTag: row["text_tag"]?.string ?? ""
         )
     }
 }

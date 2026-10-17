@@ -26,17 +26,25 @@ nonisolated enum OfficeDocumentText {
         case excel = "xlsx"
     }
 
+    /// One XML part of the package to read: its path, the element holding text runs, and the
+    /// elements that end a line.
+    private struct Part {
+        let name: String
+        let text: String
+        let breaks: Set<String>
+    }
+
     static func text(of data: Data, kind: Kind) throws -> String {
         let archive = try ZipArchiveReader(data: data)
-        let parts: [(name: String, text: String, breaks: Set<String>)]
+        let parts: [Part]
         switch kind {
         case .word:
-            parts = [("word/document.xml", "w:t", ["w:p", "w:br", "w:tab"])]
+            parts = [Part(name: "word/document.xml", text: "w:t", breaks: ["w:p", "w:br", "w:tab"])]
         case .powerPoint:
             parts = (ordered(archive.names, folder: "ppt/slides/slide") + ordered(archive.names, folder: "ppt/notesSlides/notesSlide"))
-                .map { ($0, "a:t", ["a:p", "a:br"]) }
+                .map { Part(name: $0, text: "a:t", breaks: ["a:p", "a:br"]) }
         case .excel:
-            parts = [("xl/sharedStrings.xml", "t", ["si"])]
+            parts = [Part(name: "xl/sharedStrings.xml", text: "t", breaks: ["si"])]
         }
         // One lookup table: a deck can list thousands of parts, and a search per part would be quadratic.
         let entries = Dictionary(archive.entries.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })

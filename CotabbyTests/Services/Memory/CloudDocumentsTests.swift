@@ -24,7 +24,10 @@ final class CloudDocumentsTests: XCTestCase {
     /// A ZIP archive with the given entries, each DEFLATE-compressed unless `stored`.
     static func zip(_ entries: [(name: String, text: String)], stored: Bool = false) -> Data {
         func le16(_ value: Int) -> [UInt8] { [UInt8(value & 0xFF), UInt8((value >> 8) & 0xFF)] }
-        func le32(_ value: Int) -> [UInt8] { (0..<4).map { UInt8((value >> (8 * $0)) & 0xFF) } }
+        func le32(_ value: Int) -> [UInt8] { (0..<4).map { (index: Int) -> UInt8 in UInt8(truncatingIfNeeded: value >> (8 * index)) } }
+        // Each header is joined from its fields with `append(contentsOf:)`: a long chain of `+` on
+        // arrays takes older Swift compilers seconds to type-check in a test build.
+        func join(_ fields: [[UInt8]]) -> [UInt8] { fields.flatMap { $0 } }
         var body: [UInt8] = []
         var directory: [UInt8] = []
         for entry in entries {
@@ -38,15 +41,21 @@ final class CloudDocumentsTests: XCTestCase {
             let name = Array(entry.name.utf8)
             let method = stored ? 0 : 8
             let offset = body.count
-            body += le32(0x0403_4B50) + le16(20) + le16(0) + le16(method) + le16(0) + le16(0) + le32(0)
-                + le32(data.count) + le32(raw.count) + le16(name.count) + le16(0) + name + data
-            directory += le32(0x0201_4B50) + le16(20) + le16(20) + le16(0) + le16(method) + le16(0) + le16(0) + le32(0)
-                + le32(data.count) + le32(raw.count) + le16(name.count) + le16(0) + le16(0) + le16(0) + le16(0) + le32(0)
-                + le32(offset) + name
+            body.append(contentsOf: join([
+                le32(0x0403_4B50), le16(20), le16(0), le16(method), le16(0), le16(0), le32(0),
+                le32(data.count), le32(raw.count), le16(name.count), le16(0), name, data
+            ]))
+            directory.append(contentsOf: join([
+                le32(0x0201_4B50), le16(20), le16(20), le16(0), le16(method), le16(0), le16(0), le32(0),
+                le32(data.count), le32(raw.count), le16(name.count), le16(0), le16(0), le16(0), le16(0), le32(0),
+                le32(offset), name
+            ]))
         }
-        let end = le32(0x0605_4B50) + le16(0) + le16(0) + le16(entries.count) + le16(entries.count)
-            + le32(directory.count) + le32(body.count) + le16(0)
-        return Data(body + directory + end)
+        let end = join([
+            le32(0x0605_4B50), le16(0), le16(0), le16(entries.count), le16(entries.count),
+            le32(directory.count), le32(body.count), le16(0)
+        ])
+        return Data(join([body, directory, end]))
     }
 
     // MARK: - ZIP
@@ -91,8 +100,8 @@ final class CloudDocumentsTests: XCTestCase {
         XCTAssertEqual(try OfficeDocumentText.text(of: deck, kind: .powerPoint), "Two\n\nTen\n\nSpeaker note",
                        "slides in number order, then notes")
 
-        let sheet = Self.zip([("xl/sharedStrings.xml", "<sst><si><t>Customer</t></si><si><r><t>THY </t></r><r><t>Airlines</t></r></si></sst>")])
-        XCTAssertEqual(try OfficeDocumentText.text(of: sheet, kind: .excel), "Customer\nTHY Airlines")
+        let sheet = Self.zip([("xl/sharedStrings.xml", "<sst><si><t>Customer</t></si><si><r><t>Acme </t></r><r><t>Corp</t></r></si></sst>")])
+        XCTAssertEqual(try OfficeDocumentText.text(of: sheet, kind: .excel), "Customer\nAcme Corp")
     }
 
     /// One budget for the whole file: a deck of many slides stops at the character cap overall,
@@ -128,8 +137,8 @@ final class CloudDocumentsTests: XCTestCase {
     func test_theReaderReadsDocumentsAsWholeConversationsAndListsWhatExists() throws {
         let root = directory.appendingPathComponent("GoogleDrive-me@example.com", isDirectory: true)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("Clients"), withIntermediateDirectories: true)
-        try Data("THY pilot notes: the pilot runs six weeks from November.".utf8)
-            .write(to: root.appendingPathComponent("Clients/THY.md"))
+        try Data("Acme pilot notes: the pilot runs six weeks from November.".utf8)
+            .write(to: root.appendingPathComponent("Clients/Acme.md"))
         try Self.zip([("word/document.xml", "<w:document><w:p><w:t>Pricing is per endpoint per month.</w:t></w:p></w:document>")])
             .write(to: root.appendingPathComponent("Pricing.docx"))
         try Data("ignored".utf8).write(to: root.appendingPathComponent("Plan.gdoc"))
@@ -138,13 +147,13 @@ final class CloudDocumentsTests: XCTestCase {
         XCTAssertEqual(reader.readiness(), .ready)
         let page = try reader.read(after: nil, since: nil, limit: 400)
         let prefix = "GoogleDrive-me@example.com/"
-        XCTAssertEqual(Set(page.records.map(\.conversationID)), [prefix + "Clients/THY.md", prefix + "Pricing.docx"])
-        XCTAssertEqual(page.completeConversations, [prefix + "Clients/THY.md", prefix + "Pricing.docx"])
+        XCTAssertEqual(Set(page.records.map(\.conversationID)), [prefix + "Clients/Acme.md", prefix + "Pricing.docx"])
+        XCTAssertEqual(page.completeConversations, [prefix + "Clients/Acme.md", prefix + "Pricing.docx"])
         let pricing = try XCTUnwrap(page.records.first { $0.conversationTitle == "Pricing" })
         XCTAssertEqual(pricing.text, "Pricing is per endpoint per month.")
         XCTAssertFalse(pricing.isFromMe, "a shared document is not the user's own words")
         XCTAssertEqual(pricing.sender, "")
-        XCTAssertEqual(reader.liveConversationIDs(), [prefix + "Clients/THY.md", prefix + "Pricing.docx"])
+        XCTAssertEqual(reader.liveConversationIDs(), [prefix + "Clients/Acme.md", prefix + "Pricing.docx"])
 
         let again = try reader.read(after: page.nextCursor, since: nil, limit: 400)
         XCTAssertTrue(again.records.isEmpty, "nothing changed since the cursor")
@@ -152,14 +161,72 @@ final class CloudDocumentsTests: XCTestCase {
         XCTAssertNil(drive([]).liveConversationIDs(), "an unreadable drive never reads as everything deleted")
     }
 
+    /// A file that cannot be read (an online-only file while offline) is not left behind the
+    /// cursor: the next sync tries it again, even though it has not changed.
+    func test_anUnreadableFileIsTriedAgainOnTheNextSync() throws {
+        let root = directory.appendingPathComponent("GoogleDrive-me@example.com", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let offline = root.appendingPathComponent("Offline.md")
+        try Data("Notes from the offline file about the pilot.".utf8).write(to: offline)
+        try Data("Another readable file about pricing tiers.".utf8).write(to: root.appendingPathComponent("Online.md"))
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_000)], ofItemAtPath: offline.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: offline.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: offline.path) }
+
+        let reader = drive([root])
+        let first = try reader.read(after: nil, since: nil, limit: 400)
+        XCTAssertEqual(first.records.map(\.conversationTitle), ["Online"])
+        let stillOffline = try reader.read(after: first.nextCursor, since: nil, limit: 400)
+        XCTAssertTrue(stillOffline.records.isEmpty)
+        XCTAssertEqual(CloudDriveReader.Cursor(stillOffline.nextCursor ?? first.nextCursor).retry,
+                       ["GoogleDrive-me@example.com/Offline.md"], "still waiting to be read")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: offline.path)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_000)], ofItemAtPath: offline.path)
+        let next = try reader.read(after: stillOffline.nextCursor ?? first.nextCursor, since: nil, limit: 400)
+        XCTAssertEqual(next.records.map(\.conversationTitle), ["Offline"], "the next sync reads it")
+        XCTAssertEqual(CloudDriveReader.Cursor(next.nextCursor).retry, [])
+        XCTAssertTrue(try reader.read(after: next.nextCursor, since: nil, limit: 400).records.isEmpty)
+        XCTAssertEqual(CloudDriveReader.Cursor("1790000000.0"), CloudDriveReader.Cursor(after: 1_790_000_000), "older cursors still read")
+    }
+
+    /// One account (or folder) that cannot be read makes the listing incomplete, and an incomplete
+    /// listing removes nothing: the readable account's documents do not make the other's look deleted.
+    func test_aPartlyUnreadableDriveRemovesNothing() throws {
+        let first = directory.appendingPathComponent("GoogleDrive-a@example.com", isDirectory: true)
+        let second = directory.appendingPathComponent("GoogleDrive-b@example.com", isDirectory: true)
+        for root in [first, second] {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            try Data("A document long enough to be a section.".utf8).write(to: root.appendingPathComponent("Doc.md"))
+        }
+        let reader = drive([first, second])
+        XCTAssertEqual(reader.liveConversationIDs()?.count, 2)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: second.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: second.path) }
+        XCTAssertEqual(reader.readiness(), .ready, "one readable account is enough to sync")
+        XCTAssertNil(reader.liveConversationIDs())
+    }
+
+    /// A huge paragraph is cut in time proportional to its length and stops at the section limit.
+    func test_aHugeParagraphIsCutQuicklyAndBounded() {
+        let started = Date()
+        let sections = DocumentSections.split(String(repeating: "x", count: 1_000_000))
+        XCTAssertEqual(sections.count, DocumentSections.maximumSections)
+        XCTAssertTrue(sections.allSatisfy { $0.count == DocumentSections.maximumCharacters })
+        let shorter = DocumentSections.split(String(repeating: "word ", count: 80_000))
+        XCTAssertGreaterThan(shorter.count, 260)
+        XCTAssertTrue(shorter.allSatisfy { $0.count <= DocumentSections.maximumCharacters })
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2)
+    }
+
     func test_cloudStorageFoldersAreTheProvidersAccountsWithoutTrash() throws {
-        for name in ["GoogleDrive-a@x.com", "GoogleDrive-b@y.com", "OneDrive-x.com", "OneDrive-SharedLibraries-x - .Trash"] {
+        for name in ["GoogleDrive-a@example.com", "GoogleDrive-b@example.org", "OneDrive-example.com", "OneDrive-SharedLibraries-x - .Trash"] {
             try FileManager.default.createDirectory(at: directory.appendingPathComponent(name), withIntermediateDirectories: true)
         }
         XCTAssertEqual(CloudDriveReader.cloudStorageFolders(prefix: "GoogleDrive-", root: directory.path).map(\.lastPathComponent),
-                       ["GoogleDrive-a@x.com", "GoogleDrive-b@y.com"])
+                       ["GoogleDrive-a@example.com", "GoogleDrive-b@example.org"])
         XCTAssertEqual(CloudDriveReader.cloudStorageFolders(prefix: "OneDrive-", root: directory.path).map(\.lastPathComponent),
-                       ["OneDrive-x.com"])
+                       ["OneDrive-example.com"])
     }
 
     // MARK: - Store
@@ -170,20 +237,20 @@ final class CloudDocumentsTests: XCTestCase {
     }
 
     func test_aShortenedDocumentLosesItsTailAndADeletedOneIsForgotten() throws {
-        let store = try MemoryStore(path: directory.appendingPathComponent("m.sqlite"), vault: MemoryVault(masterKey: SymmetricKey(data: Data(0..<32))))
+        let store = try MemoryStore(path: directory.appendingPathComponent("m.sqlite"), vault: MemoryVault(rootKey: SymmetricKey(data: Data(0..<32))))
         try store.upsert(source: "google_drive", records: [record("A.md", 0, "one"), record("A.md", 1, "two"), record("B.md", 0, "bee")])
-        let keep = MemoryStore.recordID(source: "google_drive", sourceMessageID: "A.md#0")
+        let keep = store.recordID(source: "google_drive", sourceMessageID: "A.md#0")
         let removed = try store.removeRecords(source: "google_drive", inConversations: ["A.md"], notIn: [keep])
-        XCTAssertEqual(removed, [MemoryStore.recordID(source: "google_drive", sourceMessageID: "A.md#1")])
+        XCTAssertEqual(removed, [store.recordID(source: "google_drive", sourceMessageID: "A.md#1")])
         XCTAssertEqual(try store.sourceStats("google_drive").messages, 2)
 
         let gone = try store.removeConversations(source: "google_drive", notIn: ["A.md"])
-        XCTAssertEqual(gone, [MemoryStore.recordID(source: "google_drive", sourceMessageID: "B.md#0")])
+        XCTAssertEqual(gone, [store.recordID(source: "google_drive", sourceMessageID: "B.md#0")])
         XCTAssertEqual(try store.sourceStats("google_drive").conversations, 1)
     }
 
     func test_retentionSkipsDocumentSources() throws {
-        let store = try MemoryStore(path: directory.appendingPathComponent("m.sqlite"), vault: MemoryVault(masterKey: SymmetricKey(data: Data(0..<32))))
+        let store = try MemoryStore(path: directory.appendingPathComponent("m.sqlite"), vault: MemoryVault(rootKey: SymmetricKey(data: Data(0..<32))))
         let old = Date(timeIntervalSince1970: 1_000_000_000)
         try store.upsert(source: "google_drive", records: [record("Handbook.pdf", 0, "old handbook", at: old)])
         try store.upsert(source: "whatsapp", records: [record("chat", 0, "old chat", at: old)])

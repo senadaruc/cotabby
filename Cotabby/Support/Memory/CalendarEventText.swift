@@ -1,8 +1,8 @@
 import Foundation
 
 /// File overview:
-/// Turns a calendar event into a conversation-memory record, so answers and suggestions can recall
-/// meetings by topic ("the THY review was moved to Thursday").
+/// Turns a calendar event into a conversation-memory record, so memory can recall meetings by topic
+/// ("the pilot review was moved to Thursday").
 ///
 /// Mapping:
 /// - Conversation: the event series (every occurrence of a weekly meeting is one conversation),
@@ -98,7 +98,7 @@ nonisolated enum CalendarEventText {
     private static let callBlockOpeners = [
         "microsoft teams meeting", "microsoft teams-besprechung", "microsoft teams toplantısı", "join the meeting",
         "join on your computer", "join zoom meeting", "join webex meeting", "join with google meet", "click here to join",
-        "toplantıya katıl", "toplantıya katılın",
+        "toplantıya katıl", "toplantıya katılın"
     ]
 
     private static func isCallLink(_ text: String) -> Bool {

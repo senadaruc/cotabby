@@ -103,27 +103,17 @@ final class MailReplyContextTests: XCTestCase {
 
     // MARK: - Memory scope
 
-    func test_anInlineOutlookReplyFindsItsThreadByTheQuotedSubject() {
+    /// Mail gets no memory scope from its window or its quoted original (both are the other
+    /// person's to shape); the quoted subject still serves the prompt's reply context.
+    func test_aMailReplyGetsNoMemoryScopeInlineOrInItsOwnWindow() {
         let sources = ["com.microsoft.Outlook": ["outlook"]]
-        XCTAssertEqual(
-            ConversationScopeResolver.scope(
-                bundleIdentifier: "com.microsoft.Outlook", conversationTitle: "Inbox • All Accounts",
-                trailingText: outlookReplyTail, sourcesByBundle: sources
-            ),
-            ConversationScope(title: "Re: AFAD Use Case 3", sources: ["outlook"])
-        )
-        // Without a quote the mailbox title names no conversation, so memory stays out.
+        XCTAssertEqual(MailReplyContext.quotedSubject(in: outlookReplyTail), "Re: AFAD Use Case 3")
         XCTAssertNil(ConversationScopeResolver.scope(
-            bundleIdentifier: "com.microsoft.Outlook", conversationTitle: "Inbox • All Accounts",
-            trailingText: "", sourcesByBundle: sources
+            bundleIdentifier: "com.microsoft.Outlook", conversationTitle: "Inbox • All Accounts", sourcesByBundle: sources
         ))
-        // A reply in its own window keeps working through the window title.
-        XCTAssertEqual(
-            ConversationScopeResolver.scope(
-                bundleIdentifier: "com.microsoft.Outlook", conversationTitle: "Re: AFAD Use Case 3", sourcesByBundle: sources
-            ),
-            ConversationScope(title: "Re: AFAD Use Case 3", sources: ["outlook"])
-        )
+        XCTAssertNil(ConversationScopeResolver.scope(
+            bundleIdentifier: "com.microsoft.Outlook", conversationTitle: "Re: AFAD Use Case 3", sourcesByBundle: sources
+        ))
     }
 
     // MARK: - Request

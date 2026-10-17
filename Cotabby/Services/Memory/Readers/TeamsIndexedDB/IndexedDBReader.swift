@@ -131,14 +131,24 @@ nonisolated struct IndexedDBReader {
         let database = littleEndianBytes(databaseID)
         let store = littleEndianBytes(objectStoreID)
         let index = littleEndianBytes(indexID)
-        let first = UInt8((database.count - 1) << 5 | (store.count - 1) << 2 | (index.count - 1))
-        return [first] + database + store + index
+        // Typed steps: as one expression this type-checks very slowly on older compilers.
+        let databaseBits: Int = (database.count - 1) << 5
+        let storeBits: Int = (store.count - 1) << 2
+        let indexBits: Int = index.count - 1
+        let first = UInt8(databaseBits | storeBits | indexBits)
+        var prefix: [UInt8] = [first]
+        prefix.append(contentsOf: database)
+        prefix.append(contentsOf: store)
+        prefix.append(contentsOf: index)
+        return prefix
     }
 
     /// Chromium's "truncated int": little-endian bytes without padding.
     static func truncatedInt(_ bytes: ArraySlice<UInt8>) -> UInt64? {
         guard !bytes.isEmpty, bytes.count <= 8 else { return nil }
-        return bytes.reversed().reduce(0) { $0 << 8 | UInt64($1) }
+        var value: UInt64 = 0
+        for byte in bytes.reversed() { value = value << 8 | UInt64(byte) }
+        return value
     }
 
     /// Big-endian UTF-16 of `units` code units.
@@ -148,7 +158,8 @@ nonisolated struct IndexedDBReader {
         units.reserveCapacity(bytes.count / 2)
         var index = bytes.startIndex
         while index < bytes.endIndex {
-            units.append(UInt16(bytes[index]) << 8 | UInt16(bytes[index + 1]))
+            let high = UInt16(bytes[index]) << 8
+            units.append(high | UInt16(bytes[index + 1]))
             index += 2
         }
         return String(decoding: units, as: UTF16.self)
@@ -163,7 +174,7 @@ nonisolated struct IndexedDBReader {
     // MARK: - Metadata
 
     private static func readDatabases(_ entries: [[UInt8]: ArraySlice<UInt8>]) -> [Database] {
-        var identities: [(id: UInt64, origin: String, name: String)] = []
+        var identities: [Database] = []
         var storeNames: [UInt64: [UInt64: String]] = [:]
         for (key, value) in entries {
             guard let prefix = parsePrefix(key[...]), prefix.objectStoreID == 0, prefix.indexID == 0,
@@ -173,7 +184,7 @@ nonisolated struct IndexedDBReader {
                 var reader = ByteReader(key[(prefix.length + 1)...])
                 guard let origin = lengthPrefixedUTF16(&reader), let name = lengthPrefixedUTF16(&reader),
                       let id = truncatedInt(value) else { continue }
-                identities.append((id, origin, name))
+                identities.append(Database(id: id, origin: origin, name: name, objectStores: [:]))
             } else if prefix.databaseID != 0, typeByte == 50 {
                 var reader = ByteReader(key[(prefix.length + 1)...])
                 guard let storeID = reader.readVarint64(), reader.readByte() == 0,
@@ -194,7 +205,6 @@ nonisolated struct IndexedDBReader {
     /// store's decoded tree. A record whose value cannot be decoded (a missing blob file, an
     /// unsupported host object) is counted in `undecodableRecords` and skipped.
     mutating func forEachValue(in database: Database, stores: [String],
-                               options: V8ValueDeserializer.Options = .init(),
                                _ body: (V8Value) throws -> Void) rethrows {
         for storeName in stores {
             guard let storeID = database.objectStores.first(where: { $0.value == storeName })?.key else { continue }
@@ -207,7 +217,7 @@ nonisolated struct IndexedDBReader {
                 let value: V8Value?
                 do {
                     value = try decodeValue(raw, databaseID: database.id, storeID: storeID,
-                                            recordKey: key[prefix.count...], options: options)
+                                            recordKey: key[prefix.count...])
                 } catch {
                     undecodableRecords += 1
                     continue
@@ -224,18 +234,24 @@ nonisolated struct IndexedDBReader {
         case badTrailer
     }
 
-    /// A record value: varint version, then the Blink envelope (see the file overview).
-    func decodeValue(_ raw: ArraySlice<UInt8>, databaseID: UInt64, storeID: UInt64,
-                     recordKey: ArraySlice<UInt8>, options: V8ValueDeserializer.Options = .init()) throws -> V8Value? {
-        var reader = ByteReader(raw)
-        guard reader.readVarint64() != nil else { throw ValueError.notBlinkValue }
-        return try decodeEnvelope(raw[reader.position...], databaseID: databaseID, storeID: storeID,
-                                  recordKey: recordKey, options: options, depth: 0)
+    /// Where a record lives: its database, object store and key. Its external objects (blobs) are
+    /// filed under the same three.
+    private struct RecordLocation {
+        let databaseID: UInt64
+        let storeID: UInt64
+        let recordKey: ArraySlice<UInt8>
     }
 
-    private func decodeEnvelope(_ bytes: ArraySlice<UInt8>, databaseID: UInt64, storeID: UInt64,
-                                recordKey: ArraySlice<UInt8>, options: V8ValueDeserializer.Options,
-                                depth: Int) throws -> V8Value? {
+    /// A record value: varint version, then the Blink envelope (see the file overview).
+    func decodeValue(_ raw: ArraySlice<UInt8>, databaseID: UInt64, storeID: UInt64,
+                     recordKey: ArraySlice<UInt8>) throws -> V8Value? {
+        var reader = ByteReader(raw)
+        guard reader.readVarint64() != nil else { throw ValueError.notBlinkValue }
+        let location = RecordLocation(databaseID: databaseID, storeID: storeID, recordKey: recordKey)
+        return try decodeEnvelope(raw[reader.position...], location: location, depth: 0)
+    }
+
+    private func decodeEnvelope(_ bytes: ArraySlice<UInt8>, location: RecordLocation, depth: Int) throws -> V8Value? {
         // A wrapper can only point at a blob or compressed bytes, which are plain values; more than
         // one level of nesting is corrupt.
         guard depth < 3 else { throw ValueError.unexpectedWrapper }
@@ -246,18 +262,17 @@ nonisolated struct IndexedDBReader {
             // kRequiresProcessingSSVPseudoVersion: the value was wrapped by idb_value_wrapping.cc.
             switch reader.readByte() {
             case 0x01: // kReplaceWithBlob
-                guard reader.readVarint64() != nil, let blobIndex = reader.readVarint64() else { throw ValueError.notBlinkValue }
-                guard let contents = try blobContents(databaseID: databaseID, storeID: storeID,
-                                                      recordKey: recordKey, index: Int(blobIndex)) else {
+                // `Int(exactly:)`: a corrupt index beyond Int's range throws instead of trapping.
+                guard reader.readVarint64() != nil, let rawIndex = reader.readVarint64(),
+                      let blobIndex = Int(exactly: rawIndex) else { throw ValueError.notBlinkValue }
+                guard let contents = try blobContents(location, index: blobIndex) else {
                     // The original returns nothing for a record whose blob is not described.
                     return nil
                 }
-                return try decodeEnvelope(contents[...], databaseID: databaseID, storeID: storeID,
-                                          recordKey: recordKey, options: options, depth: depth + 1)
+                return try decodeEnvelope(contents[...], location: location, depth: depth + 1)
             case 0x02: // kCompressedWithSnappy
                 let decompressed = try SnappyDecoder.decompress(bytes[reader.position...])
-                return try decodeEnvelope(decompressed[...], databaseID: databaseID, storeID: storeID,
-                                          recordKey: recordKey, options: options, depth: depth + 1)
+                return try decodeEnvelope(decompressed[...], location: location, depth: depth + 1)
             default:
                 throw ValueError.unexpectedWrapper
             }
@@ -266,19 +281,19 @@ nonisolated struct IndexedDBReader {
             // The trailer (offset/size of a "requires interfaces" list) is not needed to decode.
             guard reader.readByte() == 0xFE, reader.skip(12) else { throw ValueError.badTrailer }
         }
-        return try V8ValueDeserializer.deserialize(bytes[reader.position...], options: options)
+        return try V8ValueDeserializer.deserialize(bytes[reader.position...])
     }
 
     /// The bytes of the `index`-th external object of a record, or nil when the record has no such
     /// object. Throws when it is described but its file is gone.
-    private func blobContents(databaseID: UInt64, storeID: UInt64, recordKey: ArraySlice<UInt8>,
-                              index: Int) throws -> [UInt8]? {
-        let blobKey = Self.makePrefix(databaseID: databaseID, objectStoreID: storeID, indexID: 3) + recordKey
+    private func blobContents(_ location: RecordLocation, index: Int) throws -> [UInt8]? {
+        let blobKey = Self.makePrefix(databaseID: location.databaseID, objectStoreID: location.storeID, indexID: 3)
+            + location.recordKey
         guard let entry = snapshot.entries[blobKey],
               let blobNumber = Self.blobNumbers(entry).dropFirst(index).first else { return nil }
         guard let blobFolder else { throw ValueError.missingBlob }
         let url = blobFolder
-            .appendingPathComponent(String(databaseID, radix: 16))
+            .appendingPathComponent(String(location.databaseID, radix: 16))
             .appendingPathComponent(String(format: "%02x", blobNumber >> 8))
             .appendingPathComponent(String(blobNumber, radix: 16))
         guard let contents = try LevelDBReader.readFile(url) else { throw ValueError.missingBlob }
