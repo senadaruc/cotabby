@@ -659,7 +659,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .memoryPlayground:
             return ["playground", "search memory", "test retrieval", "rag"]
         case .memoryAnswers:
-            return ["answer", "answers", "question", "reply", "draft", "smart reply", "respond"]
+            return ["answer", "answers", "question", "reply", "draft", "smart reply", "respond", "availability"]
         case .extendedContext:
             return ["context", "glossary", "reference", "notes", "jargon", "instructions",
                     "memory", "background", "system prompt", "vocabulary"]

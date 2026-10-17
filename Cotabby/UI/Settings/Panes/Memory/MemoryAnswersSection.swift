@@ -5,8 +5,9 @@ import SwiftUI
 /// asks the user something, how sure memory must be before offering one, and a way to try it.
 ///
 /// Which sources answers may draw on is set per source ("Use for answers" in the Sources section),
-/// and per app or window from the field icon. Presentation only: changes go through
-/// `MemoryControlModel`.
+/// and answers can be turned off per app or window from the field icon; apps where Cotabby is off
+/// get no answers either. Presentation only: changes go through
+/// `MemoryControlModel`, and `AnswerCoordinator` reads them from memory's configuration.
 struct MemoryAnswersSection: View {
     @ObservedObject var control: MemoryControlModel
     @State private var question = ""
@@ -25,33 +26,24 @@ struct MemoryAnswersSection: View {
                     SettingsRowLabel(
                         title: "Answer Questions",
                         description: "When you open an empty reply to a message that asks you something, draft an answer " +
-                            "from your memory and show it with the messages it came from. Tab inserts it, Esc or typing " +
-                            "dismisses it. Drafted on this Mac; never sent to an endpoint model.",
+                            "from your memory and show it with the messages it came from. Click or Tab inserts it, Esc or " +
+                            "typing dismisses it. Drafted on this Mac; never sent to an endpoint model.",
                         systemImage: "text.bubble"
                     )
                 }
 
                 if answers.enabled {
-                    VStack(alignment: .leading) {
-                        Text("Offer an answer when memory is at least \(Int((answers.minimumConfidence * 100).rounded()))% sure")
-                        Slider(value: Binding(
-                            get: { answers.minimumConfidence },
-                            set: { value in
-                                var updated = answers
-                                updated.minimumConfidence = value
-                                control.updateAnswers(updated)
-                            }
-                        ), in: 0.2...0.8, step: 0.05)
-                        Text("Higher shows fewer, safer answers. Answers whose numbers or names are not in your messages are never shown.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    confidenceSlider(answers)
                     let sources = control.sources.filter { $0.enabled && $0.isAnswerSource }.map(\.title)
                     Text(sources.isEmpty
-                        ? "No source is used for answers yet: turn on \"Use for answers\" under Sources."
-                        : "Facts come from: \(sources.joined(separator: ", ")), and the conversation you reply in.")
+                        ? "Facts come only from the conversation you reply in, plus your busy and free times when the " +
+                            "Calendar source is on. Turn on \"Use for answers\" under Sources to also draw on a source's " +
+                            "other conversations."
+                        : "Facts come from the conversation you reply in, your busy and free times when the Calendar " +
+                            "source is on, and any conversation of: \(sources.joined(separator: ", ")). Each is shown on " +
+                            "the card before you insert.")
                         .font(.caption)
-                        .foregroundStyle(sources.isEmpty ? .orange : .secondary)
+                        .foregroundStyle(.secondary)
 
                     HStack {
                         TextField("Try a question someone might ask you", text: $question)
@@ -68,6 +60,23 @@ struct MemoryAnswersSection: View {
                 Text("Answers")
             }
             .settingsItem(.memoryAnswers)
+        }
+    }
+
+    private func confidenceSlider(_ answers: MemoryAnswerSettings) -> some View {
+        VStack(alignment: .leading) {
+            Text("Offer an answer when memory is at least \(Int((answers.minimumConfidence * 100).rounded()))% sure")
+            Slider(value: Binding(
+                get: { answers.minimumConfidence },
+                set: { value in
+                    var updated = answers
+                    updated.minimumConfidence = value
+                    control.updateAnswers(updated)
+                }
+            ), in: 0.2...0.8, step: 0.05)
+            Text("Higher shows fewer, safer answers. Answers whose numbers or names are not in your messages are never shown.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 }

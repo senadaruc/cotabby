@@ -102,6 +102,13 @@ nonisolated enum MemorySourceCatalog {
 
     /// Whether `id` may answer questions under `settings` (the user's choice, else the default).
     static func isAnswerSource(_ id: String, settings: MemorySourceSettings?) -> Bool {
-        settings?.answerSource ?? descriptor(id)?.answerSourceByDefault ?? false
+        canAnswer(id) && (settings?.answerSource ?? descriptor(id)?.answerSourceByDefault ?? false)
+    }
+
+    /// Whether a source can be an answer source at all. Never Calendar: its records hold what an
+    /// event is and who is in it, and answers give only busy and free times (`AvailabilityFacts`,
+    /// read live from EventKit, not from memory).
+    static func canAnswer(_ id: String) -> Bool {
+        id != "calendar"
     }
 }

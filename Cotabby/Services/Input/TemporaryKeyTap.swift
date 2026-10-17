@@ -3,8 +3,9 @@ import Foundation
 import Logging
 
 /// File overview:
-/// A keyboard tap that exists only while an offer is on screen (an answer card), deciding per key
-/// whether to take it.
+/// A keyboard tap that exists only while a transient surface needs a few keys, deciding per key
+/// whether to take it: an answer card (Tab inserts, Esc dismisses, any other key withdraws it), and
+/// selection rewrite's popup (Esc and Return).
 ///
 /// Why its own tap rather than `InputMonitor`'s: that monitor's consuming tap is installed only while
 /// a suggestion is visible and its single capture slot belongs to inline commands; an answer card is

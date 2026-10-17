@@ -65,20 +65,22 @@ enum SuggestionRequestFactory {
             engine: settings.selectedEngine
         )
         let completionLengthInstruction = settings.effectiveWordRange.promptInstruction
+        let userName = activeUserName(settings: settings)
         // In a mail reply the text after the caret is the quoted thread being answered, the most
-        // relevant context there is, so mail apps carry more of it than other surfaces, condensed to
-        // who wrote what (headers, addresses and signatures would otherwise fill the budget).
-        let isMail = MailReplyContext.isMail(bundleIdentifier: context.bundleIdentifier)
+        // relevant context there is (`MailReplyContext`): mail apps carry more of it, condensed to
+        // who wrote what (headers, addresses and signatures would otherwise fill the budget), name
+        // the thread by its subject (Outlook's inline reply sits in the main window, titled after
+        // the open folder), and name the addressee. All of it is read from the trailing text, which
+        // never leaves this Mac, so the endpoint keeps the plain window title and no addressee.
+        let readsMailThread = MailReplyContext.isMail(bundleIdentifier: context.bundleIdentifier)
+            && settings.selectedEngine.isOnDevice
         let maxSuffixCharacters = MailReplyContext.trailingBudget(
             bundleIdentifier: context.bundleIdentifier, defaultBudget: configuration.maxSuffixCharacters
         )
-        let promptTrailingText = isMail ? MailReplyContext.condensedThread(context.trailingText) : context.trailingText
-        // The thread's subject names a reply better than its window: Outlook's inline reply sits in
-        // the main window, titled after the open folder ("Inbox • All Accounts").
-        let surfaceWindowTitle = isMail
-            ? MailReplyContext.quotedSubject(in: context.trailingText) ?? context.windowTitle
+        let promptTrailingText = readsMailThread ? MailReplyContext.condensedThread(context.trailingText) : context.trailingText
+        let surfaceWindowTitle = readsMailThread
+            ? MailReplyContext.quotedSubject(in: context.trailingText, precedingText: context.precedingText) ?? context.windowTitle
             : context.windowTitle
-        let userName = activeUserName(settings: settings)
         // Custom rules are hidden from users (CustomRulesCatalog.isUserFacingEnabled == false): the
         // base-model OSS path cannot obey free-text instructions and the rule text leaks into output,
         // so injection is suppressed on every engine. Stored rules survive untouched, so flipping the
@@ -117,8 +119,8 @@ enum SuggestionRequestFactory {
                 windowTitle: surfaceWindowTitle,
                 focusedURLString: context.focusedURLString,
                 fieldPlaceholder: context.fieldPlaceholder,
-                replyingTo: MailReplyContext.isMail(bundleIdentifier: context.bundleIdentifier)
-                    ? MailReplyContext.replyRecipient(in: context.trailingText, userName: userName)
+                replyingTo: readsMailThread
+                    ? MailReplyContext.replyRecipient(in: context.trailingText, precedingText: context.precedingText, userName: userName)
                     : nil
             )
             : nil
@@ -191,7 +193,8 @@ enum SuggestionRequestFactory {
             memorySnippets: activeMemorySnippets,
             isMultiLineEnabled: settings.isMultiLineEnabled,
             requestID: RequestID.generate(),
-            wordRange: settings.effectiveWordRange
+            wordRange: settings.effectiveWordRange,
+            promptTrailingText: readsMailThread ? promptTrailingText : nil
         )
 
         return SuggestionRequestBuildResult(

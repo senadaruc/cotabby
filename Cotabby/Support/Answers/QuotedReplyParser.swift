@@ -5,15 +5,40 @@ import Foundation
 ///
 /// Why: when the user replies in Mail or Outlook, the compose body holds their (empty) reply, their
 /// signature, then the quoted original. Cotabby already reads that text through Accessibility
-/// (`FocusedInputContext.trailingText`), so the question being answered is right there, fresher
-/// than any sync. This parses it out: the quote header in the forms the user's mail clients write
-/// (English and Turkish attribution lines, Outlook's "From:/Gönderen:" block, "Original Message"
-/// rules), the sender named in it, and the quoted body up to the next, older quote.
+/// (`FocusedInputSnapshot.trailingText`), so the message being answered is right there, fresher
+/// than any sync.
+///
+/// Two readers, for two different jobs:
+/// - `quotedMessage` and `quotedSubject` are the one reader of "what was the incoming message": what
+///   an answer replies to, its sender, subject and date, and the addressee and subject a suggestion
+///   names. They read the client's quote header only through `MailQuoteHeader` (normalized text,
+///   nothing header-like above the caret, the first header anchored at a quote boundary, exactly
+///   one sender address, no quoted-printable or HTML remnants). What they read is data about the
+///   message; it never chooses which conversation memory or an answer searches.
+/// - `headerRange` and `looseMessage` only reformat text that goes into a prompt anyway (the
+///   condensed thread, `MailReplyContext.condensedThread`): they find every older quote in a thread,
+///   which the strict reader deliberately refuses, and decide nothing.
+///
+/// Pure and shared: `MailReplyContext` for suggestions, `ReplyFieldEmptiness` and
+/// `IncomingMessageResolver` for answers.
 nonisolated enum QuotedReplyParser {
     struct QuotedMessage: Equatable, Sendable {
         /// The original's sender as the header names them, when it does.
         let sender: String?
         let body: String
+        /// The sender's address the header carries, lowercased: part of the message's identity.
+        var senderAddress: String?
+        /// When it was sent, as the header gives it: an Outlook block's "Sent:"/"Date:" value, or an
+        /// attribution line ("On Mon, 3 Oct 2026 at 10:15, … wrote:"). Part of a message's identity.
+        var sentLine: String?
+        /// The subject an Outlook-style block names; attribution quotes name none.
+        var subject: String?
+    }
+
+    /// One "Name: value" line of an Outlook-style header block.
+    private struct HeaderField {
+        let name: String
+        let value: String
     }
 
     static let maximumBodyCharacters = 2000
@@ -36,32 +61,56 @@ nonisolated enum QuotedReplyParser {
             .min { $0.lowerBound < $1.lowerBound }
     }
 
+    /// The message the client quoted below the caret, read through the strict shared parser; nil
+    /// when there is no header that parser accepts.
+    static func quotedMessage(precedingText: String = "", trailingText: String) -> QuotedMessage? {
+        guard let header = MailQuoteHeader.client(precedingText: precedingText, trailingText: trailingText) else { return nil }
+        let fields: [HeaderField] = header.isAttribution ? [] : header.lines.compactMap(headerField)
+        let attribution = header.lines.joined(separator: " ")
+        let sender = header.isAttribution
+            ? senderName(fromAttribution: attribution)
+            : fields.first { ["from", "gönderen", "kimden"].contains($0.name) }.flatMap { cleanName($0.value) }
+        let sentLine = header.isAttribution
+            ? attribution
+            : fields.first { ["sent", "date", "gönderildi", "tarih"].contains($0.name) }?.value
+        let subject = fields.first { ["subject", "konu"].contains($0.name) }?.value
+        let body = header.bodyLines.joined(separator: "\n")
+            .replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return nil }
+        return QuotedMessage(
+            sender: sender, body: String(body.prefix(maximumBodyCharacters)), senderAddress: header.senderAddress,
+            sentLine: sentLine, subject: subject.flatMap { $0.isEmpty ? nil : $0 }
+        )
+    }
+
     static func quotedMessage(in text: String) -> QuotedMessage? {
+        quotedMessage(precedingText: "", trailingText: text)
+    }
+
+    /// The subject the client's quote header names ("Subject: Re: Q3 rollout plan"), through the
+    /// strict parser; nil for attribution quotes, which name no subject.
+    static func quotedSubject(precedingText: String = "", in text: String) -> String? {
+        quotedMessage(precedingText: precedingText, trailingText: text)?.subject
+    }
+
+    /// Any quoted message starting at `text`'s first header, read loosely: for reformatting a
+    /// thread the prompt carries anyway, never for a decision (see the file overview).
+    static func looseMessage(in text: String) -> QuotedMessage? {
         guard let header = headerRange(in: text) else { return nil }
         let headerLine = String(text[header])
         var bodyStart = header.upperBound
         var sender = senderName(fromAttribution: headerLine)
+        var senderAddress = address(in: headerLine)
+        var sentLine: String? = sender == nil ? nil : headerLine.trimmingCharacters(in: .whitespaces)
 
         // Outlook-style block: From / Sent / To / Cc / Subject lines, then the body.
-        let blockText = String(text[header.lowerBound...])
         if sender == nil || headerLine.range(of: "original message", options: .caseInsensitive) != nil {
-            let lines = blockText.components(separatedBy: .newlines)
-            var consumed = 0
-            var sawField = false
-            for line in lines {
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
-                if trimmed.isEmpty && sawField { consumed += line.count + 1; break }
-                if let field = headerField(trimmed) {
-                    sawField = true
-                    if ["from", "gönderen", "kimden"].contains(field.name) { sender = cleanName(field.value) }
-                    consumed += line.count + 1
-                } else if !sawField {
-                    consumed += line.count + 1  // The rule line itself.
-                } else {
-                    break
-                }
-            }
-            bodyStart = text.index(header.lowerBound, offsetBy: min(consumed, blockText.count))
+            let block = headerBlock(in: String(text[header.lowerBound...]))
+            sender = block.sender.flatMap(cleanName) ?? sender
+            senderAddress = block.sender.flatMap(address) ?? senderAddress
+            sentLine = block.sent ?? sentLine
+            bodyStart = text.index(header.lowerBound, offsetBy: block.consumedCharacters)
         }
 
         var body = String(text[bodyStart...])
@@ -76,37 +125,48 @@ nonisolated enum QuotedReplyParser {
             .replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return nil }
-        return QuotedMessage(sender: sender, body: String(cleaned.prefix(maximumBodyCharacters)))
+        return QuotedMessage(
+            sender: sender, body: String(cleaned.prefix(maximumBodyCharacters)), senderAddress: senderAddress, sentLine: sentLine
+        )
     }
 
-    /// The subject named in the first Outlook-style quote block ("Subject: Re: AFAD Use Case 3"),
-    /// read from the block's own field lines only, so a "Subject:" line in the user's draft above
-    /// the quote is never taken for it. Nil for attribution quotes ("On …, X wrote:"), which name no
-    /// subject.
-    static func quotedSubject(in text: String) -> String? {
-        guard let header = headerRange(in: text) else { return nil }
+    /// What an Outlook-style block's field lines say, and how much of the text they take.
+    private struct HeaderBlock {
+        /// The raw From value ("Ayşe <a@example.com>").
+        let sender: String?
+        /// The raw Sent/Date value.
+        let sent: String?
+        /// Characters the rule and field lines (plus the blank line after them) take, so the body
+        /// starts right after.
+        let consumedCharacters: Int
+    }
+
+    private static func headerBlock(in blockText: String) -> HeaderBlock {
+        var sender: String?
+        var sent: String?
+        var consumed = 0
         var sawField = false
-        for line in text[header.lowerBound...].components(separatedBy: .newlines) {
+        for line in blockText.components(separatedBy: .newlines) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            // A blank line after the fields ends the block; the quoted message starts there.
-            if trimmed.isEmpty {
-                if sawField { return nil }
-                continue
+            if trimmed.isEmpty && sawField {
+                consumed += line.count + 1
+                break
             }
-            guard let field = headerField(trimmed) else {
-                // The rule line opens the block; any other line ends it.
-                if originalMessageRule?.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) != nil {
-                    continue
-                }
-                return nil
+            if let field = headerField(trimmed) {
+                sawField = true
+                if ["from", "gönderen", "kimden"].contains(field.name) { sender = field.value }
+                if ["sent", "date", "gönderildi", "tarih"].contains(field.name) { sent = field.value }
+                consumed += line.count + 1
+            } else if !sawField {
+                consumed += line.count + 1  // The rule line itself.
+            } else {
+                break
             }
-            sawField = true
-            if ["subject", "konu"].contains(field.name) { return field.value.isEmpty ? nil : field.value }
         }
-        return nil
+        return HeaderBlock(sender: sender, sent: sent, consumedCharacters: min(consumed, blockText.count))
     }
 
-    /// "On Mon, 3 Oct 2026 at 10:15, Ayşe Yılmaz <ayse@x.com> wrote:" → "Ayşe Yılmaz";
+    /// "On Mon, 3 Oct 2026 at 10:15, Ayşe Yılmaz <ayse@example.com> wrote:" → "Ayşe Yılmaz";
     /// "3 Eki 2026 tarihinde Ayşe Yılmaz şunu yazdı:" → "Ayşe Yılmaz".
     static func senderName(fromAttribution line: String) -> String? {
         let text = line.trimmingCharacters(in: CharacterSet(charactersIn: "> ").union(.whitespaces))
@@ -124,16 +184,29 @@ nonisolated enum QuotedReplyParser {
         return cleanName(candidate)
     }
 
-    private static func headerField(_ line: String) -> (name: String, value: String)? {
+    private static let headerFieldNames: Set<String> = [
+        "from", "sent", "date", "to", "cc", "subject", "gönderen", "kimden", "gönderildi", "tarih", "kime", "bilgi", "konu"
+    ]
+
+    private static func headerField(_ line: String) -> HeaderField? {
         guard let colon = line.firstIndex(of: ":") else { return nil }
         let name = line[..<colon].trimmingCharacters(in: .whitespaces).lowercased()
-        let known: Set<String> = ["from", "sent", "date", "to", "cc", "subject", "gönderen", "kimden", "gönderildi",
-                                  "tarih", "kime", "bilgi", "konu"]
-        guard known.contains(name) else { return nil }
-        return (name, String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces))
+        guard headerFieldNames.contains(name) else { return nil }
+        return HeaderField(name: name, value: String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces))
     }
 
-    /// A display name without its address ("Ayşe <a@x.com>" → "Ayşe"), or the address alone.
+    /// The address in a sender's text ("Ayşe <ayse@example.com>", "On …, Ayşe <a@x> wrote:", or a bare
+    /// "a@example.com"), lowercased; nil when there is none.
+    static func address(in raw: String) -> String? {
+        if let open = raw.lastIndex(of: "<"), let close = raw[open...].firstIndex(of: ">") {
+            let inside = raw[raw.index(after: open)..<close].trimmingCharacters(in: .whitespaces)
+            return inside.contains("@") ? inside.lowercased() : nil
+        }
+        let bare = raw.trimmingCharacters(in: .whitespaces)
+        return bare.contains("@") && !bare.contains(" ") ? bare.lowercased() : nil
+    }
+
+    /// A display name without its address ("Ayşe <a@example.com>" → "Ayşe"), or the address alone.
     private static func cleanName(_ raw: String) -> String? {
         var name = raw.trimmingCharacters(in: .whitespaces)
         if let open = name.firstIndex(of: "<") {

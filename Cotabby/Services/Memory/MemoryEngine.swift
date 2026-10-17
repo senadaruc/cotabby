@@ -650,7 +650,8 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
     ) -> MemorySearchResult {
         let started = Date()
         let enabled = Set(enabledSources)
-        let allowedSources = enabled.intersection(sources)
+        // Never a source that cannot answer (Calendar), whatever the caller passes.
+        let allowedSources = enabled.intersection(sources.filter(MemorySourceCatalog.canAnswer))
         let currentKey = currentConversation.map {
             (source: $0.source, conversationKey: store.conversationKey(source: $0.source, conversationID: $0.conversationID))
         }

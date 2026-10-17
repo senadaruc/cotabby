@@ -404,6 +404,8 @@ final class CotabbyAppEnvironment {
         )
         let memoryControl = MemoryControlModel(controller: memoryController, historySync: memoryHistorySync)
         let memoryRetriever = MemoryRetriever(engine: { [weak memoryController] in memoryController?.engine })
+        // Answers: drafted on this Mac (Apple Intelligence or the local model, never the endpoint)
+        // from memory, offered on a card at the caret. The shared inserter pastes an accepted draft.
         let answerCoordinator = AnswerCoordinator(
             focusModel: focusModel,
             memory: memoryController,
@@ -414,12 +416,20 @@ final class CotabbyAppEnvironment {
             ),
             draftEngine: AnswerDraftEngine(
                 runtimeManager: runtimeManager,
-                hasLocalModel: { [weak runtimeModel] in runtimeModel?.selectedModelFilename != nil },
+                // The local model drafts only when it is the engine the user chose, so answers never
+                // load a model behind an Apple Intelligence, MLX or endpoint user's back.
+                hasLocalModel: { [weak runtimeModel, weak suggestionSettings] in
+                    suggestionSettings?.selectedEngine == .llamaOpenSource && runtimeModel?.selectedModelFilename != nil
+                },
                 availability: foundationModelAvailabilityService
             ),
             card: AnswerCardController(),
             keyTap: TemporaryKeyTap(suppressionController: suppressionController),
             inserter: suggestionInserter,
+            isAllowed: { [weak suggestionSettings, weak lowPowerModeMonitor, weak permissionManager] snapshot in
+                Self.isCotabbyOn(at: snapshot, settings: suggestionSettings, lowPowerModeMonitor: lowPowerModeMonitor,
+                                 permissionManager: permissionManager)
+            },
             windowOverrides: windowFeatureOverrides
         )
 
@@ -639,11 +649,10 @@ final class CotabbyAppEnvironment {
             guard let performanceTuner, let suggestionSettings else { return true }
             return performanceTuner.tuning(for: suggestionSettings.snapshot).allowsMemoryRetrieval
         }
+        // Whether Cotabby is on at all is `isAllowed`'s rule; this is only the tuner's say.
         answerCoordinator.isAllowedByTuning = { [weak performanceTuner, weak suggestionSettings] in
             guard let performanceTuner, let suggestionSettings else { return true }
-            let settings = suggestionSettings.snapshot
-            return performanceTuner.tuning(for: settings).allowsMemoryRetrieval
-                && settings.isGloballyEnabled && !settings.isTemporarilyPaused
+            return performanceTuner.tuning(for: suggestionSettings.snapshot).allowsMemoryRetrieval
         }
         answerCoordinator.isEnabledForApplication = { [weak memoryController] bundleIdentifier in
             !(memoryController?.engine?.configuration.answers.disabledApps.contains(bundleIdentifier) ?? true)
@@ -812,6 +821,30 @@ final class CotabbyAppEnvironment {
                 )
             }
             .store(in: &cancellables)
+    }
+
+    /// Whether Cotabby is on where focus is, by exactly the rules suggestions use
+    /// (`SuggestionAvailabilityEvaluator`): globally on, not paused, not turned off by Low Power
+    /// Mode, and not disabled for the app, the site or terminals. Answers follow the same switches.
+    /// The app list is the plain one: a field-icon window choice for autocomplete is autocomplete's;
+    /// answers have their own row (`AnswerCoordinator`).
+    private static func isCotabbyOn(
+        at snapshot: FocusSnapshot, settings model: SuggestionSettingsModel?, lowPowerModeMonitor: LowPowerModeMonitor?,
+        permissionManager: PermissionManager?
+    ) -> Bool {
+        guard let settings = model?.snapshot, let permissionManager else { return false }
+        return SuggestionAvailabilityEvaluator.disabledReason(
+            globallyEnabled: settings.isGloballyEnabled,
+            temporarilyPaused: settings.isTemporarilyPaused,
+            isLowPowerModeActive: lowPowerModeMonitor?.isLowPowerModeEnabled ?? false,
+            isLowPowerModeAutoDisableEnabled: settings.isLowPowerModeAutoDisableEnabled,
+            disabledAppBundleIdentifiers: settings.disabledAppBundleIdentifiers,
+            disabledDomains: PerDomainDisableSettings.disabledDomains(),
+            suggestInIntegratedTerminals: settings.suggestInIntegratedTerminals,
+            inputMonitoringGranted: permissionManager.inputMonitoringGranted,
+            focusSnapshot: snapshot,
+            checkCapability: false
+        ) == nil
     }
 
     /// Switches the active engine (and, for Open Source, the model) to the profile configured for the

@@ -26,7 +26,7 @@ nonisolated enum VisualContextExcerptSelector {
                 if isFocusedFieldOrBelow(bounds, focus: focus) { return nil }
                 // A mail app's other columns are the folder list and the message list: previews of
                 // other mail, which a base model copies when one starts like the draft ("Dear M" →
-                // another thread's "Dear Massimo and Alberto"). The thread being answered reaches
+                // another thread's "Dear Morgan and Riley"). The thread being answered reaches
                 // the prompt as the field's trailing text instead.
                 if keepsOnlyFieldColumn, !isInFieldColumn(bounds, focus: focus) { return nil }
             }

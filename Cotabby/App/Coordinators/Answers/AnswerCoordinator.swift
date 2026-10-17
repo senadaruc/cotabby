@@ -9,31 +9,77 @@ import Logging
 ///
 /// The flow, each step owned elsewhere so this file only orchestrates:
 /// 1. A focused, non-secure reply field still waiting for its body, empty or holding only the
-///    salutation (`ReplyFieldEmptiness.isAwaitingBody`), in an app and window
-///    where answers are on, with memory running, a local model able to draft, and the performance
-///    tuner allowing memory work.
+///    salutation (`ReplyFieldEmptiness.isAwaitingBody`), in a mail app or a chat app whose memory
+///    source is on (`IncomingMessageResolver.answersIn`; never a browser page or any other field),
+///    in an app Cotabby is on in (not paused, not disabled for the app, not off for Low Power
+///    Mode), where the field icon has not turned answers off for the app or the window
+///    (`WindowFeatureScope`), with Answer Questions on, memory running, an on-device model able to
+///    draft, and the performance tuner allowing memory work.
 /// 2. The latest incoming message there (`IncomingMessageResolver`) and the question in it
 ///    (`QuestionDetector`).
-/// 3. Facts from memory: the user's answer sources, any conversation, plus the conversation being
-///    replied in, never the question itself (`MemoryEngine.answerSearch`), and only when the best
-///    one is relevant enough (`AnswerGroundingPolicy.shouldDraft`). A question about the user's time
+/// 3. Facts from memory: the conversation being replied in (only when Cotabby identified it), plus
+///    any conversation of the sources the user turned "Use for answers" on for (none by default),
+///    never the question itself (`MemoryEngine.answerSearch`), and only when the best one is
+///    relevant enough (`AnswerGroundingPolicy.shouldDraft`). A message that reads as instructions
+///    to an assistant gets no answer, and remembered text that does never reaches the prompt
+///    (`AnswerGroundingPolicy.looksLikeInstructions`). A question about the user's time
 ///    ("are you free Thursday?", `SchedulingQuestion`) also gets the calendar for the days it names,
 ///    read live from EventKit and turned into free/busy facts (`AvailabilityFacts`), whenever the
 ///    Calendar source is on (busy and free only, so this needs no "use for answers"); those facts
 ///    alone are enough to draft.
-/// 4. A draft (`AnswerDraftEngine`), kept only if every number and name in it is in the facts or
-///    the question (`AnswerGroundingPolicy.unsupportedSpecifics`).
-/// 5. A card under the caret line with the draft and its sources (`AnswerCardController`). A click
+/// 4. A draft (`AnswerDraftEngine`, on this Mac only), kept only if every number and name in it is
+///    in the facts or the question and it passes the other grounding guards (`AnswerGroundingPolicy`).
+/// 5. A card under the caret line with the draft, what it answers, and every fact it was given,
+///    each from another conversation marked (`AnswerAttribution`, `AnswerCardController`). A click
 ///    on it pastes the draft at the caret, where the user edits it like their own text. In an empty
 ///    reply Tab does the same; once a salutation is typed, ghost-text suggestions own Tab on that
-///    line, so only the click inserts. Esc dismisses (`TemporaryKeyTap`); any other key dismisses it
-///    and reaches the app as usual. Nothing is ever inserted without that click or Tab.
+///    line, so only the click inserts. Esc dismisses (`TemporaryKeyTap`, `AnswerCardKeyPolicy`); any
+///    other key dismisses it and reaches the app as usual. Nothing is ever inserted without that
+///    click or Tab, and nothing is ever sent: the draft is pasted for the user to edit.
 ///
 /// Each question is drafted once (cached by message), a dismissed one is not offered again, and
 /// every async step re-checks that the same field is still focused and still empty before acting.
 /// Built by `CotabbyAppEnvironment`, started and stopped by `AppDelegate`.
 @MainActor
 final class AnswerCoordinator {
+    /// The offer on screen, for which field and which message.
+    private struct ShownOffer {
+        let identity: FocusedInputIdentity
+        /// The app the card was offered in; a paste goes nowhere else.
+        let bundleIdentifier: String
+        let offer: AnswerOffer
+        let messageKey: String
+    }
+
+    /// What memory and the calendar found for one question.
+    private struct Facts {
+        /// Memory's facts, kept only when relevant enough to draft from.
+        let hits: [MemorySearchResult.Hit]
+        /// Free/busy facts for the days a scheduling question names; they come first in the prompt.
+        let calendar: [AnswerPromptRenderer.Fact]
+        let bestSimilarity: Double
+        /// Memory's candidates before the relevance gate, for the log.
+        let candidates: Int
+
+        var isEmpty: Bool { hits.isEmpty && calendar.isEmpty }
+
+        var forPrompt: [AnswerPromptRenderer.Fact] {
+            let memoryFacts: [AnswerPromptRenderer.Fact] = hits.map { (hit: MemorySearchResult.Hit) in
+                AnswerPromptRenderer.Fact(sender: hit.sender, isFromMe: hit.isFromMe, conversationTitle: hit.conversationTitle,
+                                          timestamp: Date(timeIntervalSince1970: hit.timestamp), text: hit.text)
+            }
+            return calendar + memoryFacts
+        }
+    }
+
+    /// How preparing one question ended: an offer, nothing to offer (cached, so the question is not
+    /// drafted again), or a failure worth retrying on the next visit (not cached).
+    private enum Outcome {
+        case offer(AnswerOffer)
+        case nothing
+        case failed
+    }
+
     private let focusModel: FocusTrackingModel
     private let memory: MemoryEngineController
     private let resolver: IncomingMessageResolver
@@ -41,31 +87,44 @@ final class AnswerCoordinator {
     private let card: AnswerCardController
     private let keyTap: TemporaryKeyTap
     private let inserter: SuggestionInserter
+    /// Whether Cotabby is on where focus is, by the same rules as suggestions
+    /// (`SuggestionAvailabilityEvaluator`): globally on, not paused, not off for Low Power Mode, and
+    /// not disabled for the app, the site or terminals.
+    private let isAllowed: @MainActor (FocusSnapshot) -> Bool
+    /// The field icon's per-window choices; the answers row overrides the app's switch.
     private let windowOverrides: WindowFeatureOverrideStore
     /// Whether the performance tuner allows memory work right now.
     var isAllowedByTuning: @MainActor () -> Bool = { true }
-    /// Whether answers are on for an app (the field icon's app switch); default on for apps with memory.
+    /// Whether answers are on for an app (the field icon's app switch, `MemoryAnswerSettings.disabledApps`).
     var isEnabledForApplication: @MainActor (String) -> Bool = { _ in true }
 
     private var cancellables: Set<AnyCancellable> = []
     private var task: Task<Void, Never>?
     private var pendingIdentity: FocusedInputIdentity?
+    /// The field prepared last without an offer (nothing to answer, or a failure): not prepared
+    /// again on every snapshot of the same field, only after it changes or the user leaves it.
+    private var preparedIdentity: FocusedInputIdentity?
+    /// When the focused element dropped while a draft or card was active (see `observe`).
+    private var focusLostAt: Date?
     /// The app of the field being drafted for or offered in, to tell a focus flicker from leaving it.
     private var activeBundleIdentifier: String?
-    /// The offer on screen, for which field.
-    private var shown: (identity: FocusedInputIdentity, offer: AnswerOffer, messageKey: String)?
-    /// Drafts per message key (nil: memory had no answer), and the messages the user dismissed.
-    private var drafts: [String: AnswerOffer?] = [:]
+    private var shown: ShownOffer?
+    /// Drafts per message key, dropped whenever memory's sources, settings or data change
+    /// (`AnswerDraftCache`), and the messages the user dismissed.
+    private var cache = AnswerDraftCache()
     private var dismissed: Set<String> = []
 
     static let debounceNanoseconds: UInt64 = 400_000_000
-    static let tabKeyCode: CGKeyCode = 48
-    static let escapeKeyCode: CGKeyCode = 53
+    /// How long a focus flicker in the same app keeps a draft or card alive.
+    static let focusFlickerGrace: TimeInterval = 1.5
+    /// At most this many days of calendar facts, so memory's facts still fit in the prompt.
+    static let maximumCalendarDays = 5
 
     init(
         focusModel: FocusTrackingModel, memory: MemoryEngineController, resolver: IncomingMessageResolver,
         draftEngine: AnswerDraftEngine, card: AnswerCardController, keyTap: TemporaryKeyTap,
-        inserter: SuggestionInserter, windowOverrides: WindowFeatureOverrideStore
+        inserter: SuggestionInserter, isAllowed: @escaping @MainActor (FocusSnapshot) -> Bool,
+        windowOverrides: WindowFeatureOverrideStore
     ) {
         self.focusModel = focusModel
         self.memory = memory
@@ -74,10 +133,16 @@ final class AnswerCoordinator {
         self.card = card
         self.keyTap = keyTap
         self.inserter = inserter
+        self.isAllowed = isAllowed
         self.windowOverrides = windowOverrides
     }
 
+    /// See `AnswerDraftEngine`: released through a nonisolated deinit.
+    nonisolated deinit {}
+
     func start() {
+        // `$snapshot` is the published focus stream; `[weak self]` keeps the subscription from
+        // owning the coordinator.
         focusModel.$snapshot
             .sink { [weak self] snapshot in self?.observe(snapshot) }
             .store(in: &cancellables)
@@ -91,6 +156,7 @@ final class AnswerCoordinator {
     /// A field-icon choice changed: re-evaluate the focused field now.
     func handleScopeChange() {
         withdraw()
+        preparedIdentity = nil
         observe(focusModel.snapshot)
     }
 
@@ -101,29 +167,47 @@ final class AnswerCoordinator {
         // user is still in the reply ("No focused Accessibility element", then the same field back).
         // A draft takes seconds; ending it on that flicker meant it never finished. A snapshot with
         // no field in the same app is that flicker; another app, or the field itself turning
-        // ineligible (the user started writing), still withdraws.
+        // ineligible (the user started writing), still withdraws. The grace is short: focus resting
+        // on a list in the same app is not a flicker, and the card's key tap must not outlive it.
         if snapshot.context == nil, task != nil || shown != nil, snapshot.bundleIdentifier == activeBundleIdentifier {
-            return
+            if focusLostAt == nil {
+                focusLostAt = Date()
+                // Look again once the grace is over, even if no other snapshot arrives by then.
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: UInt64((Self.focusFlickerGrace + 0.05) * 1_000_000_000))
+                    guard let self else { return }
+                    self.observe(self.focusModel.snapshot)
+                }
+            }
+            if let lost = focusLostAt, Date().timeIntervalSince(lost) < Self.focusFlickerGrace { return }
         }
+        focusLostAt = nil
         guard let input = eligibleInput(snapshot) else {
             if task != nil || shown != nil {
                 CotabbyLogger.app.debug("Answer withdrawn", metadata: [
-                    "category": "answers", "reason": .string(snapshot.context == nil ? "focus_left_app" : "field_not_awaiting_body")
+                    "category": "answers",
+                    "reason": .string(snapshot.context == nil ? "focus_left_app" : "field_not_awaiting_body")
                 ])
             }
             withdraw()
+            preparedIdentity = nil
             return
         }
-        // Same field, already offered or being prepared: nothing to do.
-        if shown?.identity == input.identity || pendingIdentity == input.identity { return }
+        // Same field, already offered, being prepared, or prepared without an offer: nothing to do.
+        if shown?.identity == input.identity || pendingIdentity == input.identity || preparedIdentity == input.identity { return }
         withdraw()
         pendingIdentity = input.identity
         activeBundleIdentifier = input.bundleIdentifier
+        // Debounced so tabbing through fields does not start a draft per field; `withdraw()`
+        // cancels it when focus moves on, and every later step re-checks the field.
         task = Task { [weak self] in
             try? await Task.sleep(nanoseconds: Self.debounceNanoseconds)
             guard let self, !Task.isCancelled else { return }
             await self.prepare(for: input)
-            if self.pendingIdentity == input.identity { self.pendingIdentity = nil }
+            guard !Task.isCancelled, self.pendingIdentity == input.identity else { return }
+            self.pendingIdentity = nil
+            self.task = nil
+            if self.shown?.identity != input.identity { self.preparedIdentity = input.identity }
         }
     }
 
@@ -131,9 +215,11 @@ final class AnswerCoordinator {
         guard let answers = memory.engine?.configuration.answers, answers.enabled,
               memory.state == .running, draftEngine.canDraft, isAllowedByTuning(),
               case .supported = snapshot.capability,
-              let input = snapshot.context, !input.isSecure,
+              let input = snapshot.context, !input.isSecure, isAllowed(snapshot),
+              resolver.answersIn(bundleIdentifier: input.bundleIdentifier),
               ReplyFieldEmptiness.isAwaitingBody(precedingText: input.precedingText, trailingText: input.trailingText)
         else { return nil }
+        // The field icon's answers switch: the window's own choice, else the app's.
         let windowKey = WindowFeatureScope.windowKey(bundleIdentifier: input.bundleIdentifier, windowTitle: input.featureScopeWindowTitle)
         guard WindowFeatureScope.resolve(
             appEnabled: isEnabledForApplication(input.bundleIdentifier),
@@ -148,7 +234,7 @@ final class AnswerCoordinator {
         let started = Date()
         guard let incoming = await resolver.latestIncoming(for: input) else {
             // No quoted mail, an unknown or ambiguous conversation, or the user already replied.
-            log("skipped", ["reason": "no_incoming_message", "app": input.bundleIdentifier ?? ""])
+            log("skipped", ["reason": "no_incoming_message", "app": input.bundleIdentifier])
             return
         }
         guard isStillCurrent(input) else { return }
@@ -157,86 +243,142 @@ final class AnswerCoordinator {
             return
         }
         let key = incoming.key
-        guard !dismissed.contains(key) else { return }
-        if let cached = drafts[key] {
-            if let cached, isStillCurrent(input) { offer(cached, for: input, messageKey: key) }
-            return
-        }
-        guard let engine = memory.engine, let configuration = memory.engine?.configuration else { return }
+        let stamp = currentStamp()
+        guard !dismissed.contains(key), !offerCachedDraft(for: input, messageKey: key, stamp: stamp),
+              let engine = memory.engine else { return }
 
-        let answerSources = MemorySourceCatalog.all.map(\.id).filter {
-            configuration.sources[$0]?.enabled == true && MemorySourceCatalog.isAnswerSource($0, settings: configuration.sources[$0])
+        switch await answer(question, to: incoming, engine: engine, started: started) {
+        case .offer(let prepared):
+            cache.store(prepared, for: key, preparedUnder: stamp)
+            // Memory changed while drafting (a source turned off, something forgotten): the facts
+            // may no longer be allowed, so the draft is not shown.
+            if !Task.isCancelled, currentStamp() == stamp, isStillCurrent(input) { offer(prepared, for: input, messageKey: key) }
+        case .nothing:
+            cache.store(nil, for: key, preparedUnder: stamp)
+        case .failed:
+            break
         }
-        let current = incoming.conversation.map { ($0.source, $0.conversationId) }
-        let excluded = incoming.recordIDs
-        let result = await Task.detached(priority: .userInitiated) {
-            engine.answerSearch(question: question, sources: answerSources, currentConversation: current, excludingRecordIDs: excluded)
-        }.value
-        // The quoted mail itself is not in `excluded` (no record id); never treat it as a fact.
-        let questionText = incoming.text.lowercased()
-        let found = result.hits.filter { !questionText.contains($0.text.lowercased()) }
-        let best = found.map(\.similarity).max() ?? 0
-        let factTexts = found.map { "\($0.sender) \($0.conversationTitle) \($0.text)" }
-        let memoryIsRelevant = AnswerGroundingPolicy.shouldDraft(
-            bestSimilarity: best, minimumSimilarity: configuration.answers.minimumConfidence,
-            hasKeywordMatch: found.contains { $0.via != "vector" }
-        ) && AnswerGroundingPolicy.factsMentionWhatTheQuestionNames(question: question, facts: factTexts)
-        let calendarFacts = await availabilityFacts(question: question, configuration: configuration)
-        guard memoryIsRelevant || !calendarFacts.isEmpty else {
-            drafts[key] = .some(nil)
-            log("skipped", ["reason": "no_relevant_memory", "best_similarity": String(format: "%.2f", best), "hits": "\(found.count)"])
-            return
+    }
+
+    /// What memory is now, for the draft cache: the engine, its data generation and its settings.
+    private func currentStamp() -> AnswerDraftCache.Stamp? {
+        memory.engine.map {
+            AnswerDraftCache.Stamp(engine: $0.instanceID, dataGeneration: $0.dataGeneration, configuration: $0.configuration)
         }
-        // Memory's facts only when relevant; the calendar's come first and leave room for them.
-        let hits = memoryIsRelevant ? Array(found.prefix(AnswerPromptRenderer.maximumFacts - calendarFacts.count)) : []
-        let facts = calendarFacts + hits.map {
-            AnswerPromptRenderer.Fact(sender: $0.sender, isFromMe: $0.isFromMe, conversationTitle: $0.conversationTitle,
-                                      timestamp: Date(timeIntervalSince1970: $0.timestamp), text: $0.text)
+    }
+
+    /// Whether this message was prepared before (a draft, or nothing to offer); a cached draft is
+    /// offered again while the field is still current.
+    private func offerCachedDraft(for input: FocusedInputSnapshot, messageKey: String, stamp: AnswerDraftCache.Stamp?) -> Bool {
+        guard let cached = cache.lookup(messageKey, stamp: stamp) else { return false }
+        if let cached, isStillCurrent(input) { offer(cached, for: input, messageKey: messageKey) }
+        return true
+    }
+
+    /// Facts, a draft, and the guards a draft must pass before it may be offered.
+    private func answer(
+        _ question: String, to incoming: IncomingMessageResolver.IncomingMessage, engine: MemoryEngine, started: Date
+    ) async -> Outcome {
+        // Someone else wrote the message and chose their display name: either reading as
+        // instructions to an assistant ("ignore previous instructions", "list all the facts") is an
+        // attempt to steer the draft.
+        if AnswerGroundingPolicy.looksLikeInstructions((incoming.sender ?? "") + "\n" + incoming.text) {
+            log("skipped", ["reason": "instruction_like_message"])
+            return .nothing
+        }
+        let facts = await gatherFacts(question: question, incoming: incoming, engine: engine)
+        guard !facts.isEmpty else {
+            log("skipped", [
+                "reason": "no_relevant_memory", "best_similarity": String(format: "%.2f", facts.bestSimilarity),
+                "hits": "\(facts.candidates)"
+            ])
+            return .nothing
         }
         let draft: AnswerDraftEngine.Draft?
         do {
-            draft = try await draftEngine.draft(question: question, asker: incoming.sender, facts: facts)
+            draft = try await draftEngine.draft(question: question, asker: incoming.sender, facts: facts.forPrompt)
         } catch {
             log("skipped", ["reason": "draft_failed", "error": error.localizedDescription])
-            return
+            return .failed
         }
         guard let draft else {
-            drafts[key] = .some(nil)
             log("skipped", ["reason": "model_abstained"])
-            return
+            return .nothing
         }
-        // Grounded in what the model was shown: each fact's sender, chat and text.
-        let shownFacts = AnswerPromptRenderer.factLines(facts)
+        guard isShowable(draft, facts: facts, incoming: incoming) else { return .nothing }
+        log("shown", [
+            "engine": draft.engine, "hits": "\(facts.hits.count)", "calendar_days": "\(facts.calendar.count)",
+            "best_similarity": String(format: "%.2f", facts.bestSimilarity),
+            "latency_ms": "\(Int(Date().timeIntervalSince(started) * 1000))"
+        ])
+        // Every fact the model saw is on the card, attributed: nothing it could draw on stays hidden.
+        return .offer(AnswerAttribution.offer(
+            draft: draft.text, answering: AnswerAttribution.answeringLine(asker: incoming.sender, question: question),
+            calendarFacts: facts.calendar,
+            hits: facts.hits, current: Self.current(incoming)
+        ))
+    }
+
+    private func gatherFacts(
+        question: String, incoming: IncomingMessageResolver.IncomingMessage, engine: MemoryEngine
+    ) async -> Facts {
+        let configuration = engine.configuration
+        let answerSources = MemorySourceCatalog.all.map(\.id).filter {
+            configuration.sources[$0]?.enabled == true && MemorySourceCatalog.isAnswerSource($0, settings: configuration.sources[$0])
+        }
+        let current = incoming.conversation.map { (source: $0.source, conversationID: $0.conversationId) }
+        let excluded = incoming.recordIDs
+        // The search embeds the question and scans the index: off the main actor.
+        let result = await Task.detached(priority: .userInitiated) {
+            engine.answerSearch(question: question, sources: answerSources, currentConversation: current, excludingRecordIDs: excluded)
+        }.value
+        // The quoted mail itself is not in `excluded` (no record id); never treat it as a fact. A
+        // remembered message that reads as instructions never reaches the prompt either.
+        let questionText = incoming.text.lowercased()
+        let found = result.hits.filter {
+            !questionText.contains($0.text.lowercased())
+                && !AnswerGroundingPolicy.looksLikeInstructions([$0.sender, $0.conversationTitle, $0.text].joined(separator: "\n"))
+        }
+        let best = found.map(\.similarity).max() ?? 0
+        let memoryIsRelevant = AnswerGroundingPolicy.shouldDraft(
+            bestSimilarity: best, minimumSimilarity: configuration.answers.minimumConfidence,
+            hasKeywordMatch: found.contains { $0.via != "vector" }
+        ) && AnswerGroundingPolicy.factsMentionWhatTheQuestionNames(
+            question: question, facts: found.map { "\($0.sender) \($0.conversationTitle) \($0.text)" }
+        )
+        let calendarFacts = await availabilityFacts(question: question, configuration: configuration)
+        // Memory's facts only when relevant; the calendar's come first and leave room for them.
+        let hits = memoryIsRelevant ? Array(found.prefix(AnswerPromptRenderer.maximumFacts - calendarFacts.count)) : []
+        return Facts(hits: hits, calendar: calendarFacts, bestSimilarity: best, candidates: found.count)
+    }
+
+    /// Whether a draft may be offered: grounded in what the model was shown (each fact's sender,
+    /// chat and text), and not reproducing another conversation's message. Logs why not.
+    private func isShowable(
+        _ draft: AnswerDraftEngine.Draft, facts: Facts, incoming: IncomingMessageResolver.IncomingMessage
+    ) -> Bool {
+        let shownFacts = AnswerPromptRenderer.factLines(facts.forPrompt)
         let unsupported = AnswerGroundingPolicy.unsupportedSpecifics(in: draft.text, facts: shownFacts, question: incoming.text)
         guard unsupported.isEmpty, AnswerGroundingPolicy.usesFacts(draft.text, facts: shownFacts, question: incoming.text),
               !AnswerGroundingPolicy.containsSecrets(draft.text) else {
-            drafts[key] = .some(nil)
             log("skipped", ["reason": "ungrounded", "unsupported": "\(unsupported.count)", "engine": draft.engine])
             // The words themselves only at debug level: they can be names from private mail.
             CotabbyLogger.app.debug("Answer ungrounded terms", metadata: [
                 "category": "answers", "terms": .string(unsupported.joined(separator: ", "))
             ])
-            return
-        }
-        let isOtherConversation = { (hit: MemorySearchResult.Hit) in
-            hit.source != incoming.conversation?.source || hit.conversationId != incoming.conversation?.conversationId
+            return false
         }
         // The question comes from someone else; it must not be able to make the draft reproduce
         // another conversation's message wholesale.
-        if hits.contains(where: { isOtherConversation($0) && AnswerGroundingPolicy.copiesPassage(draft.text, from: $0.text) }) {
-            drafts[key] = .some(nil)
-            log("skipped", ["reason": "copies_other_conversation", "engine": draft.engine])
-            return
+        let current = Self.current(incoming)
+        let copies = facts.hits.contains {
+            AnswerAttribution.isOther($0, current: current) && AnswerGroundingPolicy.copiesPassage(draft.text, from: $0.text)
         }
-        let sources = calendarFacts.map(Self.source) + hits.map { Self.source($0, otherConversation: isOtherConversation($0)) }
-        let prepared = AnswerOffer(draft: draft.text, sources: Array(sources.prefix(3)))
-        drafts[key] = prepared
-        log("shown", [
-            "engine": draft.engine, "hits": "\(hits.count)", "calendar_days": "\(calendarFacts.count)",
-            "best_similarity": String(format: "%.2f", best),
-            "latency_ms": "\(Int(Date().timeIntervalSince(started) * 1000))"
-        ])
-        if isStillCurrent(input) { offer(prepared, for: input, messageKey: key) }
+        if copies {
+            log("skipped", ["reason": "copies_other_conversation", "engine": draft.engine])
+            return false
+        }
+        return true
     }
 
     /// Free/busy facts for the days a scheduling question names, from the calendar as it is now;
@@ -253,27 +395,9 @@ final class AnswerCoordinator {
                                        language: AvailabilityFacts.language(of: question), now: now)
     }
 
-    /// At most this many days of calendar facts, so memory's facts still fit in the prompt.
-    static let maximumCalendarDays = 5
-
-    private static func source(_ fact: AnswerPromptRenderer.Fact) -> AnswerOffer.Source {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEE d MMM"
-        let byline = [AvailabilityFacts.title, formatter.string(from: fact.timestamp)].joined(separator: " · ")
-        return AnswerOffer.Source(id: "calendar:\(Int(fact.timestamp.timeIntervalSince1970))", byline: byline,
-                                  excerpt: String(fact.text.prefix(160)), isFromAnotherConversation: false)
-    }
-
-    private static func source(_ hit: MemorySearchResult.Hit, otherConversation: Bool) -> AnswerOffer.Source {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "d MMM"
-        let app = MemorySourceCatalog.descriptor(hit.source)?.title ?? hit.source
-        let who = hit.isFromMe ? "You" : hit.sender
-        let byline = [who, hit.conversationTitle, formatter.string(from: Date(timeIntervalSince1970: hit.timestamp)), app]
-            .filter { !$0.isEmpty }.joined(separator: " · ")
-        let excerpt = hit.text.split(whereSeparator: \.isNewline).joined(separator: " ")
-        return AnswerOffer.Source(id: hit.recordId, byline: byline, excerpt: String(excerpt.prefix(160)),
-                                  isFromAnotherConversation: otherConversation)
+    /// The conversation being answered, when the resolver identified it.
+    private static func current(_ incoming: IncomingMessageResolver.IncomingMessage) -> AnswerAttribution.Conversation? {
+        incoming.conversation.map { AnswerAttribution.Conversation(source: $0.source, conversationID: $0.conversationId) }
     }
 
     /// The same field is still focused and still empty.
@@ -286,7 +410,7 @@ final class AnswerCoordinator {
     // MARK: - The card
 
     private func offer(_ offer: AnswerOffer, for input: FocusedInputSnapshot, messageKey: String) {
-        shown = (input.identity, offer, messageKey)
+        shown = ShownOffer(identity: input.identity, bundleIdentifier: input.bundleIdentifier, offer: offer, messageKey: messageKey)
         // Tab is the card's only in an empty reply: after a salutation the suggestion overlay may be
         // showing ghost text on the same line, and its Tab accept must keep working.
         let tabInserts = input.precedingText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -296,36 +420,43 @@ final class AnswerCoordinator {
         )
         keyTap.install { [weak self] keyCode, flags in
             guard let self else { return .pass }
-            let plain = flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift]).isEmpty
-            switch (keyCode, plain) {
-            case (Self.tabKeyCode, true) where tabInserts:
+            switch AnswerCardKeyPolicy.action(keyCode: keyCode, flags: flags, tabInserts: tabInserts, cardShown: self.shown != nil) {
+            case .insert:
                 // Insert after the tap returns: the paste presses a menu item through Accessibility,
                 // which must never run inside the tap callback.
                 DispatchQueue.main.async { self.insert() }
                 return .consume
-            case (Self.escapeKeyCode, _):
+            case .dismiss:
                 DispatchQueue.main.async { self.dismiss() }
                 return .consume
-            default:
+            case .passAndWithdraw:
                 // Typing means the user writes their own reply.
                 DispatchQueue.main.async { self.withdraw() }
+                return .pass
+            case .pass:
                 return .pass
             }
         }
     }
 
     private func insert() {
+        // The focus snapshot can lag behind an app switch; the frontmost app is asked directly, so a
+        // paste never lands in an app other than the one the card was offered in.
         guard let shown, let input = focusModel.snapshot.context, input.identity == shown.identity,
+              AnswerCardKeyPolicy.mayInsert(
+                  cardBundleIdentifier: shown.bundleIdentifier, focusedBundleIdentifier: input.bundleIdentifier,
+                  frontmostBundleIdentifier: NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+              ),
               ReplyFieldEmptiness.isAwaitingBody(precedingText: input.precedingText, trailingText: input.trailingText) else {
             withdraw()
             return
         }
         // The user already greeted: paste the body, not a second salutation.
-        let hasSalutation = !input.precedingText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let text = hasSalutation ? ReplyFieldEmptiness.bodyAfterSalutation(shown.offer.draft) : shown.offer.draft
+        let text = AnswerCardKeyPolicy.insertionText(draft: shown.offer.draft, precedingText: input.precedingText)
         let key = shown.messageKey
         withdraw()
         dismissed.insert(key)  // Answered: never offered again.
+        // A paste, never a replace: in a mail reply the quoted original sits below the caret.
         if inserter.pasteAtCaret(text) {
             log("inserted", ["characters": "\(text.count)"])
         } else {
