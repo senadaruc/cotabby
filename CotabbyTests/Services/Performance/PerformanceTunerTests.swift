@@ -143,11 +143,13 @@ final class PerformanceTunerTests: XCTestCase {
         slow.msPerToken = 25
         let (tuner, settings) = makeTuner(mode: .balanced, gpuBusy: 10, profile: slow)
         settings.selectEngine(.llamaOpenSource)
+        // Pinned explicitly: the shipped default is now 4-7 words, which this speed already fits.
+        settings.selectWordCountPreset(.twelveToTwenty)
 
         let tuning = tuner.tuning(for: settings.snapshot)
 
-        // 25 ms/token fits about 10 words in 450 ms (6 on battery), both under the default
-        // 12-20 range, so the tuned range is the user's own minimum whatever the test Mac's power.
+        // 25 ms/token fits about 10 words in 450 ms (6 on battery), both under the 12-20 range,
+        // so the tuned range is the user's own minimum whatever the test Mac's power.
         let user = settings.snapshot.userWordRange
         XCTAssertEqual(tuning.wordRange, SuggestionWordRange.clamped(low: user.lowWords, high: user.lowWords))
         XCTAssertNotNil(tuning.targetLatencyMs)

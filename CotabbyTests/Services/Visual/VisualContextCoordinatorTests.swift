@@ -27,6 +27,10 @@ final class VisualContextCoordinatorTests: XCTestCase {
     /// prompt stays byte-identical (KV reuse) and no prediction is retired.
     func test_ocrJitterKeepsPromptTextAndDoesNotNotify() async throws {
         let generator = StubVisualContextGenerator()
+        // A realistic window: one misread letter barely changes its word statistics, so neither
+        // the navigation check nor the prompt-text check sees a different screen.
+        generator.text = "Inbox Arnaud Re: Deployment status 18:30 Thanks, I will finish the rollout today "
+            + "Akram Customer POC 18:28 The connector is polling again since this morning"
         let coordinator = makeCoordinator(generator)
         let snapshot = CotabbyTestFixtures.focusedInputSnapshot(precedingText: "Draft")
         coordinator.refreshContextProvider = { snapshot }
@@ -36,9 +40,9 @@ final class VisualContextCoordinatorTests: XCTestCase {
         defer { coordinator.cancel(resetState: true) }
         try await waitUntil { generator.contexts.count >= 1 && coordinator.status == .ready }
         let original = coordinator.latestExcerpt
-        generator.text = "Project agenda and deadlinc"
-        try await waitUntil { generator.contexts.count >= 2 }
-        try await waitUntil { generator.completedCount >= 2 }
+        let completedBefore = generator.completedCount
+        generator.text = generator.text.replacingOccurrences(of: "rollout", with: "rollcut")
+        try await waitUntil { generator.completedCount > completedBefore }
         XCTAssertEqual(notifications, 1)
         XCTAssertEqual(coordinator.latestExcerpt, original, "OCR noise must not replace the prompt's screen text")
         XCTAssertEqual(coordinator.status, .ready)
@@ -332,10 +336,14 @@ final class VisualContextCoordinatorTests: XCTestCase {
         defer { coordinator.cancel(resetState: true) }
         try await waitUntil { coordinator.status == .ready }
 
+        let original = coordinator.latestExcerpt
+        let completedBefore = generator.completedCount
         let reread = generator.text.replacingOccurrences(of: "18:28", with: "18.28") + " |"
         generator.text = reread
-        try await waitUntil { coordinator.latestExcerpt == reread }
+        try await waitUntil { generator.completedCount > completedBefore }
         XCTAssertEqual(notifications, 1, "A re-read of the same window must not retire the visible suggestion")
+        // The re-read also keeps the prompt's screen text byte-identical (KV prefix reuse).
+        XCTAssertEqual(coordinator.latestExcerpt, original)
     }
 
     private func makeCoordinator(

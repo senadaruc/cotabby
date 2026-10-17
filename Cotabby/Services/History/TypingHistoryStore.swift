@@ -451,9 +451,6 @@ final class TypingHistoryStore: ObservableObject, SuggestionHistoryProviding {
         return examples
     }
 
-    /// How far down the new ranking an example already in the prompt may fall and still be kept.
-    private static let stickyExampleRankLimit = 4
-
     /// How many examples a prompt shows, and how far down the ranking a shown one may fall and
     /// still be kept.
     private static let shownExampleCount = 2
