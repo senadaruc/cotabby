@@ -124,6 +124,11 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
         statusValue.modelName = modelURL.deletingPathExtension().lastPathComponent
         // Set before the engine is shared: the store calls it before it removes or replaces rows.
         store.willRemove = { [weak self] in self?.bumpDataGeneration() }
+        let migration = store.openingMigration
+        if !migration.rereadSources.isEmpty {
+            log("record ids are keyed now: \(migration.legacyRecords) stored messages keep their rows and are renamed "
+                + "as they are read again; reading \(migration.rereadSources.joined(separator: ", ")) again once")
+        }
     }
 
     deinit {
@@ -361,7 +366,8 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
         var dropped = 0
         for record in records {
             let people = Set((record.participants + [record.sender]).map(ParticipantNormalizer.normalize))
-            if excludedConversations.contains(record.conversationID) || !excludedPeople.isDisjoint(with: people)
+            if Self.isExcluded(conversationID: record.conversationID, by: excludedConversations)
+                || !excludedPeople.isDisjoint(with: people)
                 || (!MemorySourceCatalog.keepsAllDates(source) && (cutoff.map { record.timestamp < $0 } ?? false)) {
                 dropped += 1
                 continue
@@ -378,14 +384,21 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
             ))
         }
         var stored = 0
+        var adoptedLegacyRecords = 0
         // Short transactions, so a search never waits behind a whole sync.
         for start in stride(from: 0, to: kept.count, by: 200) {
             let result = try store.upsert(source: source, records: Array(kept[start..<min(start + 200, kept.count)]))
             stored += result.changed
-            index.remove(recordIDs: Set(result.replacedRecordIDs))
+            index.remove(recordIDs: Set(result.replacedRecordIDs + result.legacyRecordIDs))
+            // Rows renamed from a legacy record id keep their vectors: the index takes them under
+            // the new id (a renamed message that also changed has none left, and is indexed again).
+            if !result.adoptedRecordIDs.isEmpty {
+                index.upsert((try? store.vectors(model: modelIdentifier, recordIDs: result.adoptedRecordIDs)) ?? [])
+                adoptedLegacyRecords += result.adoptedRecordIDs.count
+            }
             // Replaced or moved messages: lines found before are stale (the store moved the
             // generation before writing, this is the second move).
-            if !result.replacedRecordIDs.isEmpty { bumpDataGeneration() }
+            if !result.replacedRecordIDs.isEmpty || !result.legacyRecordIDs.isEmpty { bumpDataGeneration() }
         }
         if let cursor { try store.setCursor(cursor, source: source) }
         if !completeConversations.isEmpty {
@@ -397,9 +410,21 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
                 bumpDataGeneration()
             }
         }
+        if adoptedLegacyRecords > 0 { log("\(source): \(adoptedLegacyRecords) messages moved to keyed record ids") }
         updateStatus { $0.databaseBytes = self.databaseBytes() }
         if stored > 0 { wakeIndexing() }
         return IngestResult(stored: stored, dropped: dropped)
+    }
+
+    /// Whether a never-remember entry covers this conversation. Also by the id an earlier build gave
+    /// it: a mail thread became one conversation per audience (`thread|people`), and a New Outlook
+    /// topic one per sender (`hx-topic:topic|sender`), so an entry saved as the whole thread or
+    /// topic keeps covering every conversation it was split into.
+    static func isExcluded(conversationID: String, by excluded: Set<String>) -> Bool {
+        guard !excluded.isEmpty else { return false }
+        if excluded.contains(conversationID) { return true }
+        guard let bar = conversationID.lastIndex(of: "|") else { return false }
+        return excluded.contains(String(conversationID[..<bar]))
     }
 
     private func retentionCutoff(_ configuration: MemoryConfiguration) -> Date? {

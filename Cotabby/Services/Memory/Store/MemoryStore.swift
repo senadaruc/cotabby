@@ -56,6 +56,12 @@ nonisolated final class MemoryStore: @unchecked Sendable {
     var willRemove: (@Sendable () -> Void)?
     /// Decrypted (conversation id, title) per (source, conv_key): small, and read on every search.
     private var conversationNames: [String: (id: String, title: String)] = [:]
+    /// Whether rows may still carry an unkeyed record id from earlier builds (`legacyRecordID`):
+    /// while they may, each upsert looks its record up under that id too and renames it in place.
+    private var mayHoldLegacyRecordIDs = false
+    /// What opening this store migrated, for the engine's log: the sources whose cursors were reset
+    /// for a one-time re-read, and how many rows had legacy record ids then.
+    private(set) var openingMigration = LegacyMigration(rereadSources: [], legacyRecords: 0)
 
     init(path: URL, vault: MemoryVault) throws {
         self.vault = vault
@@ -68,6 +74,7 @@ nonisolated final class MemoryStore: @unchecked Sendable {
         try database.execute(Self.schema)
         try checkKey()
         try switchToNativeEngineOnce()
+        try migrateLegacyRecordsOnce()
     }
 
     static let schema = """
@@ -195,6 +202,90 @@ nonisolated final class MemoryStore: @unchecked Sendable {
         "\(source):" + vault.tag("record\u{1f}\(source)\u{1f}\(sourceMessageID)")
     }
 
+    // MARK: - Legacy record ids
+
+    /// What `init` migrated (see `migrateLegacyRecordsOnce`).
+    struct LegacyMigration: Equatable, Sendable {
+        let rereadSources: [String]
+        let legacyRecords: Int
+    }
+
+    /// The sources read again once after the record ids became keyed. Their conversations changed
+    /// too: mail threads split by audience (`MailAudience`), New Outlook's by topic and sender,
+    /// WhatsApp groups gained their marker, Teams finds each profile's own user. A re-read moves
+    /// every message to where it now belongs. The cloud drives are left out: reading them again
+    /// downloads every online-only file, and their conversations (the files) did not change; their
+    /// rows are renamed whenever a file is read again.
+    static let legacyRereadSources = ["apple_mail", "outlook", "whatsapp", "teams", "calendar", "documents"]
+
+    /// A record id as earlier builds derived it: the first 20 hex digits of an unkeyed SHA-1 of the
+    /// source and its message id (`source:` + 20 digits; keyed ids have 32).
+    static func legacyRecordID(source: String, sourceMessageID: String) -> String {
+        let digest = Insecure.SHA1.hash(data: Data("\(source)\u{1f}\(sourceMessageID)".utf8))
+        return "\(source):" + digest.map { String(format: "%02x", $0) }.joined().prefix(20)
+    }
+
+    /// Once per store: when rows still carry legacy record ids, resets the cursors of
+    /// `legacyRereadSources` that have any, so their next sync reads them from the start. Nothing is
+    /// deleted: each re-read message is matched to its old row by `legacyRecordID` and renamed in
+    /// place (vectors and terms kept unless the message moved or changed), so no duplicate is made
+    /// and what a source no longer has (Teams' older months) stays.
+    private func migrateLegacyRecordsOnce() throws {
+        let legacy = try legacyRecordCounts()
+        mayHoldLegacyRecordIDs = !legacy.isEmpty
+        guard try database.rows("SELECT value FROM meta WHERE key = 'record_ids'").isEmpty else {
+            openingMigration = LegacyMigration(rereadSources: [], legacyRecords: legacy.values.reduce(0, +))
+            return
+        }
+        let reread = Self.legacyRereadSources.filter { legacy[$0] != nil }
+        try database.transaction {
+            for source in reread {
+                try database.run("DELETE FROM cursors WHERE source = ?", [.text(source)])
+            }
+            try database.run("INSERT INTO meta(key, value) VALUES ('record_ids', ?)", [.blob(Data("keyed-1".utf8))])
+        }
+        openingMigration = LegacyMigration(rereadSources: reread, legacyRecords: legacy.values.reduce(0, +))
+    }
+
+    /// Rows per source whose record id has the legacy shape.
+    private func legacyRecordCounts() throws -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for row in try database.rows(
+            "SELECT source, COUNT(*) AS n FROM messages WHERE length(record_id) = length(source) + 21 GROUP BY source"
+        ) {
+            if let source = row["source"]?.string, let count = row["n"]?.int, count > 0 { counts[source] = Int(count) }
+        }
+        return counts
+    }
+
+    /// Before `recordID` is looked up: when the message is stored under its legacy id, renames that
+    /// row (and its vectors, passages and terms) to `recordID`. When both exist, the legacy row is
+    /// a duplicate and goes. Returns what changed, for the in-memory index.
+    private func adoptLegacyRow(
+        source: String, sourceMessageID: String, as recordID: String
+    ) throws -> (adopted: Bool, legacyID: String?) {
+        let legacyID = Self.legacyRecordID(source: source, sourceMessageID: sourceMessageID)
+        guard legacyID != recordID,
+              !(try database.rows("SELECT 1 FROM messages WHERE record_id = ?", [.text(legacyID)])).isEmpty else {
+            return (false, nil)
+        }
+        willRemove?()
+        if !(try database.rows("SELECT 1 FROM messages WHERE record_id = ?", [.text(recordID)])).isEmpty {
+            try database.run("DELETE FROM messages WHERE record_id = ?", [.text(legacyID)])
+            try removeIndexEntries(recordIDs: [legacyID])
+            return (false, legacyID)
+        }
+        try database.run("UPDATE messages SET record_id = ? WHERE record_id = ?", [.text(recordID), .text(legacyID)])
+        // A passage id is the record id, then "#n" for every passage after the first.
+        try database.run(
+            "UPDATE vectors SET record_id = ?1, passage_id = ?1 || substr(passage_id, length(?2) + 1) WHERE record_id = ?2",
+            [.text(recordID), .text(legacyID)]
+        )
+        try database.run("UPDATE terms SET record_id = ? WHERE record_id = ?", [.text(recordID), .text(legacyID)])
+        try database.run("UPDATE term_documents SET record_id = ? WHERE record_id = ?", [.text(recordID), .text(legacyID)])
+        return (true, legacyID)
+    }
+
     // MARK: - Writing
 
     struct UpsertResult: Equatable, Sendable {
@@ -202,6 +293,10 @@ nonisolated final class MemoryStore: @unchecked Sendable {
         let changed: Int
         /// Messages that existed and changed: their vectors are gone and must leave the index too.
         let replacedRecordIDs: [String]
+        /// Legacy record ids renamed or dropped in this upsert: their passages leave the index.
+        var legacyRecordIDs: [String] = []
+        /// The ids those rows now have, whose stored vectors (if still current) join the index.
+        var adoptedRecordIDs: [String] = []
     }
 
     /// Inserts or replaces records (already scrubbed) and their conversations. A changed message
@@ -213,9 +308,16 @@ nonisolated final class MemoryStore: @unchecked Sendable {
         return try database.transaction {
             var changed = 0
             var replaced: [String] = []
+            var legacyIDs: [String] = []
+            var adopted: [String] = []
             var leftConversations = Set<String>()
             for record in records {
                 let recordID = self.recordID(source: source, sourceMessageID: record.sourceMessageID)
+                if mayHoldLegacyRecordIDs {
+                    let legacy = try adoptLegacyRow(source: source, sourceMessageID: record.sourceMessageID, as: recordID)
+                    if let legacyID = legacy.legacyID { legacyIDs.append(legacyID) }
+                    if legacy.adopted { adopted.append(recordID) }
+                }
                 let convKey = conversationKey(source: source, conversationID: record.conversationID)
                 // Unchanged messages are recognized by a tag of their content, since sealed bytes
                 // differ on every write (random nonce).
@@ -257,6 +359,8 @@ nonisolated final class MemoryStore: @unchecked Sendable {
                 }
                 try upsertConversation(source: source, record: record, conversationKey: convKey)
             }
+            // A legacy duplicate dropped above may have been its conversation's last message.
+            if adopted.count < legacyIDs.count { try deleteEmptyConversations() }
             // A conversation every message moved out of is gone: left behind it would still match
             // its title (making the title ambiguous) and its people.
             for key in leftConversations {
@@ -269,7 +373,7 @@ nonisolated final class MemoryStore: @unchecked Sendable {
                 }
                 conversationNames[source + "\u{1f}" + key] = nil
             }
-            return UpsertResult(changed: changed, replacedRecordIDs: replaced)
+            return UpsertResult(changed: changed, replacedRecordIDs: replaced, legacyRecordIDs: legacyIDs, adoptedRecordIDs: adopted)
         }
     }
 
@@ -608,14 +712,34 @@ nonisolated final class MemoryStore: @unchecked Sendable {
         defer { lock.unlock() }
         return try database.rows(
             "SELECT passage_id, record_id, source, conv_key, timestamp, vector FROM vectors WHERE model = ?", [.text(model)]
-        ).compactMap { row in
-            guard let passageID = row["passage_id"]?.string, let recordID = row["record_id"]?.string,
-                  let source = row["source"]?.string, let convKey = row["conv_key"]?.string,
-                  let sealed = row["vector"]?.data, let bytes = try? vault.openData(sealed) else { return nil }
-            let vector = bytes.withUnsafeBytes { Array($0.bindMemory(to: UInt16.self)) }
-            return StoredVector(passageID: passageID, recordID: recordID, source: source, conversationKey: convKey,
-                                timestamp: row["timestamp"]?.double ?? 0, vector: vector)
+        ).compactMap(storedVector)
+    }
+
+    private func storedVector(_ row: [String: MemoryDatabase.Value]) -> StoredVector? {
+        guard let passageID = row["passage_id"]?.string, let recordID = row["record_id"]?.string,
+              let source = row["source"]?.string, let convKey = row["conv_key"]?.string,
+              let sealed = row["vector"]?.data, let bytes = try? vault.openData(sealed) else { return nil }
+        let vector = bytes.withUnsafeBytes { Array($0.bindMemory(to: UInt16.self)) }
+        return StoredVector(passageID: passageID, recordID: recordID, source: source, conversationKey: convKey,
+                            timestamp: row["timestamp"]?.double ?? 0, vector: vector)
+    }
+
+    /// The vectors of the given messages made by `model`, for adding renamed rows to the index.
+    func vectors(model: String, recordIDs: [String]) throws -> [StoredVector] {
+        guard !recordIDs.isEmpty else { return [] }
+        lock.lock()
+        defer { lock.unlock() }
+        var found: [StoredVector] = []
+        for start in stride(from: 0, to: recordIDs.count, by: 500) {
+            let batch = Array(recordIDs[start..<min(start + 500, recordIDs.count)])
+            let placeholders = batch.map { _ in "?" }.joined(separator: ",")
+            found += try database.rows(
+                "SELECT passage_id, record_id, source, conv_key, timestamp, vector FROM vectors "
+                    + "WHERE model = ? AND record_id IN (\(placeholders))",
+                [.text(model)] + batch.map { .text($0) }
+            ).compactMap(storedVector)
         }
+        return found
     }
 
     func conversationName(source: String, conversationKey convKey: String) -> (id: String, title: String) {

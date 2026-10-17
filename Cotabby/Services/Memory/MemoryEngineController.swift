@@ -59,6 +59,17 @@ final class MemoryEngineController: ObservableObject {
     }
 
     nonisolated static let enabledDefaultsKey = "cotabbyMemoryEnabled"
+    /// The key the switch was saved under before the rename to `enabledDefaultsKey`.
+    nonisolated static let legacyEnabledDefaultsKey = "cotabbyMemoryServiceEnabled"
+
+    /// Carries the switch over from the key earlier builds saved it under, once: the new key wins
+    /// when both exist. The old key is left in place, so going back to an earlier build keeps the
+    /// user's choice too.
+    nonisolated static func migrateEnabledFlag(in userDefaults: UserDefaults) {
+        guard userDefaults.object(forKey: enabledDefaultsKey) == nil,
+              let legacy = userDefaults.object(forKey: legacyEnabledDefaultsKey) as? Bool else { return }
+        userDefaults.set(legacy, forKey: enabledDefaultsKey)
+    }
 
     /// Qwen3-Embedding-0.6B, quantized to 8 bits by Qwen (multilingual, 1024 dimensions). Pinned to a
     /// repository commit, and by
@@ -92,6 +103,7 @@ final class MemoryEngineController: ObservableObject {
         self.isGenerating = isGenerating
         self.makeEngine = makeEngine
         downloads = ModelDownloadManager(runtimeDirectoryURL: paths.modelsDirectory)
+        Self.migrateEnabledFlag(in: userDefaults)
         isEnabled = userDefaults.bool(forKey: Self.enabledDefaultsKey)
         // Start as soon as the model download finishes, if memory is on and waiting for it.
         downloads.$modelStates
