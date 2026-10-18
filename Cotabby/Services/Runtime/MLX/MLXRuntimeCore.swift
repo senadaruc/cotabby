@@ -56,6 +56,12 @@ nonisolated final class MLXRuntimeCore: @unchecked Sendable {
     /// live TextEdit run, every one of them after more than 1.1 s idle), the cost of bringing the
     /// weights back. llama.cpp's Metal backend keeps its weights resident the same way.
     private var wiredTicket: WiredMemoryTicket?
+    /// Pings MLX's queue while suggestions are recent, for pauses longer than wiring alone covers.
+    private let keepAlive = MLXResidencyKeepAlive.standard
+    private var keepAliveTimer: DispatchSourceTimer?
+    /// When the last prompt was decoded and the last ping sent, in seconds of system uptime.
+    private var lastWorkTime: TimeInterval?
+    private var lastPingTime: TimeInterval?
 
     // MARK: - Model lifecycle
 
@@ -88,6 +94,7 @@ nonisolated final class MLXRuntimeCore: @unchecked Sendable {
             leadingWhitespaceMask = nil
             resetCacheLocked()
         }
+        startKeepAlive()
     }
 
     func unload() {
@@ -97,6 +104,10 @@ nonisolated final class MLXRuntimeCore: @unchecked Sendable {
         }
         if let ticket { Task { _ = await ticket.end() } }
         workLock.withLock {
+            keepAliveTimer?.cancel()
+            keepAliveTimer = nil
+            lastWorkTime = nil
+            lastPingTime = nil
             context = nil
             cache = []
             cachedPrompt = []
@@ -110,6 +121,32 @@ nonisolated final class MLXRuntimeCore: @unchecked Sendable {
 
     func resetPromptCache() {
         workLock.withLock { resetCacheLocked() }
+    }
+
+    // MARK: - Residency keep-alive
+
+    /// Checks twice a second whether a ping is due, so pings land 1 to 1.5 s after the last job.
+    private func startKeepAlive() {
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        timer.schedule(deadline: .now() + 0.5, repeating: 0.5, leeway: .milliseconds(100))
+        timer.setEventHandler { [weak self] in self?.pingIfDue() }
+        let previous = workLock.withLock { () -> DispatchSourceTimer? in
+            defer { keepAliveTimer = timer }
+            return keepAliveTimer
+        }
+        previous?.cancel()
+        timer.resume()
+    }
+
+    /// Sends MLX a tiny GPU job when one is due. Skipped while a generation holds the lock: that
+    /// generation keeps the weights resident itself.
+    private func pingIfDue() {
+        guard workLock.try() else { return }
+        defer { workLock.unlock() }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard context != nil, keepAlive.shouldPing(now: now, lastWork: lastWorkTime, lastPing: lastPingTime) else { return }
+        MLX.eval(MLXArray(Int32(1)) + 1)
+        lastPingTime = now
     }
 
     // MARK: - Cancellation
@@ -142,6 +179,7 @@ nonisolated final class MLXRuntimeCore: @unchecked Sendable {
         defer { finish(operation) }
         try workLock.withLock {
             guard let context else { throw LlamaRuntimeError.unavailable("The MLX model is not loaded.") }
+            defer { lastWorkTime = ProcessInfo.processInfo.systemUptime }
             let tokens = try promptTokens(prompt, context: context)
             _ = try decodePromptLocked(tokens, model: context.model, operation: operation)
         }
@@ -159,6 +197,7 @@ nonisolated final class MLXRuntimeCore: @unchecked Sendable {
         defer { finish(operation) }
         return try workLock.withLock {
             guard let context else { throw LlamaRuntimeError.unavailable("The MLX model is not loaded.") }
+            defer { lastWorkTime = ProcessInfo.processInfo.systemUptime }
             let (tokens, replay) = try healedPrompt(prompt, options: options, context: context)
             guard let logits = try decodePromptLocked(tokens, model: context.model, operation: operation) else {
                 return LlamaGenerationOutput(text: "", averageLogprob: nil, suppressedByLowConfidence: false, stopReason: "cancelled")
@@ -384,11 +423,13 @@ nonisolated final class MLXRuntimeCore: @unchecked Sendable {
         return logits
     }
 
-    /// The size of the model's weight files, which the wired-memory ticket keeps resident.
-    private static func weightsBytes(in directory: URL) -> Int {
-        let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey])) ?? []
+    /// The size of the model's weight files, which the wired-memory ticket keeps resident. A Hugging
+    /// Face snapshot holds links into `blobs/`, so each file is sized at its target: sizing the links
+    /// wired a few bytes, and the weights then fell out of GPU residency after about a second idle.
+    static func weightsBytes(in directory: URL) -> Int {
+        let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
         return files.filter { $0.pathExtension == "safetensors" }.reduce(0) { total, file in
-            total + ((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+            total + ((try? file.resolvingSymlinksInPath().resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
         }
     }
 
