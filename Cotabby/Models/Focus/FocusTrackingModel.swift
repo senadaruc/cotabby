@@ -82,6 +82,11 @@ final class FocusTrackingModel: ObservableObject {
         tracker.refreshNow()
     }
 
+    /// A polling refresh that respects the focused app's read budget (see `FocusCaptureBudget`).
+    func refreshWithinCaptureBudget() {
+        tracker.refreshWithinCaptureBudget()
+    }
+
     /// Forwards a physical click so the tracker publishes a field that disappears right after it
     /// instead of holding it as a host redraw (see `FocusDropoutGrace`).
     func notePointerDown() {

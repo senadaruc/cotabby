@@ -496,7 +496,9 @@ extension SuggestionCoordinator {
             return
         }
 
-        focusModel.refreshNow()
+        // A slow host (WhatsApp: 30-98 ms a read) is not read back to back; the poll then sees the
+        // previous snapshot and simply tries again at its next step.
+        focusModel.refreshWithinCaptureBudget()
         guard pollGeneration == hostPublishPollGeneration else {
             return
         }

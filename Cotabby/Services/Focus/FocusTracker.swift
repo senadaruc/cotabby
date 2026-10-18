@@ -51,6 +51,8 @@ final class FocusTracker {
     // even with no focus change and the user's hands off the keyboard. The transitions live in the
     // pure `FocusPollBackoff` so they can be unit-tested without a live timer.
     private var backoff = FocusPollBackoff()
+    /// Spaces polling reads by the focused app's measured read cost (see `FocusCaptureBudget`).
+    private var captureBudget = FocusCaptureBudget()
 
     // Keeps a live field published through a host's brief "no focused field" read (WhatsApp,
     // Safari, and Teams redraw their composer while typing). See `FocusDropoutGrace`.
@@ -186,6 +188,20 @@ final class FocusTracker {
         rescheduleTimerIfIntervalChanged()
     }
 
+    /// A refresh for callers that poll: skipped while the focused app's read budget says the last
+    /// read was too recent, so a slow host is not read back to back. The snapshot stays as it was.
+    func refreshWithinCaptureBudget() {
+        guard captureBudgetAllowsRead() else { return }
+        refreshNow()
+    }
+
+    private func captureBudgetAllowsRead() -> Bool {
+        captureBudget.allowsCapture(
+            processIdentifier: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+            atMs: Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000
+        )
+    }
+
     /// Records a physical click so a field that disappears right after it is published at once
     /// instead of being held as a redraw: clicking is how a user leaves a composer in the same app.
     func notePointerDown() {
@@ -206,6 +222,7 @@ final class FocusTracker {
     /// is re-armed to a longer interval, so an idle machine stops waking ~12.5x/second only to skip
     /// the walk it would not run anyway. That wasteful wake was the dominant idle cost in #280.
     private func handleTimerTick() {
+        guard captureBudgetAllowsRead() else { return }
         backoff.recordCapture(didChange: performCaptureAndPublish())
         rescheduleTimerIfIntervalChanged()
     }
@@ -232,8 +249,15 @@ final class FocusTracker {
     @discardableResult
     private func performCaptureAndPublish() -> Bool {
         pollSequence += 1
+        let startedNanoseconds = DispatchTime.now().uptimeNanoseconds
         let capture = captureSnapshot()
-        lastCaptureUptimeNanoseconds = DispatchTime.now().uptimeNanoseconds
+        let endedNanoseconds = DispatchTime.now().uptimeNanoseconds
+        lastCaptureUptimeNanoseconds = endedNanoseconds
+        captureBudget.record(
+            processIdentifier: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+            costMs: Double(endedNanoseconds &- startedNanoseconds) / 1_000_000,
+            endedAtMs: Double(endedNanoseconds) / 1_000_000
+        )
 
         var didChangeFocusedInput = capture.didChangeFocusedInput
         if capture.foundNoField {

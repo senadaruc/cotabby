@@ -558,6 +558,14 @@ extension SuggestionCoordinator {
         applyStreamedPartial(pending.result, workID: pending.workID)
     }
 
+    /// A partial arrives every decoded token; on a slow host a read per partial would take most of
+    /// the host's main thread, so these reads respect its read budget (`FocusCaptureBudget`).
+    private func refreshFocusForStreamedPartial() {
+        if (focusModel.millisecondsSinceLastCapture ?? .max) > Self.freshSnapshotReuseWindowMilliseconds {
+            focusModel.refreshWithinCaptureBudget()
+        }
+    }
+
     /// Renders one streamed partial as a real, acceptable session.
     ///
     /// A real session rather than a cosmetic overlay because acceptance gates on the live session
@@ -569,7 +577,7 @@ extension SuggestionCoordinator {
         guard workController.isCurrent(workID), !suggestionStreamingState.isFinalized else {
             return
         }
-        focusModel.refreshIfStale(maxAgeMilliseconds: Self.freshSnapshotReuseWindowMilliseconds)
+        refreshFocusForStreamedPartial()
         guard workController.isCurrent(workID) else { return }
         guard let rawContext = focusModel.snapshot.context else {
             return

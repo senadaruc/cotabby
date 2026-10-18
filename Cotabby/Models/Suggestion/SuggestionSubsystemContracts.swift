@@ -40,6 +40,10 @@ protocol SuggestionFocusProviding: AnyObject {
 
     func refreshNow()
 
+    /// A refresh for callers that poll (the host-publish wait, streamed partials). Production skips
+    /// it while the last read of a slow host is too recent; the default simply refreshes.
+    func refreshWithinCaptureBudget()
+
     /// Hint that Cotabby just mutated the focused field itself (synthetic insert or replace), so
     /// provider-side caches built from pre-mutation reads must not serve the next capture.
     /// Providers without such caches use the default no-op.
@@ -53,6 +57,11 @@ extension SuggestionFocusProviding {
 
     /// Default: nothing cached, nothing to invalidate.
     func invalidateTransientCaretCaches() {}
+
+    /// Default: no read budget, so a polling refresh is an ordinary refresh.
+    func refreshWithinCaptureBudget() {
+        refreshNow()
+    }
 
     /// Refreshes only when the last capture is older than `maxAgeMilliseconds`. The suggestion
     /// pipeline performs several captures per keystroke (host-publish poll, post-debounce check,
