@@ -8,14 +8,14 @@ final class MenuResourceMonitorTests: XCTestCase {
     @MainActor private static var retained: [MenuResourceMonitor] = []
 
     @MainActor
-    private func makeMonitor(mlx: Bool = false, stops: StopCounter = StopCounter()) -> (MenuResourceMonitor, StopCounter) {
+    private func makeMonitor(stops: StopCounter = StopCounter()) -> (MenuResourceMonitor, StopCounter) {
         var calls = 0
         let monitor = MenuResourceMonitor(
             interval: 3600,
             sample: {
                 calls += 1
                 return ResourceUsageSummary(
-                    cpuPercent: Double(calls), memoryBytes: 1, gpuPercent: nil, includesMLXServer: mlx)
+                    cpuPercent: Double(calls), memoryBytes: 1, gpuPercent: nil)
             },
             primingDelay: 3600,
             onStop: { stops.count += 1 }
@@ -58,13 +58,6 @@ final class MenuResourceMonitorTests: XCTestCase {
         monitor.stop()
         XCTAssertEqual(stops.count, 1, "stop is idempotent")
         XCTAssertNil(monitor.summary)
-    }
-
-    @MainActor
-    func testMLXFlagPassesThrough() {
-        let (monitor, _) = makeMonitor(mlx: true)
-        monitor.tick()
-        XCTAssertEqual(monitor.summary?.includesMLXServer, true)
     }
 }
 

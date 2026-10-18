@@ -5,18 +5,14 @@ import XCTest
 /// shared CPU baseline.
 final class ResourceUsageSummaryTests: XCTestCase {
     private func summary(
-        cpu: Double = 34.2, bytes: UInt64 = 2_684_354_560, gpu: Double? = 12.4, mlx: Bool = false
+        cpu: Double = 34.2, bytes: UInt64 = 2_684_354_560, gpu: Double? = 12.4
     ) -> ResourceUsageSummary {
-        ResourceUsageSummary(cpuPercent: cpu, memoryBytes: bytes, gpuPercent: gpu, includesMLXServer: mlx)
+        ResourceUsageSummary(cpuPercent: cpu, memoryBytes: bytes, gpuPercent: gpu)
     }
 
     func testFullLine() {
         XCTAssertEqual(
             ResourceUsageSummary.menuLine(summary()), "Cotabby uses  CPU 34% · RAM 2.5 GB · GPU 12%")
-    }
-
-    func testMLXSuffix() {
-        XCTAssertTrue(ResourceUsageSummary.menuLine(summary(mlx: true)).hasSuffix("GPU 12% incl. MLX"))
     }
 
     func testUnknownGPUShowsDash() {

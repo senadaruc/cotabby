@@ -68,23 +68,16 @@ final class MLXModelCatalogTests: XCTestCase {
 }
 
 final class MLXStateTests: XCTestCase {
-    func test_serverProblemOnlyWhenTheUserMustAct() {
-        XCTAssertNil(MLXServerState.idle.problem)
-        XCTAssertNil(MLXServerState.starting(modelID: "a/b").problem)
-        XCTAssertNil(MLXServerState.ready(port: 1, modelID: "a/b").problem)
-        XCTAssertNotNil(MLXServerState.unavailable(.notInstalled).problem)
-        XCTAssertNotNil(MLXServerState.failed(reason: "boom", logTail: []).problem)
+    func test_runtimeProblemOnlyWhenTheUserMustAct() {
+        XCTAssertNil(MLXRuntimeState.idle.problem)
+        XCTAssertNil(MLXRuntimeState.loading(modelID: "a/b").problem)
+        XCTAssertNil(MLXRuntimeState.ready(modelID: "a/b").problem)
+        XCTAssertNotNil(MLXRuntimeState.unavailable(.noModel).problem)
+        XCTAssertNotNil(MLXRuntimeState.failed(reason: "boom").problem)
     }
 
     func test_notReadyMessageNamesTheReason() {
-        XCTAssertEqual(MLXServerState.starting(modelID: "a/b").notReadyMessage, "MLX is loading a/b…")
-        XCTAssertEqual(MLXServerState.unavailable(.noModel).notReadyMessage, "Choose an MLX model in Settings → Engine & Model.")
-    }
-
-    func test_pathsLiveUnderTheAppsSupportFolder() {
-        let paths = MLXPaths(root: URL(fileURLWithPath: "/S/Cotabby Dev/MLX"))
-        XCTAssertEqual(paths.ownServerExecutable.path, "/S/Cotabby Dev/MLX/bin/mlx_lm.server")
-        XCTAssertEqual(paths.uvExecutable.path, "/S/Cotabby Dev/MLX/uv/uv-aarch64-apple-darwin/uv")
-        XCTAssertEqual(paths.serverPIDFile.path, "/S/Cotabby Dev/MLX/server.pid")
+        XCTAssertEqual(MLXRuntimeState.loading(modelID: "a/b").notReadyMessage, "MLX is loading a/b…")
+        XCTAssertEqual(MLXRuntimeState.unavailable(.noModel).notReadyMessage, "Choose an MLX model in Settings → Engine & Model.")
     }
 }

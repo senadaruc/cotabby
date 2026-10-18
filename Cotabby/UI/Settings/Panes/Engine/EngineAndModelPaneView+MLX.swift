@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// MLX sections of the unified engine pane: the mlx-lm install, the model list (curated, cached
-/// and custom), and the prompt-cache cap. The pane presents state and forwards actions. Installing,
-/// running and downloading live in `MLXToolchainProvisioner`, `MLXRuntimeManager` and
-/// `MLXModelDownloader`, which `CotabbyAppEnvironment` owns.
+/// MLX sections of the unified engine pane: the runtime's state, the model list (curated, cached
+/// and custom), and the prompt-cache cap. The pane presents state and forwards actions. Running and
+/// downloading live in `MLXRuntimeManager` and `MLXModelDownloader`, which `CotabbyAppEnvironment`
+/// owns. MLX is built into Cotabby, so there is nothing to install.
 extension EngineAndModelPaneView {
     @ViewBuilder
     var mlxSections: some View {
@@ -17,87 +17,29 @@ extension EngineAndModelPaneView {
     private var mlxRuntimeSection: some View {
         Section("MLX") {
             LabeledContent {
-                mlxRuntimeControls
+                if case .failed = mlxRuntime.state {
+                    Button("Retry") {
+                        Task {
+                            await mlxModelDownloader.refreshCache()
+                            mlxRuntime.retry()
+                        }
+                    }
+                } else if case .loading = mlxRuntime.state {
+                    ProgressView().controlSize(.small)
+                }
             } label: {
                 SettingsRowLabel(title: "MLX", description: mlxRuntimeDescription, systemImage: "bolt.fill")
             }
             .settingsItem(.mlxRuntime)
-
-            if let tail = mlxVisibleLogTail, !tail.isEmpty {
-                Text(tail.joined(separator: "\n"))
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .lineLimit(20)
-            }
-        }
-        .alert("Remove MLX?", isPresented: $showsMLXRemoveConfirmation) {
-            Button("Remove", role: .destructive) {
-                Task {
-                    mlxIsBusy = true
-                    defer { mlxIsBusy = false }
-                    await mlxToolchainProvisioner.remove()
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Deletes Cotabby's copy of mlx-lm and its Python. Downloaded models stay in the Hugging Face cache.")
         }
     }
 
     private var mlxRuntimeDescription: String {
-        switch mlxToolchainProvisioner.state {
-        case .checking:
-            return "Checking for MLX…"
-        case .notInstalled:
-            return "Cotabby installs Apple's mlx-lm and runs it on this Mac (about 250 MB, plus a model)."
-        case .tooOld(let version, let path):
-            return "Found mlx-lm \(version) at \(path). Cotabby needs \(MLXToolchainRules.minimumVersion) or newer; Install adds Cotabby's own copy."
-        case .installing(let phase):
-            return phase.label
-        case .ready(let toolchain):
-            let owner = toolchain.isCotabbyInstall ? "Cotabby's" : "Your"
-            return "\(owner) mlx-lm \(toolchain.version). \(mlxRuntime.state.summary)"
-        case .failed(let reason, _):
-            return reason
+        guard MLXHardware.isAppleSilicon else { return MLXUnavailableReason.unsupportedHardware.message }
+        if case .idle = mlxRuntime.state {
+            return "Built into Cotabby. Runs the model below on this Mac's GPU."
         }
-    }
-
-    @ViewBuilder
-    private var mlxRuntimeControls: some View {
-        switch mlxToolchainProvisioner.state {
-        case .checking:
-            ProgressView().controlSize(.small)
-        case .notInstalled, .tooOld, .failed:
-            Button("Install MLX") { mlxToolchainProvisioner.install() }
-                .buttonStyle(.borderedProminent)
-        case .installing:
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
-                Button("Cancel") { mlxToolchainProvisioner.cancelInstall() }
-            }
-        case .ready(let toolchain):
-            HStack(spacing: 8) {
-                if case .failed = mlxRuntime.state {
-                    Button("Retry") {
-                        Task {
-                            await mlxToolchainProvisioner.rescan(models: mlxModelDownloader)
-                            mlxRuntime.retry()
-                        }
-                    }
-                }
-                if toolchain.isCotabbyInstall {
-                    Button("Remove MLX…", role: .destructive) { showsMLXRemoveConfirmation = true }
-                        .disabled(mlxIsBusy)
-                }
-            }
-        }
-    }
-
-    /// The install's failure tail (the in-process runtime reports its failure in the description).
-    private var mlxVisibleLogTail: [String]? {
-        if case .failed(_, let tail) = mlxToolchainProvisioner.state { return tail }
-        return nil
+        return mlxRuntime.state.summary
     }
 
     // MARK: - Models
@@ -183,7 +125,6 @@ extension EngineAndModelPaneView {
         } else {
             Button("Download") { startMLXDownload(option.repoID) }
                 .disabled(!canStartMLXDownload)
-                .help(mlxToolchainProvisioner.state.toolchain == nil ? "Install MLX first." : "")
         }
     }
 
@@ -259,20 +200,18 @@ extension EngineAndModelPaneView {
     // MARK: - Actions
 
     private var canStartMLXDownload: Bool {
-        mlxToolchainProvisioner.state.toolchain != nil && mlxModelDownloader.download?.isActive != true
-            && !mlxIsBusy
+        MLXHardware.isAppleSilicon && mlxModelDownloader.download?.isActive != true && !mlxIsBusy
     }
 
     func startMLXDownload(_ repoID: MLXRepoID) {
-        guard let toolchain = mlxToolchainProvisioner.state.toolchain else { return }
-        mlxModelDownloader.startDownload(repoID, toolchain: toolchain)
+        mlxModelDownloader.startDownload(repoID)
     }
 
     func checkMLXCustomRepo() {
         let draft = mlxCustomRepoDraft
         mlxIsCheckingCustomRepo = true
         Task {
-            let result = await mlxModelDownloader.validateCustomRepo(draft, toolchain: mlxToolchainProvisioner.state.toolchain)
+            let result = await mlxModelDownloader.validateCustomRepo(draft)
             mlxIsCheckingCustomRepo = false
             // The field may have changed while the check ran; a stale answer would mislabel it.
             guard draft == mlxCustomRepoDraft else { return }
@@ -280,15 +219,15 @@ extension EngineAndModelPaneView {
         }
     }
 
-    /// Deletes the model from the cache and does not stop the server itself. The pipeline in
-    /// `CotabbyAppEnvironment` stops it when the cache rescan publishes without the model, which
-    /// keeps stops on the serialized, de-duplicated desire path. A running server keeps its
-    /// memory-mapped weights valid after the files are unlinked, so deleting first is safe.
+    /// Deletes the model from the cache and does not unload it itself. The pipeline in
+    /// `CotabbyAppEnvironment` unloads it when the cache rescan publishes without the model, which
+    /// keeps that on the de-duplicated desire path. The loaded weights stay valid after the files
+    /// are unlinked, so deleting first is safe.
     func deleteMLXModel(_ option: MLXModelOption) {
         Task {
             mlxIsBusy = true
             defer { mlxIsBusy = false }
-            await mlxModelDownloader.delete(option.repoID, toolchain: mlxToolchainProvisioner.state.toolchain)
+            await mlxModelDownloader.delete(option.repoID)
         }
     }
 }

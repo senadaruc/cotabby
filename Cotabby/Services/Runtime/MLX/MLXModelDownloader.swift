@@ -8,9 +8,10 @@ import Logging
 /// - one download at a time, with byte progress and cancel;
 /// - checking a custom repo id before downloading it;
 /// - deleting a model.
-/// Downloads run the toolchain's own Python with `huggingface_hub.snapshot_download`, so files
-/// land exactly where `mlx_lm.server` looks and a cancelled download resumes next time. Owned by
-/// `CotabbyAppEnvironment`; the Settings pane observes it.
+/// Downloads run in Swift (`MLXSnapshotDownloader`) into the huggingface_hub cache layout, so a
+/// model downloaded by Python tools is reused and a cancelled download resumes next time. Which
+/// architectures count as usable is asked of mlx-swift-lm's model registry, the code that will
+/// load the model. Owned by `CotabbyAppEnvironment`; the Settings pane observes it.
 
 /// The answer to "can Cotabby download this custom repo?", shown under the Settings text field.
 /// A value type because the pane only renders it; it owns no state and no network access.
@@ -36,18 +37,19 @@ nonisolated enum MLXRepoValidation: Equatable, Sendable {
 }
 
 /// The download and cache manager behind the MLX model list. It is `@MainActor` because the
-/// Settings pane observes its published state; the heavy work (directory scans, the Python
-/// download itself) runs off the main actor and only the resulting values are published back.
-/// Its collaborators are injected closures, so tests replace the network and the process with fakes.
+/// Settings pane observes its published state; the heavy work (directory scans, the download
+/// itself) runs off the main actor and only the resulting values are published back.
+/// Its collaborators are injected closures, so tests replace the network with fakes.
 @MainActor
 final class MLXModelDownloader: ObservableObject {
-    typealias RepoFilesFetch = (String) async throws -> [HFRepoFile]
+    typealias SnapshotFetch = (String) async throws -> MLXRemoteSnapshot
     typealias GatedFetch = (String) async throws -> Bool
     /// Downloads one small file (`config.json`) of a remote repo: repo id, then file path.
     typealias ConfigFetch = (String) async throws -> Data
-    typealias RunProcess = (URL, [String], [String: String], Duration) async throws -> MLXProcessResult
+    /// Whether the bundled mlx-swift-lm can build a model of this `model_type`.
+    typealias ModelTypeSupport = @Sendable (String) async -> Bool
     /// The cache scan, injectable so a test can hold one scan after it has read the disk.
-    typealias CacheScan = @Sendable (URL, Set<String>?) async -> MLXCacheScanResult
+    typealias CacheScan = @Sendable (URL) async -> MLXCacheScanResult
 
     /// Nil until the first scan finishes, so the server wiring waits instead of reporting the
     /// selected model as missing during launch.
@@ -59,14 +61,13 @@ final class MLXModelDownloader: ObservableObject {
 
     private let cacheRoot: URL
     private let fileManager: FileManager
-    private let fetchRepoFiles: RepoFilesFetch
+    private let fetchSnapshot: SnapshotFetch
     private let fetchIsGated: GatedFetch
     private let fetchConfig: ConfigFetch
-    private let runProcess: RunProcess
+    private let transfer: MLXSnapshotDownloader.Transfer
+    private let isSupportedModelType: ModelTypeSupport
     private let pollInterval: Duration
     private let scanCache: CacheScan
-    /// The architectures the installed mlx-lm supports, cached per Python (asked once, ~1 s).
-    private var supportedTypes: (python: URL, types: Set<String>?)?
     private var downloadTask: Task<Void, Never>?
     /// Bumped by every `refreshCache`. Scans run off the main actor, so two can overlap; a scan
     /// that started before a delete could finish last and publish the deleted model again. Only
@@ -76,26 +77,27 @@ final class MLXModelDownloader: ObservableObject {
     init(
         cacheRoot: URL,
         fileManager: FileManager = .default,
-        fetchRepoFiles: @escaping RepoFilesFetch = { try await HuggingFaceAPIClient.fetchRepoFiles(repoId: $0) },
+        fetchSnapshot: @escaping SnapshotFetch = { try await HuggingFaceAPIClient.fetchSnapshot(repoId: $0) },
         fetchIsGated: @escaping GatedFetch = { try await HuggingFaceAPIClient.isGated(repoId: $0) },
         fetchConfig: @escaping ConfigFetch = {
             try await HuggingFaceAPIClient.fetchFileData(repoId: $0, path: "config.json")
         },
-        runProcess: @escaping RunProcess = { executable, arguments, environment, timeout in
-            try await MLXProcessRunner.run(
-                executable: executable, arguments: arguments, environment: environment, timeout: timeout)
+        transfer: @escaping MLXSnapshotDownloader.Transfer = { remote, local, offset in
+            try await MLXHTTPFileTransfer.transfer(remote: remote, local: local, offset: offset)
         },
+        isSupportedModelType: @escaping ModelTypeSupport = { await MLXRuntimeCore.supportsModelType($0) },
         pollInterval: Duration = .milliseconds(500),
-        scanCache: @escaping CacheScan = { root, types in
-            MLXCacheScanner.scanDetailed(cacheRoot: root, supportedModelTypes: types)
+        scanCache: @escaping CacheScan = { root in
+            MLXCacheScanner.scanDetailed(cacheRoot: root, supportedModelTypes: nil)
         }
     ) {
         self.cacheRoot = cacheRoot
         self.fileManager = fileManager
-        self.fetchRepoFiles = fetchRepoFiles
+        self.fetchSnapshot = fetchSnapshot
         self.fetchIsGated = fetchIsGated
         self.fetchConfig = fetchConfig
-        self.runProcess = runProcess
+        self.transfer = transfer
+        self.isSupportedModelType = isSupportedModelType
         self.pollInterval = pollInterval
         self.scanCache = scanCache
     }
@@ -107,30 +109,39 @@ final class MLXModelDownloader: ObservableObject {
         ))
     }
 
-    func refreshCache(toolchain: MLXToolchain?) async {
+    func refreshCache() async {
         refreshGeneration &+= 1
         let generation = refreshGeneration
-        let types = await supportedModelTypes(for: toolchain)
         let root = cacheRoot
         let scan = scanCache
         let result = await Task.detached(priority: .utility) {
-            await scan(root, types)
+            await scan(root)
         }.value
+        // The scan checks files and config; the architecture check asks the runtime's registry.
+        var models: [MLXCachedModel] = []
+        var rejected = result.rejected
+        for model in result.models {
+            if await isSupportedModelType(model.modelType) {
+                models.append(model)
+            } else {
+                rejected[model.repoID] = .unsupportedArchitecture(model.modelType)
+            }
+        }
         // A newer refresh started while this one was suspended, so its answer is the current one.
         // Publishing this older scan could bring back a model that was just deleted.
         guard generation == refreshGeneration else { return }
-        cachedModels = result.models
-        rejectedModels = result.rejected
+        cachedModels = models
+        rejectedModels = rejected
     }
 
     /// Checks a custom repo before any download, with the same `MLXModelCompatibility` rule the
     /// cache scan uses, so "accepted here" and "listed after download" cannot disagree. The repo's
     /// `config.json` (a few KB) is fetched for the architecture and head checks; a 404 there means
     /// the repo has no config at all.
-    func validateCustomRepo(_ raw: String, toolchain: MLXToolchain?) async -> MLXRepoValidation {
+    func validateCustomRepo(_ raw: String) async -> MLXRepoValidation {
         guard let repoID = MLXRepoID(raw) else { return .invalidID }
         do {
-            let files = try await fetchRepoFiles(repoID.value)
+            let files = try await fetchSnapshot(repoID.value).files
             if try await fetchIsGated(repoID.value) { return .gated(repoID) }
             var config: [String: Any]?
             if files.contains(where: { $0.path == "config.json" }) {
@@ -141,7 +152,10 @@ final class MLXModelDownloader: ObservableObject {
                     return .incompatible(repoID, .missingConfig)
                 }
             }
-            let types = await supportedModelTypes(for: toolchain)
+            var types: Set<String> = []
+            if let modelType = config?["model_type"] as? String, await isSupportedModelType(modelType) {
+                types.insert(modelType)
+            }
             switch MLXModelCompatibility.verdict(
                 repoName: repoID.name, fileNames: files.map(\.path), config: config, supportedModelTypes: types
             ) {
@@ -158,23 +172,23 @@ final class MLXModelDownloader: ObservableObject {
     }
 
     /// Starts one download; ignored while another runs.
-    func startDownload(_ repoID: MLXRepoID, toolchain: MLXToolchain) {
+    func startDownload(_ repoID: MLXRepoID) {
         guard downloadTask == nil else { return }
         download = MLXDownloadState(repoID: repoID, fraction: nil, failure: nil, isActive: true)
         CotabbyLogger.runtime.info("MLX model download started", metadata: ["model": .string(repoID.value)])
         downloadTask = Task { [weak self] in
-            await self?.runDownload(repoID, toolchain: toolchain)
+            await self?.runDownload(repoID)
         }
     }
 
-    /// Terminates the download process. huggingface_hub resumes the partial files next time.
+    /// Stops the download; the partial file resumes next time.
     func cancelDownload() {
         downloadTask?.cancel()
     }
 
     /// Removes the repo from the shared cache, then rescans (the server wiring reacts if it was
     /// the selected model).
-    func delete(_ repoID: MLXRepoID, toolchain: MLXToolchain?) async {
+    func delete(_ repoID: MLXRepoID) async {
         // A download still writing into this folder would bring the model back, so stop it and wait
         // until it has really finished before removing anything.
         if download?.repoID == repoID, download?.isActive == true {
@@ -201,57 +215,57 @@ final class MLXModelDownloader: ObservableObject {
         } else {
             CotabbyLogger.runtime.info("Deleted MLX model", metadata: ["model": .string(repoID.value)])
         }
-        await refreshCache(toolchain: toolchain)
+        await refreshCache()
     }
 
     // MARK: - Private
 
-    private func runDownload(_ repoID: MLXRepoID, toolchain: MLXToolchain) async {
-        let total = (try? await fetchRepoFiles(repoID.value))?.reduce(Int64(0)) { $0 + $1.size } ?? 0
+    private func runDownload(_ repoID: MLXRepoID) async {
         let root = cacheRoot
-        let poller = Task { [weak self] in
-            while !Task.isCancelled {
-                let bytes = await Task.detached(priority: .utility) {
-                    MLXCacheScanner.downloadedBytes(repo: repoID, cacheRoot: root)
-                }.value
-                guard let self, self.download?.repoID == repoID, self.download?.isActive == true else { return }
-                self.download?.fraction = MLXCacheScanner.progress(downloadedBytes: bytes, totalBytes: total)
-                try? await Task.sleep(for: self.pollInterval)
-            }
-        }
-
-        let outcome: Result<MLXProcessResult, Error>
+        let transfer = self.transfer
+        let outcome: Result<Void, Error>
         do {
-            outcome = .success(try await runProcess(
-                toolchain.pythonExecutable,
-                ["-I", "-c", MLXToolchainRules.downloadScript, repoID.value],
-                MLXToolchainRules.downloadEnvironment(base: ProcessInfo.processInfo.environment),
-                .seconds(6 * 60 * 60)
-            ))
+            let snapshot = try await fetchSnapshot(repoID.value)
+            let total = snapshot.totalBytes
+            let poller = Task { [weak self] in
+                while !Task.isCancelled {
+                    let bytes = await Task.detached(priority: .utility) {
+                        MLXCacheScanner.downloadedBytes(repo: repoID, cacheRoot: root)
+                    }.value
+                    guard let self, self.download?.repoID == repoID, self.download?.isActive == true else { return }
+                    self.download?.fraction = MLXCacheScanner.progress(downloadedBytes: bytes, totalBytes: total)
+                    try? await Task.sleep(for: self.pollInterval)
+                }
+            }
+            defer { poller.cancel() }
+            // Detached work does not inherit cancellation, so forward this task's cancel to it.
+            let work = Task.detached(priority: .utility) {
+                try await MLXSnapshotDownloader.download(snapshot, repo: repoID, cacheRoot: root, transfer: transfer)
+            }
+            try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
+            outcome = .success(())
         } catch {
             outcome = .failure(error)
         }
-        poller.cancel()
 
         switch outcome {
-        case .success(let result) where result.status == 0:
+        case .success:
             // Cleared after the rescan below, once we know the model is actually usable.
             CotabbyLogger.runtime.info("MLX model downloaded", metadata: ["model": .string(repoID.value)])
-        case .success(let result):
-            download = MLXDownloadState(
-                repoID: repoID, fraction: download?.fraction,
-                failure: result.stderrTail.last ?? "The download failed.", isActive: false)
-        case .failure(let error) where error is CancellationError:
+        case .failure(let error) where error is CancellationError || Task.isCancelled:
             download = nil
         case .failure(let error):
+            CotabbyLogger.runtime.error(
+                "MLX model download failed",
+                metadata: ["model": .string(repoID.value), "error": .string(error.localizedDescription)])
             download = MLXDownloadState(
                 repoID: repoID, fraction: download?.fraction, failure: error.localizedDescription, isActive: false)
         }
         downloadTask = nil
-        await refreshCache(toolchain: toolchain)
-        // A finished download that the rescan does not list is one the installed mlx-lm cannot run
-        // (its architecture is unsupported); clearing the card silently would look like a no-op.
-        if case .success(let result) = outcome, result.status == 0, download?.repoID == repoID {
+        await refreshCache()
+        // A finished download that the rescan does not list is one this runtime cannot load (its
+        // architecture is unsupported); clearing the card silently would look like a no-op.
+        if case .success = outcome, download?.repoID == repoID {
             if cachedModels?.contains(where: { $0.repoID == repoID }) == true {
                 download = nil
             } else {
@@ -264,29 +278,5 @@ final class MLXModelDownloader: ObservableObject {
                     isActive: false)
             }
         }
-    }
-
-    /// The architectures the installed mlx-lm supports, nil without a toolchain or when the probe
-    /// failed. Cached per Python so the ~1 s probe runs once.
-    private func supportedModelTypes(for toolchain: MLXToolchain?) async -> Set<String>? {
-        guard let toolchain else { return nil }
-        if let cached = supportedTypes, cached.python == toolchain.pythonExecutable { return cached.types }
-        let types = await loadSupportedTypes(python: toolchain.pythonExecutable)
-        // Cache only a real answer: a probe that failed or was cancelled must be retried
-        // next time, not remembered as "unknown" (which turns the type filter off).
-        if types != nil { supportedTypes = (toolchain.pythonExecutable, types) }
-        return types
-    }
-
-    private func loadSupportedTypes(python: URL) async -> Set<String>? {
-        guard let result = try? await runProcess(
-            python,
-            ["-I", "-c", MLXToolchainRules.supportedModelTypesScript],
-            MLXToolchainRules.sanitizedEnvironment(ProcessInfo.processInfo.environment),
-            .seconds(30)
-        ), result.status == 0,
-        let names = try? JSONDecoder().decode([String].self, from: Data(result.stdout.utf8))
-        else { return nil }
-        return Set(names)
     }
 }

@@ -209,9 +209,9 @@ struct SuggestionSettingsStore {
     private static let batteryMLXModelDefaultsKey = "cotabbyBatteryMLXModel"
     private static let pluggedInMLXModelDefaultsKey = "cotabbyPluggedInMLXModel"
 
-    /// 1 GiB holds the two prompt caches mlx_lm.server keeps for Cotabby's few-thousand-token
-    /// prompts, while stopping a long session from growing the server without bound (the removed
-    /// Python memory sidecar is the cautionary tale).
+    /// MLX's buffer cache limit (`Memory.cacheLimit`): 1 GiB keeps the prompt cache's recycled
+    /// buffers for Cotabby's few-thousand-token prompts, while stopping a long session from
+    /// growing memory without bound.
     static let defaultMLXPromptCacheBytes = 1 << 30
 
     static func clampedMLXPromptCacheBytes(_ bytes: Int) -> Int {

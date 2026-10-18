@@ -18,17 +18,12 @@ struct SystemResourceSample: Equatable {
     /// Physical memory footprint in bytes. `phys_footprint` is the same figure Activity Monitor and
     /// Xcode's memory gauge report, so the graph matches what a debugging contributor sees there.
     let footprintBytes: UInt64
-
-    /// True when the numbers above also count a helper process Cotabby runs (the MLX server), so
-    /// the Performance pane can say so instead of making Cotabby look like it alone uses that much.
-    /// Set by the caller that chose to include the helper, not by the sampler itself.
-    var includesMLXServer = false
 }
 
 nonisolated enum SystemResourceSampler {
-    /// `extraProcessIDs` are child processes whose CPU and memory are added to the totals (the MLX
-    /// server does the model work that llama.cpp does inside this process, so leaving it out would
-    /// make an MLX user's graph read near zero). A pid that no longer exists contributes nothing.
+    /// `extraProcessIDs` are child processes whose CPU and memory are added to the totals, for a
+    /// helper that does model work outside this process. A pid that no longer exists contributes
+    /// nothing.
     ///
     /// `baseline` holds the per-pid CPU readings the next call measures against. The default is one
     /// shared cache; a second periodic caller (the menu bar monitor) passes its own instance, because

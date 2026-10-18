@@ -5,23 +5,19 @@ import Foundation
 /// and its text formatting; `MenuResourceMonitor` produces the values and `MenuBarView` shows the
 /// string. Kept pure in `Support/` so every formatting branch is testable without a UI or a Mac.
 
-/// CPU, memory and GPU use of Cotabby (and the MLX server when it runs) at one moment.
+/// CPU, memory and GPU use of Cotabby at one moment (MLX and llama.cpp both run in its process).
 nonisolated struct ResourceUsageSummary: Equatable {
     let cpuPercent: Double
     let memoryBytes: UInt64
     /// `nil` when the GPU cannot be read, or on the first sample (no earlier reading to compare).
     let gpuPercent: Double?
-    /// True when the numbers also count the MLX server process.
-    let includesMLXServer: Bool
 
-    /// e.g. `Cotabby uses  CPU 34% · RAM 2.5 GB · GPU 12%`, with ` incl. MLX` appended when the
-    /// server is counted. Memory uses 1024-based units, like the Performance pane's byte formatter.
+    /// e.g. `Cotabby uses  CPU 34% · RAM 2.5 GB · GPU 12%`. Memory uses 1024-based units, like the
+    /// Performance pane's byte formatter.
     static func menuLine(_ summary: ResourceUsageSummary) -> String {
         let cpu = "CPU \(Int(summary.cpuPercent.rounded()))%"
         let gpu = summary.gpuPercent.map { "\(Int($0.rounded()))%" } ?? "—"
-        var line = "Cotabby uses  \(cpu) · RAM \(memoryText(summary.memoryBytes)) · GPU \(gpu)"
-        if summary.includesMLXServer { line += " incl. MLX" }
-        return line
+        return "Cotabby uses  \(cpu) · RAM \(memoryText(summary.memoryBytes)) · GPU \(gpu)"
     }
 
     static func memoryText(_ bytes: UInt64) -> String {
@@ -45,12 +41,12 @@ nonisolated final class MenuResourceSampler {
         gpuTracker = GPUShareTracker()
     }
 
-    /// `extraProcessID` is the MLX server's pid when it runs.
+    /// `extraProcessID` is a helper process to count with Cotabby, if any.
     func sample(extraProcessID: Int32?) -> ResourceUsageSummary {
         sample(extraProcessIDs: extraProcessID.map { [$0] } ?? [])
     }
 
-    /// `extraProcessIDs` are every MLX server Cotabby runs (autocomplete's and the rewrite one).
+    /// `extraProcessIDs` are helper processes to count with Cotabby.
     func sample(extraProcessIDs: [Int32]) -> ResourceUsageSummary {
         let pids = [getpid()] + extraProcessIDs
         let resources = SystemResourceSampler.sample(extraProcessIDs: extraProcessIDs, baseline: cpuBaseline)
@@ -59,8 +55,7 @@ nonisolated final class MenuResourceSampler {
         return ResourceUsageSummary(
             cpuPercent: resources.cpuPercent,
             memoryBytes: resources.footprintBytes,
-            gpuPercent: share,
-            includesMLXServer: !extraProcessIDs.isEmpty
+            gpuPercent: share
         )
     }
 }

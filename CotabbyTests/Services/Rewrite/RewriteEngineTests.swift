@@ -61,12 +61,12 @@ final class RewriteEngineTests: XCTestCase {
         prefs.provider = .mlx
         let rig = makeRig(prefs)
         rig.mlx.isAvailable = false
-        rig.mlx.unavailableReason = "Install MLX in Settings → Engine & Model."
+        rig.mlx.unavailableReason = "Download an MLX model in Settings → Engine & Model."
         do {
             _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: .empty), onPartial: { _ in })
             XCTFail("expected an error")
         } catch {
-            XCTAssertEqual(error as? RewriteError, .unavailable("Install MLX in Settings → Engine & Model."))
+            XCTAssertEqual(error as? RewriteError, .unavailable("Download an MLX model in Settings → Engine & Model."))
         }
     }
 

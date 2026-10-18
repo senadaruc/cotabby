@@ -1,13 +1,12 @@
 import Foundation
 
 /// File overview:
-/// Shared values for the MLX engine: what this Mac can run, where Cotabby keeps its MLX install,
-/// which models it offers, and the states the toolchain, server and downloads publish. Settings,
-/// the router and the MLX services all read these, so they live in `Models/` rather than inside
-/// any one service.
+/// Shared values for the MLX engine: what this Mac can run, which models it offers, and the states
+/// the runtime and downloads publish. Settings, the router and the MLX services all read these, so
+/// they live in `Models/` rather than inside any one service.
 
-/// Whether this build can run MLX. MLX needs Apple Silicon. A compile-time check is enough: an
-/// x86_64 Cotabby (Intel, or Rosetta) cannot rely on an arm64 Python stack being usable either.
+/// Whether this build can run MLX. MLX needs Apple Silicon's GPU; a compile-time check is enough
+/// because the MLX runtime is only built for arm64.
 nonisolated enum MLXHardware {
     static let isAppleSilicon: Bool = {
         #if arch(arm64)
@@ -18,59 +17,8 @@ nonisolated enum MLXHardware {
     }()
 }
 
-/// The sampling fields `mlx_lm.server` accepts beyond OpenAI's basics. The MLX engine fills them
-/// from the same request values the llama runtime samples with, so both local engines condition
-/// alike. The client encodes them only when present, so hosted endpoints never see keys they
-/// might reject.
-nonisolated struct MLXCompletionOptions: Equatable, Sendable {
-    let topK: Int
-    let minP: Double
-    let repetitionPenalty: Double
-    /// Nil lets the server pick; Cotabby passes the request's seed so a replay is reproducible.
-    let seed: Int?
-    /// Server-side stop strings. `["\n"]` for single-line fields stands in for the llama runtime's
-    /// newline-token masking; empty for multi-line fields.
-    let stop: [String]
-}
-
-/// Where Cotabby keeps its own MLX install and server bookkeeping. The folder sits beside the
-/// llama runtime and memory folders under the bundle's own Application Support name, so the Dev
-/// and release apps never share an install or a pid file.
-nonisolated struct MLXPaths: Equatable, Sendable {
-    let root: URL
-
-    init(root: URL) {
-        self.root = root
-    }
-
-    /// `~/Library/Application Support/<CFBundleName>/MLX`. The folder is keyed by `CFBundleName`
-    /// so the Dev and release apps (different names) get separate installs and cannot delete or
-    /// overwrite each other's toolchain.
-    static func standard(bundle: Bundle = .main) -> MLXPaths {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-        let appName = (bundle.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? "Cotabby"
-        return MLXPaths(root: support.appendingPathComponent(appName, isDirectory: true)
-            .appendingPathComponent("MLX", isDirectory: true))
-    }
-
-    var uvDirectory: URL { root.appendingPathComponent("uv", isDirectory: true) }
-    /// The archive unpacks into a folder named after the platform triple.
-    var uvExecutable: URL { uvDirectory.appendingPathComponent("uv-aarch64-apple-darwin/uv") }
-    var toolsDirectory: URL { root.appendingPathComponent("tools", isDirectory: true) }
-    var binDirectory: URL { root.appendingPathComponent("bin", isDirectory: true) }
-    var pythonDirectory: URL { root.appendingPathComponent("python", isDirectory: true) }
-    var cacheDirectory: URL { root.appendingPathComponent("cache", isDirectory: true) }
-    var ownServerExecutable: URL { binDirectory.appendingPathComponent("mlx_lm.server") }
-    var serverPIDFile: URL { root.appendingPathComponent("server.pid") }
-    /// The second server (Rewrite with MLX) keeps its own pid file so launch-time orphan cleanup
-    /// can tell the two apart.
-    var rewriteServerPIDFile: URL { root.appendingPathComponent("rewrite-server.pid") }
-}
-
-/// A validated Hugging Face model repo id ("owner/name"). It reaches a command line
-/// (`--model`, `snapshot_download`) and a cache folder name, so only Hugging Face's own name
-/// alphabet is accepted, never path syntax. A pasted model-page URL is reduced to its id.
+/// A validated Hugging Face model repo id ("owner/name"). It reaches download URLs and a cache
+/// folder name, so only Hugging Face's own name alphabet is accepted, never path syntax. A pasted model-page URL is reduced to its id.
 nonisolated struct MLXRepoID: Equatable, Hashable, Sendable, CustomStringConvertible {
     let owner: String
     let name: String
@@ -211,51 +159,9 @@ nonisolated enum MLXModelCatalog {
     }
 }
 
-/// A usable mlx-lm install: the server script and the Python that runs it.
-nonisolated struct MLXToolchain: Equatable, Sendable {
-    let serverExecutable: URL
-    let pythonExecutable: URL
-    let version: String
-    /// True for Cotabby's own install under `MLXPaths`, which Remove may delete.
-    let isCotabbyInstall: Bool
-}
-
-/// The steps of Cotabby's own MLX install, in order. The installer reports the current one so the
-/// Settings pane can say what is happening during a multi-minute wait; the provisioner publishes it
-/// inside `MLXToolchainState.installing`.
-nonisolated enum MLXInstallPhase: String, Equatable, Sendable {
-    case downloadingUV
-    case verifyingUV
-    case installingMLX
-
-    var label: String {
-        switch self {
-        case .downloadingUV: return "Downloading the installer…"
-        case .verifyingUV: return "Verifying the installer…"
-        case .installingMLX: return "Installing MLX (a few minutes the first time)…"
-        }
-    }
-}
-
-/// What the Settings pane and the server wiring know about mlx-lm on this Mac.
-nonisolated enum MLXToolchainState: Equatable, Sendable {
-    case checking
-    case notInstalled
-    case tooOld(version: String, path: String)
-    case installing(MLXInstallPhase)
-    case ready(MLXToolchain)
-    case failed(reason: String, logTail: [String])
-
-    var toolchain: MLXToolchain? {
-        if case .ready(let toolchain) = self { return toolchain }
-        return nil
-    }
-}
-
-/// Why the MLX server is not running although MLX is the selected engine.
+/// Why no MLX model is loaded although MLX is the selected engine.
 nonisolated enum MLXUnavailableReason: Equatable, Sendable {
     case unsupportedHardware
-    case notInstalled
     case noModel
     case modelNotDownloaded(MLXRepoID)
     /// The model is downloaded but `MLXModelCompatibility` rejected it; the string is the reason.
@@ -264,52 +170,9 @@ nonisolated enum MLXUnavailableReason: Equatable, Sendable {
     var message: String {
         switch self {
         case .unsupportedHardware: return "MLX needs a Mac with Apple Silicon."
-        case .notInstalled: return "Install MLX in Settings → Engine & Model."
         case .noModel: return "Choose an MLX model in Settings → Engine & Model."
         case .modelNotDownloaded(let id): return "Download \(id.value) in Settings → Engine & Model."
         case .modelIncompatible(let id, let reason): return "\(id.value) can't run on MLX: \(reason)"
-        }
-    }
-}
-
-/// The MLX server's lifecycle as the router, Settings and the menu bar see it.
-nonisolated enum MLXServerState: Equatable, Sendable {
-    case idle
-    case unavailable(MLXUnavailableReason)
-    case starting(modelID: String)
-    case ready(port: Int, modelID: String)
-    case failed(reason: String, logTail: [String])
-    case stopping
-
-    var summary: String {
-        switch self {
-        case .idle: return "Not running"
-        case .unavailable(let reason): return reason.message
-        case .starting(let modelID): return "Loading \(modelID)…"
-        case .ready(_, let modelID): return "Running \(modelID)"
-        case .failed(let reason, _): return reason
-        case .stopping: return "Stopping…"
-        }
-    }
-
-    /// Text for the Settings attention dot and callout. Nil while the server is running, loading,
-    /// stopping, or simply not selected: none of those need the user to act.
-    var problem: String? {
-        switch self {
-        case .unavailable(let reason): return reason.message
-        case .failed(let reason, _): return reason
-        case .idle, .starting, .ready, .stopping: return nil
-        }
-    }
-
-    /// The `.unavailable` message a suggestion request gets while the server is not ready.
-    var notReadyMessage: String {
-        switch self {
-        case .starting(let modelID): return "MLX is loading \(modelID)…"
-        case .unavailable(let reason): return reason.message
-        case .failed(let reason, _): return "MLX stopped: \(reason)"
-        case .idle, .stopping: return "MLX is not running."
-        case .ready: return "MLX is ready."
         }
     }
 }
@@ -386,32 +249,4 @@ nonisolated struct MLXDownloadState: Equatable, Sendable {
     var fraction: Double?
     var failure: String?
     var isActive: Bool
-}
-
-/// One running `mlx_lm.server` as `MLXServerManager` sees it. A protocol so tests drive the
-/// manager with a fake process instead of Python.
-protocol MLXRunningProcess: AnyObject {
-    var processIdentifier: Int32 { get }
-    var isRunning: Bool { get }
-    /// SIGTERM: ask the server to exit.
-    func terminate()
-    /// SIGKILL: used only after the grace period.
-    func forceKill()
-    /// The last lines the server wrote to stderr, for the failure message.
-    func stderrTail() -> [String]
-}
-
-/// Starts the server process. `onExit` is delivered on the main actor with the exit status.
-protocol MLXProcessLaunching {
-    func launch(
-        executable: URL,
-        arguments: [String],
-        environment: [String: String],
-        onExit: @escaping @MainActor (Int32) -> Void
-    ) throws -> any MLXRunningProcess
-}
-
-/// Waits until a launched server answers `/v1/models` and has finished a warm-up completion.
-protocol MLXReadinessProbing {
-    func waitUntilReady(port: Int, modelID: String, timeout: Duration) async throws
 }

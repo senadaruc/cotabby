@@ -9,7 +9,6 @@ import SwiftUI
 struct EngineAndModelPaneView: View {
     @ObservedObject var suggestionSettings: SuggestionSettingsModel
     @ObservedObject var openAICompatibleConnectionModel: OpenAICompatibleConnectionModel
-    @ObservedObject var mlxToolchainProvisioner: MLXToolchainProvisioner
     @ObservedObject var mlxRuntime: MLXRuntimeManager
     @ObservedObject var mlxModelDownloader: MLXModelDownloader
     @ObservedObject var foundationModelAvailabilityService: FoundationModelAvailabilityService
@@ -31,7 +30,6 @@ struct EngineAndModelPaneView: View {
     @State var mlxCustomValidation: MLXRepoValidation?
     @State var mlxIsCheckingCustomRepo = false
     @State var pendingMLXDeletion: MLXModelOption?
-    @State var showsMLXRemoveConfirmation = false
     /// True while a model delete or an MLX remove runs; the taps that would conflict with it are disabled.
     @State var mlxIsBusy = false
 
@@ -57,7 +55,7 @@ struct EngineAndModelPaneView: View {
                         title: "Engine",
                         description: "Apple Intelligence runs on-device using macOS's built-in model " +
                             "(newer Apple Silicon Macs only). Open Source runs a downloaded model file. " +
-                            "MLX runs an MLX model with Apple's mlx-lm, which Cotabby installs and manages. " +
+                            "MLX runs an MLX model inside Cotabby with Apple's MLX, fastest on Apple Silicon. " +
                             "Local Endpoint connects to an OpenAI-compatible server you manage.",
                         systemImage: "cpu"
                     )
@@ -81,10 +79,10 @@ struct EngineAndModelPaneView: View {
         }
         .onAppear {
             foundationModelAvailabilityService.refresh()
-            // Detection is otherwise launch-only; another tool may have installed or removed
-            // mlx-lm or a model since.
+            // Detection is otherwise launch-only; another tool may have downloaded or removed a
+            // model since.
             if suggestionSettings.selectedEngine == .mlx {
-                Task { await mlxToolchainProvisioner.rescan(models: mlxModelDownloader) }
+                Task { await mlxModelDownloader.refreshCache() }
             }
 
             suggestionSettings.initializePowerProfiles(

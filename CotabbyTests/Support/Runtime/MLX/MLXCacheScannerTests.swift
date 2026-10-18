@@ -99,12 +99,9 @@ final class MLXCacheScannerTests: XCTestCase {
         XCTAssertTrue(result.models.isEmpty)
         XCTAssertTrue(result.rejected.isEmpty)
         XCTAssertEqual(
-            MLXServerDesireResolver.desire(
+            MLXRuntimeDesireResolver.desire(
                 engine: .mlx, isAppleSilicon: true,
-                toolchain: .ready(MLXToolchain(
-                    serverExecutable: URL(fileURLWithPath: "/s"), pythonExecutable: URL(fileURLWithPath: "/p"),
-                    version: "0.32.0", isCotabbyInstall: true)),
-                modelID: "a/configonly", cachedModels: result.models, promptCacheBytes: 1 << 30,
+                modelID: "a/configonly", cachedModels: result.models, cacheLimitBytes: 1 << 30,
                 rejectedModels: result.rejected),
             .unavailable(.modelNotDownloaded(MLXRepoID("a/configonly")!)))
     }
@@ -112,7 +109,7 @@ final class MLXCacheScannerTests: XCTestCase {
     func test_unsupportedModelTypeIsSkippedUnlessTheSetIsUnknown() throws {
         try repo("models--a--odd", files: modelFiles(type: "whisper_like"))
         XCTAssertTrue(MLXCacheScanner.scan(cacheRoot: root, supportedModelTypes: ["gemma4"]).isEmpty)
-        // Before mlx-lm is installed the supported set is unknown; models are listed unfiltered.
+        // Without a set the scan leaves the architecture check to the downloader's registry check.
         XCTAssertEqual(MLXCacheScanner.scan(cacheRoot: root, supportedModelTypes: nil).count, 1)
     }
 

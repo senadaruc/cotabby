@@ -82,7 +82,7 @@ struct ContextPaneView: View {
     /// The preview drives the real pipeline, so its privacy note must follow the selected engine.
     /// Apple Intelligence and Open Source keep the typed text on this Mac; a configured endpoint,
     /// which may be on the LAN or the internet, receives it exactly as it would from any field.
-    /// MLX keeps the text on this Mac too: its server listens only on 127.0.0.1.
+    /// MLX keeps the text on this Mac too: it runs inside Cotabby.
     /// Cotabby can only speak for itself: what the endpoint retains is that server's policy.
     static func livePreviewPrivacyNote(for engine: SuggestionEngineKind) -> String {
         switch engine {

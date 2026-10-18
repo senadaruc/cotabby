@@ -1,14 +1,14 @@
 import Foundation
 
 /// File overview:
-/// The single definition of "can `mlx_lm.server` run this repo as an autocomplete model". Three
-/// callers share it so they can never disagree: the cache scanner (which downloaded models to
-/// list), the custom-repo check (before any download starts) and the desire resolver (to explain a
-/// selected model that was rejected). It is pure, so every rule is pinned by a unit test without a
+/// The single definition of "can Cotabby's MLX runtime run this repo as an autocomplete model".
+/// Its callers share it so they can never disagree: the cache scanner (which downloaded models to
+/// list) and the custom-repo check (before any download starts); the runtime's desire resolver
+/// explains a rejected selection with the reason it produced. It is pure, so every rule is pinned by a unit test without a
 /// file system, a network or a process. It lives in `Support/` because it is policy, not a service.
 ///
 /// The caller supplies what it already has: the file names (a cached snapshot's, or a remote repo
-/// tree's), the parsed `config.json`, and the model types the installed mlx-lm supports.
+/// tree's), the parsed `config.json`, and the model types mlx-swift-lm's registry supports.
 
 nonisolated enum MLXModelCompatibility {
     /// Why a repo cannot be used. Each case maps to one sentence for the UI.
@@ -21,7 +21,7 @@ nonisolated enum MLXModelCompatibility {
         case rerankerModel
         case speechModel
         case classifierModel
-        /// The `model_type` is not in the set the installed mlx-lm supports.
+        /// mlx-swift-lm has no model for this `model_type`.
         case unsupportedArchitecture(String)
 
         var message: String {
@@ -35,7 +35,7 @@ nonisolated enum MLXModelCompatibility {
             case .speechModel: return "Speech or audio model: it can't write text."
             case .classifierModel: return "Classifier model: it can't write text."
             case .unsupportedArchitecture(let type):
-                return "Architecture “\(type)” isn't supported by the installed mlx-lm."
+                return "Architecture “\(type)” isn't supported by Cotabby's MLX runtime."
             }
         }
     }
@@ -50,9 +50,8 @@ nonisolated enum MLXModelCompatibility {
     private static let speechArchitectureFragments = ["Speech", "CTC", "Audio"]
 
     /// Checks run in this order: missing files, unreadable config, what kind of model it is, then
-    /// whether the installed mlx-lm knows the architecture. `supportedModelTypes` is nil when
-    /// mlx-lm is not installed yet; only the architecture check is skipped then (nothing can run
-    /// anyway, and hiding a downloaded model would read as "your download vanished").
+    /// whether the runtime knows the architecture. A nil `supportedModelTypes` skips only that last
+    /// check: the cache scan leaves it to `MLXModelDownloader`, which asks the runtime's registry.
     static func verdict(
         repoName: String,
         fileNames: [String],

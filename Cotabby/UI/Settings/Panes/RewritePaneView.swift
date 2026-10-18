@@ -15,8 +15,7 @@ struct RewritePaneView: View {
     @ObservedObject var suggestionSettings: SuggestionSettingsModel
     // Everything a row's availability is computed from. `engine.provider(for:).isAvailable` reads
     // plain state, so the pane must observe the sources itself: an "(Unavailable)" row then
-    // re-enables as soon as an MLX install or a model download finishes.
-    @ObservedObject var mlxToolchainProvisioner: MLXToolchainProvisioner
+    // re-enables as soon as a model download finishes.
     @ObservedObject var mlxModelDownloader: MLXModelDownloader
     @ObservedObject var mlxRuntime: MLXRuntimeManager
     @ObservedObject var foundationModelAvailabilityService: FoundationModelAvailabilityService

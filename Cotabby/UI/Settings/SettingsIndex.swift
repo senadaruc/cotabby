@@ -470,7 +470,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .endpointAPIKey: return "Optional bearer token stored securely in Keychain."
         case .endpointStatus: return "Whether Cotabby can reach the server and list its models."
         case .endpointModel: return "The model identifier sent to the configured endpoint."
-        case .mlxRuntime: return "Install, remove or restart Apple's mlx-lm, which runs MLX models."
+        case .mlxRuntime: return "Whether the MLX model is loaded, and Retry after a failed load."
         case .mlxModel: return "Download and choose the MLX model used for suggestions."
         case .mlxCustomModel: return "Use any MLX model from Hugging Face by its id."
         case .mlxPromptCache: return "How much memory MLX may use to reuse recent prompts."
@@ -718,7 +718,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .endpointModel:
             return ["model", "identifier", "ollama", "lm studio", "vllm", "endpoint"]
         case .mlxRuntime:
-            return ["mlx", "mlx-lm", "apple silicon", "install", "python", "server", "engine"]
+            return ["mlx", "mlx-lm", "apple silicon", "gpu", "runtime", "retry", "engine"]
         case .mlxModel:
             return ["mlx", "model", "download", "gemma", "hugging face", "cache"]
         case .mlxCustomModel:

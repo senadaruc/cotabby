@@ -6,18 +6,14 @@ nonisolated struct OpenAICompatibleGenerationOptions: Equatable, Sendable {
     let maxPredictionTokens: Int
     let temperature: Double
     let topP: Double
-    /// MLX-only sampling fields. Nil for every other server, so they never receive unknown keys.
-    let mlx: MLXCompletionOptions?
     /// The standard OpenAI `stop` field for completions requests: generation ends before any of
-    /// these strings. Nil sends nothing. When `mlx.stop` is non-empty it wins (autocomplete's MLX
-    /// path sets it per request); otherwise this list is sent.
+    /// these strings. Nil or empty sends nothing.
     let stop: [String]?
 
-    init(maxPredictionTokens: Int, temperature: Double, topP: Double, mlx: MLXCompletionOptions? = nil, stop: [String]? = nil) {
+    init(maxPredictionTokens: Int, temperature: Double, topP: Double, stop: [String]? = nil) {
         self.maxPredictionTokens = maxPredictionTokens
         self.temperature = temperature
         self.topP = topP
-        self.mlx = mlx
         self.stop = stop
     }
 }
@@ -193,8 +189,7 @@ final class OpenAICompatibleAPIClient {
                 accumulated += text
                 onPartialRawText?(accumulated)
                 // Returning leaves the `for await`, which cancels the URLSession task and closes the
-                // socket. mlx_lm.server notices on its next token write and stops decoding, so an
-                // early stop here saves server time as well as the wait.
+                // socket, so an early stop saves server time as well as the wait.
                 if let stopWhen, stopWhen(accumulated, textEvents) {
                     return accumulated
                 }
@@ -368,11 +363,7 @@ private nonisolated struct CompletionRequest: Encodable {
     let maxTokens: Int
     let temperature: Double
     let topP: Double
-    // MLX-only fields. Optionals are left out of the JSON when nil (synthesized `encodeIfPresent`).
-    let topK: Int?
-    let minP: Double?
-    let repetitionPenalty: Double?
-    let seed: Int?
+    /// Left out of the JSON when nil (synthesized `encodeIfPresent`).
     let stop: [String]?
 
     init(model: String, prompt: String, options: OpenAICompatibleGenerationOptions) {
@@ -381,22 +372,13 @@ private nonisolated struct CompletionRequest: Encodable {
         maxTokens = options.maxPredictionTokens
         temperature = options.temperature
         topP = options.topP
-        topK = options.mlx?.topK
-        minP = options.mlx?.minP
-        repetitionPenalty = options.mlx?.repetitionPenalty
-        seed = options.mlx?.seed
-        // MLX's own non-empty stop list wins; else the general list; an empty list is never sent.
-        let mlxStop = options.mlx.flatMap { $0.stop.isEmpty ? nil : $0.stop }
-        stop = mlxStop ?? options.stop.flatMap { $0.isEmpty ? nil : $0 }
+        stop = options.stop.flatMap { $0.isEmpty ? nil : $0 }
     }
 
     private enum CodingKeys: String, CodingKey {
-        case model, prompt, stream, temperature, seed, stop
+        case model, prompt, stream, temperature, stop
         case maxTokens = "max_tokens"
         case topP = "top_p"
-        case topK = "top_k"
-        case minP = "min_p"
-        case repetitionPenalty = "repetition_penalty"
     }
 }
 
@@ -470,15 +452,15 @@ private nonisolated struct StreamContent: Decodable {
 
 /// What one streamed generation looked like from the outside: when the first text arrived and how
 /// many text events there were. The engine creates one per request, hands it to the client, and
-/// reads it afterwards to report time-to-first-token and (for MLX) a real token count, which the
-/// performance tuner needs to tell prompt processing apart from decoding speed. It is a class so
+/// reads it afterwards to report time-to-first-token, which the performance tuner needs to tell
+/// prompt processing apart from decoding speed. It is a class so
 /// the client can fill it in while the engine holds the same instance; main-actor isolated like
 /// both of them, and discarded with the request.
 @MainActor
 final class OpenAICompatibleStreamTrace {
     private(set) var firstTextAt: Date?
     private(set) var textEvents = 0
-    /// Set by the engine's early-stop closure when it ends the stream (a `DecodeStopPolicy` reason).
+    /// Set by a caller's early-stop closure when it ends the stream.
     var stopReason: String?
 
     func recordTextEvent() {

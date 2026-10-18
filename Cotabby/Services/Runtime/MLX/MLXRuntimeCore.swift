@@ -65,6 +65,12 @@ nonisolated final class MLXRuntimeCore: @unchecked Sendable {
 
     // MARK: - Model lifecycle
 
+    /// Whether mlx-swift-lm can build a model of this `config.json` `model_type`, the check the
+    /// model list uses so it offers only models `load` can run.
+    static func supportsModelType(_ modelType: String) async -> Bool {
+        await LLMTypeRegistry.shared.contains(modelType)
+    }
+
     /// Loads the model in `directory` (a Hugging Face snapshot) and drops any previous one.
     func load(directory: URL, cacheLimitBytes: Int) async throws {
         Memory.cacheLimit = cacheLimitBytes

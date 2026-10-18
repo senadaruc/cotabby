@@ -69,6 +69,6 @@ final class MLXModelCompatibilityTests: XCTestCase {
     func test_messagesAreOneSentence() {
         XCTAssertEqual(MLXModelCompatibility.Reason.embeddingModel.message, "Embedding model: it can't write text.")
         XCTAssertEqual(MLXModelCompatibility.Reason.unsupportedArchitecture("xyz").message,
-                       "Architecture “xyz” isn't supported by the installed mlx-lm.")
+                       "Architecture “xyz” isn't supported by Cotabby's MLX runtime.")
     }
 }

@@ -23,8 +23,6 @@ struct SystemMetricSample: Identifiable, Equatable {
     var deviceGPUPercent: Double? = nil
     /// GPU memory in use across the whole Mac, in bytes.
     var gpuMemoryBytes: UInt64? = nil
-    /// True when `cpuPercent` and `footprintBytes` also count the MLX server process.
-    var includesMLXServer = false
 }
 
 @MainActor
@@ -145,8 +143,7 @@ final class SystemMetricsStore: ObservableObject {
             footprintBytes: reading.footprintBytes,
             gpuPercent: gpuPercent,
             deviceGPUPercent: gpu.deviceUtilizationPercent,
-            gpuMemoryBytes: gpu.inUseMemoryBytes,
-            includesMLXServer: reading.includesMLXServer
+            gpuMemoryBytes: gpu.inUseMemoryBytes
         )
         nextSampleID &+= 1
         var updated = samples

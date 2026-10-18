@@ -415,8 +415,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .appleIntelligence, .openAICompatible, .mlx:
             // Switching away must release Metal buffers and the mapped GGUF. Otherwise an Ollama
             // user still pays the duplicate memory cost the external endpoint is meant to avoid.
-            // MLX loads its own copy of the weights in mlx_lm.server, so the llama model must not
-            // stay resident beside it.
+            // MLX loads its own copy of the weights, so the llama model must not stay resident
+            // beside it.
             runtimeModel.stop()
         }
     }

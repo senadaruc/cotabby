@@ -47,7 +47,7 @@ nonisolated enum GPUStatisticsReader {
     }
 
     /// Like `read(pid:)`, but `processGPUTimeNanoseconds` sums the Metal clients of every pid given
-    /// (Cotabby plus the MLX server when it runs).
+    /// (Cotabby plus any helper process it counts).
     static func read(pids: [pid_t]) -> GPUStatisticsReading {
         var services: io_iterator_t = 0
         guard IOServiceGetMatchingServices(
@@ -149,7 +149,7 @@ nonisolated enum GPUStatisticsReader {
 /// Turns successive cumulative GPU-time readings of a set of processes into a share, 0-100.
 /// Owned by the menu bar sampler (one instance, used from one timer). It exists apart from
 /// `GPUStatisticsReader` because it is the only stateful part: the baseline must restart whenever
-/// the watched pid set changes (the MLX server starting or stopping), otherwise the summed counter
+/// the watched pid set changes (a helper starting or stopping), otherwise the summed counter
 /// jumps or drops and the growth would read as a spike or as nothing.
 nonisolated struct GPUShareTracker {
     private var previous: (pids: Set<pid_t>, nanoseconds: UInt64?, date: Date)?

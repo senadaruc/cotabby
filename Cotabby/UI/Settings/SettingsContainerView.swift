@@ -18,7 +18,6 @@ struct SettingsContainerView: View {
     let permissionGuidanceController: PermissionGuidanceController
     @ObservedObject var suggestionSettings: SuggestionSettingsModel
     @ObservedObject var openAICompatibleConnectionModel: OpenAICompatibleConnectionModel
-    @ObservedObject var mlxToolchainProvisioner: MLXToolchainProvisioner
     @ObservedObject var mlxRuntime: MLXRuntimeManager
     @ObservedObject var mlxModelDownloader: MLXModelDownloader
     @ObservedObject var foundationModelAvailabilityService: FoundationModelAvailabilityService
@@ -152,7 +151,6 @@ struct SettingsContainerView: View {
             EngineAndModelPaneView(
                 suggestionSettings: suggestionSettings,
                 openAICompatibleConnectionModel: openAICompatibleConnectionModel,
-                mlxToolchainProvisioner: mlxToolchainProvisioner,
                 mlxRuntime: mlxRuntime,
                 mlxModelDownloader: mlxModelDownloader,
                 foundationModelAvailabilityService: foundationModelAvailabilityService,
@@ -169,7 +167,7 @@ struct SettingsContainerView: View {
         case .rewrite:
             RewritePaneView(preferences: rewritePreferences, credentials: rewriteCredentials,
                             modelList: rewriteModelList, engine: rewriteEngine, suggestionSettings: suggestionSettings,
-                            mlxToolchainProvisioner: mlxToolchainProvisioner, mlxModelDownloader: mlxModelDownloader,
+                            mlxModelDownloader: mlxModelDownloader,
                             mlxRuntime: mlxRuntime,
                             foundationModelAvailabilityService: foundationModelAvailabilityService,
                             runtimeModel: runtimeModel)

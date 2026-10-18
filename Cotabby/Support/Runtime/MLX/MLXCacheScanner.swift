@@ -2,7 +2,7 @@ import Foundation
 
 /// File overview:
 /// Reads the Hugging Face cache the way huggingface_hub lays it out and decides which cached repos
-/// are models `mlx_lm.server` can run for autocomplete. Pure apart from reading the folder it is
+/// are models the MLX runtime can run for autocomplete. Pure apart from reading the folder it is
 /// given, so tests build fixture trees in a temp directory. Lives in `Support/` because it is a
 /// rule ("what counts as a usable MLX model"), not a service with state.
 ///
@@ -21,9 +21,8 @@ nonisolated enum MLXCacheScanner {
         return home.appendingPathComponent(".cache/huggingface/hub", isDirectory: true)
     }
 
-    /// Every usable model, sorted by repo id. `supportedModelTypes` is nil when mlx-lm is not
-    /// installed yet; the type filter is then skipped (nothing can run anyway, and hiding the
-    /// user's models would read as "your download vanished").
+    /// Every usable model, sorted by repo id. A nil `supportedModelTypes` skips the architecture
+    /// check, which `MLXModelDownloader` then makes against the runtime's registry.
     static func scan(
         cacheRoot: URL,
         supportedModelTypes: Set<String>?,

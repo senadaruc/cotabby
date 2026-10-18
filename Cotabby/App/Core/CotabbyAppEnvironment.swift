@@ -24,7 +24,6 @@ final class CotabbyAppEnvironment {
     let openAICompatibleConnectionModel: OpenAICompatibleConnectionModel
     /// MLX engine services, created once and kept for the app's lifetime. Settings observes them;
     /// `startMLXEngine()` (called by AppDelegate outside the test host) starts their work.
-    let mlxToolchainProvisioner: MLXToolchainProvisioner
     /// The in-process MLX runtime: the one MLX model autocomplete and Rewrite share.
     let mlxRuntime: MLXRuntimeManager
     let menuResourceMonitor: MenuResourceMonitor
@@ -97,8 +96,6 @@ final class CotabbyAppEnvironment {
         let openAICompatibleConnectionModel = OpenAICompatibleConnectionModel(
             client: openAICompatibleClient
         )
-        let mlxPaths = MLXPaths.standard()
-        let mlxToolchainProvisioner = MLXToolchainProvisioner.live(paths: mlxPaths)
         let mlxRuntime = MLXRuntimeManager()
         let mlxModelDownloader = MLXModelDownloader.live()
         let foundationModelAvailabilityService = FoundationModelAvailabilityService()
@@ -476,7 +473,6 @@ final class CotabbyAppEnvironment {
             permissionGuidanceController: permissionGuidanceController,
             suggestionSettings: suggestionSettings,
             openAICompatibleConnectionModel: openAICompatibleConnectionModel,
-            mlxToolchainProvisioner: mlxToolchainProvisioner,
             mlxRuntime: mlxRuntime,
             mlxModelDownloader: mlxModelDownloader,
             foundationModelAvailabilityService: foundationModelAvailabilityService,
@@ -632,7 +628,6 @@ final class CotabbyAppEnvironment {
         self.permissionGuidanceController = permissionGuidanceController
         self.suggestionSettings = suggestionSettings
         self.openAICompatibleConnectionModel = openAICompatibleConnectionModel
-        self.mlxToolchainProvisioner = mlxToolchainProvisioner
         self.mlxRuntime = mlxRuntime
         self.menuResourceMonitor = menuResourceMonitor
         self.mlxModelDownloader = mlxModelDownloader
@@ -869,41 +864,25 @@ final class CotabbyAppEnvironment {
     }
 
     /// Starts MLX housekeeping once services start; never inside the XCTest host, where a stored
-    /// MLX selection must not load a model. A Python `mlx_lm.server` left by an earlier version of
-    /// Cotabby is stopped first; the cache scan's result then drives the runtime.
+    /// MLX selection must not load a model. What an earlier, Python-based version left (a running
+    /// `mlx_lm.server`, its install) is removed in the background; the cache scan's result then
+    /// drives the runtime.
     func startMLXEngine() {
-        Task { [weak self] in
-            guard let self else { return }
-            let paths = MLXPaths.standard()
-            await MLXServerManager.live(paths: paths).cleanUpOrphan()
-            await MLXServerManager.live(paths: paths, pidFileURL: paths.rewriteServerPIDFile, label: "rewrite").cleanUpOrphan()
-            await self.mlxToolchainProvisioner.rescan(models: self.mlxModelDownloader)
-        }
+        Task.detached(priority: .utility) { await MLXLegacyCleanup.run() }
+        Task { [weak self] in await self?.mlxModelDownloader.refreshCache() }
         observeMLXEngine()
     }
 
     private func observeMLXEngine() {
-        // The toolchain's Python decides which architectures count as usable, so rescan the
-        // cache whenever a different install becomes ready (or goes away).
-        mlxToolchainProvisioner.$state
-            .map(\.toolchain)
-            .removeDuplicates()
-            .dropFirst()
-            .sink { [weak self] toolchain in
-                guard let self else { return }
-                Task { await self.mlxModelDownloader.refreshCache(toolchain: toolchain) }
-            }
-            .store(in: &cancellables)
-
-        // Switching to MLX re-detects, so a toolchain or model changed by another tool since
-        // launch is noticed before the desire is resolved from stale state.
+        // Switching to MLX rescans, so a model another tool downloaded or deleted since launch is
+        // noticed before the desire is resolved from stale state.
         suggestionSettings.$selectedEngine
             .removeDuplicates()
             .dropFirst() // the launch value is covered by startMLXEngine's own rescan
             .filter { $0 == .mlx }
             .sink { [weak self] _ in
                 guard let self else { return }
-                Task { await self.mlxToolchainProvisioner.rescan(models: self.mlxModelDownloader) }
+                Task { await self.mlxModelDownloader.refreshCache() }
             }
             .store(in: &cancellables)
 

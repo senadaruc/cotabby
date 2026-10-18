@@ -16,7 +16,6 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
     private let permissionGuidanceController: PermissionGuidanceController
     private let suggestionSettings: SuggestionSettingsModel
     private let openAICompatibleConnectionModel: OpenAICompatibleConnectionModel
-    private let mlxToolchainProvisioner: MLXToolchainProvisioner
     private let mlxRuntime: MLXRuntimeManager
     private let mlxModelDownloader: MLXModelDownloader
     private let foundationModelAvailabilityService: FoundationModelAvailabilityService
@@ -55,7 +54,6 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
         permissionGuidanceController: PermissionGuidanceController,
         suggestionSettings: SuggestionSettingsModel,
         openAICompatibleConnectionModel: OpenAICompatibleConnectionModel,
-        mlxToolchainProvisioner: MLXToolchainProvisioner,
         mlxRuntime: MLXRuntimeManager,
         mlxModelDownloader: MLXModelDownloader,
         foundationModelAvailabilityService: FoundationModelAvailabilityService,
@@ -84,7 +82,6 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
         self.permissionGuidanceController = permissionGuidanceController
         self.suggestionSettings = suggestionSettings
         self.openAICompatibleConnectionModel = openAICompatibleConnectionModel
-        self.mlxToolchainProvisioner = mlxToolchainProvisioner
         self.mlxRuntime = mlxRuntime
         self.mlxModelDownloader = mlxModelDownloader
         self.foundationModelAvailabilityService = foundationModelAvailabilityService
@@ -127,7 +124,6 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
                     permissionGuidanceController: permissionGuidanceController,
                     suggestionSettings: suggestionSettings,
                     openAICompatibleConnectionModel: openAICompatibleConnectionModel,
-                    mlxToolchainProvisioner: mlxToolchainProvisioner,
                     mlxRuntime: mlxRuntime,
                     mlxModelDownloader: mlxModelDownloader,
                     foundationModelAvailabilityService: foundationModelAvailabilityService,

@@ -35,7 +35,7 @@ struct SuggestionEngineSettings: Equatable {
     /// Keep that fallback model loaded while Apple Intelligence is selected, so the first
     /// fallback suggestion does not wait for the model to load. Costs the model's memory.
     var keepsFallbackModelLoaded: Bool
-    /// Hugging Face repo id of the MLX model, exactly as `mlx_lm.server --model` receives it.
+    /// Hugging Face repo id of the MLX model ("owner/name"), as the cache and downloads name it.
     var mlxModelID: String = ""
     /// Upper bound on the MLX server's prompt (KV) cache, in bytes.
     var mlxPromptCacheBytes: Int = SuggestionSettingsStore.defaultMLXPromptCacheBytes

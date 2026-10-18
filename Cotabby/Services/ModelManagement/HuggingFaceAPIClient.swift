@@ -68,6 +68,48 @@ enum HuggingFaceAPIClient {
         }
     }
 
+    /// The repo's current commit and every file in it (nested folders too), with the blob names
+    /// the cache stores them under. Used by the MLX downloader, which names blobs and the
+    /// snapshot folder the way huggingface_hub does.
+    static func fetchSnapshot(repoId: String) async throws -> MLXRemoteSnapshot {
+        guard var components = URLComponents(string: "https://huggingface.co") else { throw APIError.invalidURL }
+        components.path = "/api/models/\(repoId)/revision/main"
+        guard let infoURL = components.url else { throw APIError.invalidURL }
+        let info = try await performRequest(url: infoURL)
+        guard let object = try? JSONSerialization.jsonObject(with: info) as? [String: Any],
+              let revision = object["sha"] as? String, !revision.isEmpty
+        else { throw APIError.decodingFailed(URLError(.cannotParseResponse)) }
+
+        components.path = "/api/models/\(repoId)/tree/\(revision)"
+        components.queryItems = [URLQueryItem(name: "recursive", value: "true")]
+        guard let treeURL = components.url else { throw APIError.invalidURL }
+        let tree = try await performRequest(url: treeURL)
+        do {
+            let entries = try JSONDecoder().decode([HFTreeEntry].self, from: tree)
+            let files = entries.filter { $0.type == "file" }.map {
+                MLXRemoteSnapshot.File(path: $0.path, size: $0.lfs?.size ?? $0.size, blobID: $0.lfs?.oid ?? $0.oid)
+            }
+            return MLXRemoteSnapshot(revision: revision, files: files)
+        } catch {
+            throw APIError.decodingFailed(error)
+        }
+    }
+
+    /// One entry of `GET /api/models/<repoId>/tree/<revision>`: `oid` is the git object id,
+    /// `lfs.oid` the sha256 of a large file.
+    private struct HFTreeEntry: Decodable {
+        struct LFS: Decodable {
+            let oid: String
+            let size: Int64
+        }
+
+        let type: String
+        let path: String
+        let oid: String
+        let size: Int64
+        let lfs: LFS?
+    }
+
     /// Whether downloading the repo needs an accepted license and a token. The model-info API
     /// reports `gated` as `false`, `"auto"` or `"manual"`.
     static func isGated(repoId: String) async throws -> Bool {

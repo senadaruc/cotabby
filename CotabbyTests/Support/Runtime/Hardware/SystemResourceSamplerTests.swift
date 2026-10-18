@@ -55,7 +55,6 @@ final class SystemResourceSamplerTests: XCTestCase {
         XCTAssertLessThan(
             SystemResourceSampler.sample(extraProcessIDs: [Int32.max - 1]).footprintBytes, own * 2,
             "a pid that does not exist contributes nothing")
-        XCTAssertFalse(withSelfAsExtra.includesMLXServer, "the flag is set by the caller, not the sampler")
     }
 
     func test_sampleValues_compareByBothFields() {

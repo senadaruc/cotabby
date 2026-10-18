@@ -38,7 +38,7 @@ final class MenuResourceMonitor: ObservableObject {
 
     /// Seeds the CPU/GPU baselines with an unpublished reading, then publishes the first real one
     /// after `primingDelay` and every `interval` after that. Publishing the priming reading itself
-    /// would show RAM (and "incl. MLX") without CPU or GPU deltas, which need two readings.
+    /// would show RAM without CPU or GPU deltas, which need two readings.
     /// Idempotent: a second call while active does nothing.
     func start() {
         guard !isActive else { return }

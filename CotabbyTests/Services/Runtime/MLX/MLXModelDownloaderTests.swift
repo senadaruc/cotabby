@@ -5,10 +5,6 @@ import XCTest
 final class MLXModelDownloaderTests: XCTestCase {
     private static var retained: [AnyObject] = []
     private var cacheRoot: URL!
-    private let toolchain = MLXToolchain(
-        serverExecutable: URL(fileURLWithPath: "/mlx/bin/mlx_lm.server"),
-        pythonExecutable: URL(fileURLWithPath: "/mlx/python"),
-        version: "0.32.0", isCotabbyInstall: true)
 
     override func setUpWithError() throws {
         cacheRoot = FileManager.default.temporaryDirectory.appendingPathComponent("mlx-dl-\(UUID().uuidString)")
@@ -32,175 +28,257 @@ final class MLXModelDownloaderTests: XCTestCase {
         try "{}".write(to: snapshot.appendingPathComponent("tokenizer.json"), atomically: true, encoding: .utf8)
     }
 
+    /// A remote repo: file path to content. Blob ids are derived from the path so they are stable.
+    private static func remote(_ files: [String: Data], revision: String = "rev1") -> MLXRemoteSnapshot {
+        MLXRemoteSnapshot(
+            revision: revision,
+            files: files.keys.sorted().map {
+                MLXRemoteSnapshot.File(path: $0, size: Int64(files[$0]!.count), blobID: blobID($0))
+            })
+    }
+
+    private static func blobID(_ path: String) -> String { "blob-" + path.replacingOccurrences(of: "/", with: "_") }
+
+    private static func modelFiles(type: String = "gemma4", weights: Int = 64) -> [String: Data] {
+        [
+            "config.json": Data("{\"model_type\":\"\(type)\"}".utf8),
+            "model.safetensors": Data((0..<weights).map { UInt8($0 % 251) }),
+            "tokenizer.json": Data("{}".utf8)
+        ]
+    }
+
+    /// A transfer that serves `files` from memory, appending from `offset` like the HTTP one.
+    private static func serving(
+        _ files: [String: Data], calls: TransferLog? = nil, failWith error: Error? = nil
+    ) -> MLXSnapshotDownloader.Transfer {
+        { remote, local, offset in
+            let path = remote.path.components(separatedBy: "/resolve/").last!.split(separator: "/", maxSplits: 1).last.map(String.init)!
+            calls?.record(path: path, offset: offset)
+            if let error { throw error }
+            let bytes = files[path]!.dropFirst(Int(offset))
+            if offset == 0 { FileManager.default.createFile(atPath: local.path, contents: nil) }
+            let handle = try FileHandle(forWritingTo: local)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: bytes)
+            try handle.close()
+        }
+    }
+
     private func makeDownloader(
-        files: @escaping (String) async throws -> [HFRepoFile] = { _ in [] },
+        snapshot: @escaping MLXModelDownloader.SnapshotFetch = { _ in MLXRemoteSnapshot(revision: "rev1", files: []) },
         gated: @escaping (String) async throws -> Bool = { _ in false },
         config: @escaping MLXModelDownloader.ConfigFetch = { _ in Data("{\"model_type\":\"gemma4\"}".utf8) },
-        run: @escaping MLXModelDownloader.RunProcess = { _, _, _, _ in MLXProcessResult(status: 0, stdout: "[\"gemma4\"]", stderrTail: []) }
+        transfer: @escaping MLXSnapshotDownloader.Transfer = { _, _, _ in XCTFail("no transfer expected") },
+        supported: Set<String> = ["gemma4", "llama", "qwen3"]
     ) -> MLXModelDownloader {
         let downloader = MLXModelDownloader(
             cacheRoot: cacheRoot, fileManager: .default,
-            fetchRepoFiles: files, fetchIsGated: gated, fetchConfig: config, runProcess: run, pollInterval: .milliseconds(20))
+            fetchSnapshot: snapshot, fetchIsGated: gated, fetchConfig: config, transfer: transfer,
+            isSupportedModelType: { supported.contains($0) }, pollInterval: .milliseconds(20))
         Self.retained.append(downloader)
         return downloader
     }
 
-    func test_refreshFiltersByTheInstalledArchitectures() async throws {
+    // MARK: - Cache
+
+    func test_refreshFiltersByTheRuntimeArchitectures() async throws {
         try writeCachedModel("a/gemma", type: "gemma4")
         try writeCachedModel("a/other", type: "mamba_x")
         let downloader = makeDownloader()
         XCTAssertNil(downloader.cachedModels, "nil until the first scan")
-        await downloader.refreshCache(toolchain: toolchain)
+        await downloader.refreshCache()
         XCTAssertEqual(downloader.cachedModels?.map(\.repoID.value), ["a/gemma"])
-        await downloader.refreshCache(toolchain: nil)
-        XCTAssertEqual(downloader.cachedModels?.count, 2, "without mlx-lm the type filter is skipped")
-    }
-
-    func test_validationRejectsBadIDsWithoutNetwork() async {
-        let downloader = makeDownloader(files: { _ in XCTFail("no network for a bad id"); return [] })
-        let result = await downloader.validateCustomRepo("../../etc", toolchain: nil)
-        XCTAssertEqual(result, .invalidID)
-    }
-
-    func test_validationClassifiesRepos() async {
-        let missing = makeDownloader(files: { _ in throw HuggingFaceAPIClient.APIError.httpError(statusCode: 404) })
-        let missingResult = await missing.validateCustomRepo("a/b", toolchain: nil)
-        XCTAssertEqual(missingResult, .notFoundOrPrivate(MLXRepoID("a/b")!))
-
-        let gated = makeDownloader(files: { _ in [HFRepoFile(path: "config.json", size: 1)] }, gated: { _ in true })
-        let gatedResult = await gated.validateCustomRepo("a/b", toolchain: nil)
-        XCTAssertEqual(gatedResult, .gated(MLXRepoID("a/b")!))
-
-        let gguf = makeDownloader(files: { _ in [HFRepoFile(path: "config.json", size: 1), HFRepoFile(path: "m.gguf", size: 9)] })
-        let ggufResult = await gguf.validateCustomRepo("a/b", toolchain: nil)
-        XCTAssertEqual(ggufResult, .incompatible(MLXRepoID("a/b")!, .missingWeights))
-
-        let good = makeDownloader(files: { _ in
-            [HFRepoFile(path: "config.json", size: 1), HFRepoFile(path: "model.safetensors", size: 99),
-             HFRepoFile(path: "tokenizer.json", size: 1)]
-        })
-        let goodResult = await good.validateCustomRepo("https://huggingface.co/a/b", toolchain: toolchain)
-        XCTAssertEqual(goodResult, .valid(MLXRepoID("a/b")!, totalBytes: 101, isInstruct: false))
-    }
-
-    private let fullTree = [
-        HFRepoFile(path: "config.json", size: 1), HFRepoFile(path: "model.safetensors", size: 9),
-        HFRepoFile(path: "tokenizer.json", size: 1)
-    ]
-
-    func test_validationRejectsEmbeddingRepo() async {
-        let tree = fullTree
-        let d = makeDownloader(files: { _ in tree })
-        let result = await d.validateCustomRepo("mlx-community/Qwen3-Embedding-0.6B", toolchain: nil)
-        XCTAssertEqual(result, .incompatible(MLXRepoID("mlx-community/Qwen3-Embedding-0.6B")!, .embeddingModel))
-    }
-
-    func test_validationRejectsUnsupportedModelTypeWhenTheSetIsKnown() async {
-        let tree = fullTree
-        let d = makeDownloader(
-            files: { _ in tree },
-            config: { _ in Data("{\"model_type\":\"mamba_x\"}".utf8) })
-        let result = await d.validateCustomRepo("a/b", toolchain: toolchain)
-        XCTAssertEqual(result, .incompatible(MLXRepoID("a/b")!, .unsupportedArchitecture("mamba_x")))
-    }
-
-    func test_validationMarksInstructReposAndMapsConfig404() async {
-        let tree = fullTree
-        let instruct = makeDownloader(files: { _ in tree })
-        let result = await instruct.validateCustomRepo("a/gemma-it", toolchain: toolchain)
-        XCTAssertEqual(result, .valid(MLXRepoID("a/gemma-it")!, totalBytes: 11, isInstruct: true))
-
-        let gone = makeDownloader(
-            files: { _ in tree },
-            config: { _ in throw HuggingFaceAPIClient.APIError.httpError(statusCode: 404) })
-        let goneResult = await gone.validateCustomRepo("a/b", toolchain: nil)
-        XCTAssertEqual(goneResult, .incompatible(MLXRepoID("a/b")!, .missingConfig))
+        XCTAssertEqual(downloader.rejectedModels, [MLXRepoID("a/other")!: .unsupportedArchitecture("mamba_x")])
     }
 
     func test_refreshPublishesRejectedModels() async throws {
         try writeCachedModel("a/gemma", type: "gemma4")
         try writeCachedModel("a/gemma-embed", type: "gemma4")
         let downloader = makeDownloader()
-        await downloader.refreshCache(toolchain: toolchain)
+        await downloader.refreshCache()
         XCTAssertEqual(downloader.rejectedModels, [MLXRepoID("a/gemma-embed")!: .embeddingModel])
     }
 
-    func test_downloadRunsTheToolchainPythonAndRefreshes() async throws {
-        var calls: [(URL, [String], [String: String])] = []
-        let downloader = makeDownloader(
-            files: { _ in [HFRepoFile(path: "model.safetensors", size: 100)] },
-            run: { [unowned self] executable, arguments, environment, _ in
-                calls.append((executable, arguments, environment))
-                if arguments.last == "a/b" { try self.writeCachedModel("a/b") }
-                return MLXProcessResult(status: 0, stdout: "[\"gemma4\"]", stderrTail: [])
-            }
-        )
-        downloader.startDownload(MLXRepoID("a/b")!, toolchain: toolchain)
-        XCTAssertEqual(downloader.download?.isActive, true)
-        await waitUntil { downloader.download == nil && downloader.cachedModels?.isEmpty == false }
-        let download = try XCTUnwrap(calls.first { $0.1.last == "a/b" })
-        XCTAssertEqual(download.0.path, "/mlx/python")
-        XCTAssertEqual(download.1, ["-I", "-c", MLXToolchainRules.downloadScript, "a/b"])
-        XCTAssertNil(download.2["HF_HUB_OFFLINE"])
-        XCTAssertEqual(downloader.cachedModels?.map(\.repoID.value), ["a/b"])
+    func test_theRealRegistryKnowsGemma4AndNotAnInventedType() async {
+        let gemma = await MLXRuntimeCore.supportsModelType("gemma4")
+        let invented = await MLXRuntimeCore.supportsModelType("not_a_model_type")
+        XCTAssertTrue(gemma)
+        XCTAssertFalse(invented)
     }
 
-    func test_downloadFailureKeepsTheLastErrorLine() async {
-        let downloader = makeDownloader(run: { _, arguments, _, _ in
-            arguments.last == "a/b"
-                ? MLXProcessResult(status: 1, stdout: "", stderrTail: ["Traceback", "RepositoryNotFoundError: a/b"])
-                : MLXProcessResult(status: 0, stdout: "[]", stderrTail: [])
-        })
-        downloader.startDownload(MLXRepoID("a/b")!, toolchain: toolchain)
+    // MARK: - Custom repo check
+
+    func test_validationRejectsBadIDsWithoutNetwork() async {
+        let downloader = makeDownloader(snapshot: { _ in XCTFail("no network for a bad id"); return Self.remote([:]) })
+        let result = await downloader.validateCustomRepo("../../etc")
+        XCTAssertEqual(result, .invalidID)
+    }
+
+    func test_validationClassifiesRepos() async {
+        let missing = makeDownloader(snapshot: { _ in throw HuggingFaceAPIClient.APIError.httpError(statusCode: 404) })
+        let missingResult = await missing.validateCustomRepo("a/b")
+        XCTAssertEqual(missingResult, .notFoundOrPrivate(MLXRepoID("a/b")!))
+
+        let gated = makeDownloader(snapshot: { _ in Self.remote(["config.json": Data("{}".utf8)]) }, gated: { _ in true })
+        let gatedResult = await gated.validateCustomRepo("a/b")
+        XCTAssertEqual(gatedResult, .gated(MLXRepoID("a/b")!))
+
+        let gguf = makeDownloader(snapshot: { _ in Self.remote(["config.json": Data("{}".utf8), "m.gguf": Data(count: 9)]) })
+        let ggufResult = await gguf.validateCustomRepo("a/b")
+        XCTAssertEqual(ggufResult, .incompatible(MLXRepoID("a/b")!, .missingWeights))
+
+        let files = Self.modelFiles()
+        let good = makeDownloader(snapshot: { _ in Self.remote(files) })
+        let goodResult = await good.validateCustomRepo("https://huggingface.co/a/b")
+        XCTAssertEqual(goodResult, .valid(MLXRepoID("a/b")!, totalBytes: Self.remote(files).totalBytes, isInstruct: false))
+    }
+
+    func test_validationRejectsEmbeddingRepo() async {
+        let files = Self.modelFiles()
+        let downloader = makeDownloader(snapshot: { _ in Self.remote(files) })
+        let result = await downloader.validateCustomRepo("mlx-community/Qwen3-Embedding-0.6B")
+        XCTAssertEqual(result, .incompatible(MLXRepoID("mlx-community/Qwen3-Embedding-0.6B")!, .embeddingModel))
+    }
+
+    func test_validationRejectsAModelTypeTheRuntimeCannotBuild() async {
+        let files = Self.modelFiles()
+        let downloader = makeDownloader(
+            snapshot: { _ in Self.remote(files) },
+            config: { _ in Data("{\"model_type\":\"mamba_x\"}".utf8) })
+        let result = await downloader.validateCustomRepo("a/b")
+        XCTAssertEqual(result, .incompatible(MLXRepoID("a/b")!, .unsupportedArchitecture("mamba_x")))
+    }
+
+    func test_validationMarksInstructReposAndMapsConfig404() async {
+        let files = Self.modelFiles()
+        let instruct = makeDownloader(snapshot: { _ in Self.remote(files) })
+        let result = await instruct.validateCustomRepo("a/gemma-it")
+        XCTAssertEqual(result, .valid(MLXRepoID("a/gemma-it")!, totalBytes: Self.remote(files).totalBytes, isInstruct: true))
+
+        let gone = makeDownloader(
+            snapshot: { _ in Self.remote(files) },
+            config: { _ in throw HuggingFaceAPIClient.APIError.httpError(statusCode: 404) })
+        let goneResult = await gone.validateCustomRepo("a/b")
+        XCTAssertEqual(goneResult, .incompatible(MLXRepoID("a/b")!, .missingConfig))
+    }
+
+    // MARK: - Download
+
+    func test_downloadWritesTheHuggingFaceCacheLayoutAndListsTheModel() async throws {
+        let files = Self.modelFiles()
+        let downloader = makeDownloader(snapshot: { _ in Self.remote(files) }, transfer: Self.serving(files))
+        downloader.startDownload(MLXRepoID("a/b")!)
+        XCTAssertEqual(downloader.download?.isActive, true)
+        await waitUntil { downloader.download == nil && downloader.cachedModels?.isEmpty == false }
+
+        XCTAssertEqual(downloader.cachedModels?.map(\.repoID.value), ["a/b"])
+        let repo = cacheRoot.appendingPathComponent("models--a--b")
+        XCTAssertEqual(try String(contentsOf: repo.appendingPathComponent("refs/main"), encoding: .utf8), "rev1")
+        let link = repo.appendingPathComponent("snapshots/rev1/model.safetensors")
+        XCTAssertEqual(
+            try FileManager.default.destinationOfSymbolicLink(atPath: link.path), "../../blobs/blob-model.safetensors")
+        XCTAssertEqual(try Data(contentsOf: link), files["model.safetensors"])
+        let blobs = try FileManager.default.contentsOfDirectory(atPath: repo.appendingPathComponent("blobs").path)
+        XCTAssertFalse(blobs.contains { $0.hasSuffix(".incomplete") })
+    }
+
+    func test_downloadResumesAPartialBlobFromItsSize() async throws {
+        let files = Self.modelFiles(weights: 1_000)
+        let blobs = cacheRoot.appendingPathComponent("models--a--b/blobs")
+        try FileManager.default.createDirectory(at: blobs, withIntermediateDirectories: true)
+        try files["model.safetensors"]!.prefix(400)
+            .write(to: blobs.appendingPathComponent("blob-model.safetensors.incomplete"))
+        let log = TransferLog()
+        let downloader = makeDownloader(snapshot: { _ in Self.remote(files) }, transfer: Self.serving(files, calls: log))
+        downloader.startDownload(MLXRepoID("a/b")!)
+        await waitUntil { downloader.download == nil && downloader.cachedModels?.isEmpty == false }
+
+        XCTAssertEqual(log.offsets["model.safetensors"], 400)
+        XCTAssertEqual(try Data(contentsOf: blobs.appendingPathComponent("blob-model.safetensors")), files["model.safetensors"])
+    }
+
+    func test_downloadSkipsBlobsTheCacheAlreadyHolds() async throws {
+        let files = Self.modelFiles()
+        let blobs = cacheRoot.appendingPathComponent("models--a--b/blobs")
+        try FileManager.default.createDirectory(at: blobs, withIntermediateDirectories: true)
+        try files["model.safetensors"]!.write(to: blobs.appendingPathComponent("blob-model.safetensors"))
+        let log = TransferLog()
+        let downloader = makeDownloader(snapshot: { _ in Self.remote(files) }, transfer: Self.serving(files, calls: log))
+        downloader.startDownload(MLXRepoID("a/b")!)
+        await waitUntil { downloader.download == nil && downloader.cachedModels?.isEmpty == false }
+        XCTAssertNil(log.offsets["model.safetensors"], "a complete blob is not downloaded again")
+        XCTAssertEqual(log.offsets.keys.sorted(), ["config.json", "tokenizer.json"])
+    }
+
+    func test_downloadFailureShowsTheError() async {
+        let files = Self.modelFiles()
+        let downloader = makeDownloader(
+            snapshot: { _ in Self.remote(files) },
+            transfer: Self.serving(files, failWith: MLXSnapshotDownloadError.http(statusCode: 503)))
+        downloader.startDownload(MLXRepoID("a/b")!)
         await waitUntil { downloader.download?.isActive == false }
-        XCTAssertEqual(downloader.download?.failure, "RepositoryNotFoundError: a/b")
+        XCTAssertEqual(downloader.download?.failure, "Hugging Face returned HTTP 503.")
+        XCTAssertEqual(downloader.cachedModels, [])
+    }
+
+    func test_aShortFileFailsAndStaysForTheNextAttempt() async throws {
+        let files = Self.modelFiles(weights: 100)
+        var short = files
+        short["model.safetensors"] = files["model.safetensors"]!.prefix(60)
+        let downloader = makeDownloader(snapshot: { _ in Self.remote(files) }, transfer: Self.serving(short))
+        downloader.startDownload(MLXRepoID("a/b")!)
+        await waitUntil { downloader.download?.isActive == false }
+        XCTAssertEqual(downloader.download?.failure, "model.safetensors arrived with 60 of 100 bytes. Try again.")
+        let partial = cacheRoot.appendingPathComponent("models--a--b/blobs/blob-model.safetensors.incomplete")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: partial.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cacheRoot.appendingPathComponent("models--a--b/refs/main").path))
     }
 
     func test_finishedDownloadOfUnsupportedArchitectureReportsIt() async {
-        let downloader = makeDownloader(run: { [unowned self] _, arguments, _, _ in
-            if arguments.last == "a/b" { try self.writeCachedModel("a/b", type: "mamba_x") }
-            return MLXProcessResult(status: 0, stdout: "[\"gemma4\"]", stderrTail: [])
-        })
-        downloader.startDownload(MLXRepoID("a/b")!, toolchain: toolchain)
+        let files = Self.modelFiles(type: "mamba_x")
+        let downloader = makeDownloader(snapshot: { _ in Self.remote(files) }, transfer: Self.serving(files))
+        downloader.startDownload(MLXRepoID("a/b")!)
         await waitUntil { downloader.download?.isActive == false }
-        XCTAssertEqual(downloader.download?.failure, "Downloaded, but it can't be used. Architecture “mamba_x” isn't supported by the installed mlx-lm.")
+        XCTAssertEqual(
+            downloader.download?.failure,
+            "Downloaded, but it can't be used. Architecture “mamba_x” isn't supported by Cotabby's MLX runtime.")
         XCTAssertEqual(downloader.cachedModels?.isEmpty, true)
     }
 
     func test_progressAndCancel() async throws {
+        let snapshot = MLXRemoteSnapshot(
+            revision: "rev1", files: [.init(path: "model.safetensors", size: 1_000, blobID: "x")])
         let downloader = makeDownloader(
-            files: { _ in [HFRepoFile(path: "model.safetensors", size: 1000)] },
-            run: { [unowned self] _, arguments, _, _ in
-                guard arguments.last == "a/b" else { return MLXProcessResult(status: 0, stdout: "[]", stderrTail: []) }
-                let blobs = self.cacheRoot.appendingPathComponent("models--a--b/blobs")
-                try FileManager.default.createDirectory(at: blobs, withIntermediateDirectories: true)
-                try Data(count: 500).write(to: blobs.appendingPathComponent("x.incomplete"))
+            snapshot: { _ in snapshot },
+            transfer: { _, local, _ in
+                try Data(count: 500).write(to: local)
                 try await Task.sleep(for: .seconds(60))
-                return MLXProcessResult(status: 0, stdout: "", stderrTail: [])
-            }
-        )
-        downloader.startDownload(MLXRepoID("a/b")!, toolchain: toolchain)
+            })
+        downloader.startDownload(MLXRepoID("a/b")!)
         await waitUntil { downloader.download?.fraction == 0.5 }
-        downloader.startDownload(MLXRepoID("c/d")!, toolchain: toolchain)
+        downloader.startDownload(MLXRepoID("c/d")!)
         XCTAssertEqual(downloader.download?.repoID.value, "a/b", "one download at a time")
         downloader.cancelDownload()
         await waitUntil { downloader.download == nil }
+        let partial = cacheRoot.appendingPathComponent("models--a--b/blobs/x.incomplete")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: partial.path), "the partial file stays to resume")
     }
 
-    /// Review focus 2.
+    // MARK: - Delete
+
     func test_deletingActiveModelRefreshesCacheWithoutIt() async throws {
         try writeCachedModel("a/b")
         let downloader = makeDownloader()
-        await downloader.refreshCache(toolchain: toolchain)
+        await downloader.refreshCache()
         XCTAssertEqual(downloader.cachedModels?.count, 1)
-        await downloader.delete(MLXRepoID("a/b")!, toolchain: toolchain)
+        await downloader.delete(MLXRepoID("a/b")!)
         XCTAssertEqual(downloader.cachedModels, [])
         XCTAssertFalse(FileManager.default.fileExists(atPath: cacheRoot.appendingPathComponent("models--a--b").path))
     }
 
-    /// Review focus 2 with a race: a scan that read the disk before the delete finishes after it.
-    /// The first scan reads the model, then holds; the delete's own scan runs and publishes the
-    /// list without it; releasing the stale scan must not bring the model back.
+    /// A scan that read the disk before the delete finishes after it. The first scan reads the
+    /// model, then holds; the delete's own scan runs and publishes the list without it; releasing
+    /// the stale scan must not bring the model back.
     func test_staleRefreshCannotResurrectADeletedModel() async throws {
         try writeCachedModel("a/b")
         let calls = CallCounter()
@@ -208,11 +286,11 @@ final class MLXModelDownloaderTests: XCTestCase {
         let (release, releaseSignal) = AsyncStream<Void>.makeStream()
         let downloader = MLXModelDownloader(
             cacheRoot: cacheRoot, fileManager: .default,
-            fetchRepoFiles: { _ in [] }, fetchIsGated: { _ in false },
-            runProcess: { _, _, _, _ in MLXProcessResult(status: 0, stdout: "[\"gemma4\"]", stderrTail: []) },
+            fetchSnapshot: { _ in MLXRemoteSnapshot(revision: "r", files: []) }, fetchIsGated: { _ in false },
+            isSupportedModelType: { _ in true },
             pollInterval: .milliseconds(20),
-            scanCache: { root, types in
-                let models = MLXCacheScanner.scanDetailed(cacheRoot: root, supportedModelTypes: types)
+            scanCache: { root in
+                let models = MLXCacheScanner.scanDetailed(cacheRoot: root, supportedModelTypes: nil)
                 if calls.next() == 1 {
                     enteredSignal.yield()
                     for await _ in release { break }
@@ -220,11 +298,11 @@ final class MLXModelDownloaderTests: XCTestCase {
                 return models
             }
         )
-        let stale = Task { await downloader.refreshCache(toolchain: nil) }
+        Self.retained.append(downloader)
+        let stale = Task { await downloader.refreshCache() }
         for await _ in entered { break }
 
-        // Nil toolchain skips the type probe, so the delete's scan does not wait on the held scan.
-        await downloader.delete(MLXRepoID("a/b")!, toolchain: nil)
+        await downloader.delete(MLXRepoID("a/b")!)
         XCTAssertEqual(downloader.cachedModels, [])
 
         releaseSignal.yield()
@@ -232,28 +310,38 @@ final class MLXModelDownloaderTests: XCTestCase {
         XCTAssertEqual(downloader.cachedModels, [], "the older scan saw the model before the delete and must not publish it")
     }
 
-    /// Review focus 2: deleting the repo that is downloading must stop the download first, so the
-    /// partial files cannot reappear once the folder is gone.
+    /// Deleting the repo that is downloading must stop the download first, so the partial files
+    /// cannot reappear once the folder is gone.
     func test_deletingTheActiveDownloadCancelsItFirst() async throws {
+        let snapshot = MLXRemoteSnapshot(
+            revision: "rev1", files: [.init(path: "model.safetensors", size: 1_000, blobID: "x")])
         let downloader = makeDownloader(
-            files: { _ in [HFRepoFile(path: "model.safetensors", size: 1000)] },
-            run: { [unowned self] _, arguments, _, _ in
-                guard arguments.last == "a/b" else { return MLXProcessResult(status: 0, stdout: "[]", stderrTail: []) }
-                let blobs = self.cacheRoot.appendingPathComponent("models--a--b/blobs")
-                try FileManager.default.createDirectory(at: blobs, withIntermediateDirectories: true)
-                try Data(count: 500).write(to: blobs.appendingPathComponent("x.incomplete"))
+            snapshot: { _ in snapshot },
+            transfer: { _, local, _ in
+                try Data(count: 500).write(to: local)
                 try await Task.sleep(for: .seconds(60))
-                return MLXProcessResult(status: 0, stdout: "", stderrTail: [])
-            }
-        )
-        downloader.startDownload(MLXRepoID("a/b")!, toolchain: toolchain)
+            })
+        downloader.startDownload(MLXRepoID("a/b")!)
         await waitUntil { downloader.download?.fraction == 0.5 }
 
-        await downloader.delete(MLXRepoID("a/b")!, toolchain: nil)
+        await downloader.delete(MLXRepoID("a/b")!)
 
         XCTAssertNil(downloader.download, "the delete waited for the download to stop")
         XCTAssertFalse(FileManager.default.fileExists(atPath: cacheRoot.appendingPathComponent("models--a--b").path))
         XCTAssertEqual(downloader.cachedModels, [])
+    }
+}
+
+/// Which files a fake transfer was asked for, and from which offset. Locked because the transfer
+/// runs off the main actor.
+private final class TransferLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [String: Int64] = [:]
+
+    var offsets: [String: Int64] { lock.withLock { storage } }
+
+    func record(path: String, offset: Int64) {
+        lock.withLock { storage[path] = offset }
     }
 }
 
