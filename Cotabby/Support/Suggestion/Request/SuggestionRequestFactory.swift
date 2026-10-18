@@ -59,8 +59,10 @@ enum SuggestionRequestFactory {
         historyExamples: [String] = [],
         memorySnippets: [String] = []
     ) -> SuggestionRequestBuildResult {
+        // A terminal screen field contributes only the lines near the caret (see `TerminalPromptWindow`).
+        let isTerminalScreen = TerminalAppDetector.isTerminalScreenField(bundleIdentifier: context.bundleIdentifier)
         let prefixText = truncatedPromptPrefix(
-            from: context.precedingText,
+            from: isTerminalScreen ? TerminalPromptWindow.precedingText(context.precedingText) : context.precedingText,
             configuration: configuration,
             engine: settings.selectedEngine
         )
@@ -72,7 +74,8 @@ enum SuggestionRequestFactory {
         let maxSuffixCharacters = MailReplyContext.trailingBudget(
             bundleIdentifier: context.bundleIdentifier, defaultBudget: configuration.maxSuffixCharacters
         )
-        let promptTrailingText = isMail ? MailReplyContext.condensedThread(context.trailingText) : context.trailingText
+        let promptTrailingText = isTerminalScreen ? ""
+            : isMail ? MailReplyContext.condensedThread(context.trailingText) : context.trailingText
         // The thread's subject names a reply better than its window: Outlook's inline reply sits in
         // the main window, titled after the open folder ("Inbox • All Accounts").
         let surfaceWindowTitle = isMail

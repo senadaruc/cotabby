@@ -53,6 +53,42 @@ final class SuggestionRequestFactoryTests: XCTestCase {
         XCTAssertTrue(result.request.prompt.hasSuffix("We are meeting "))
     }
 
+    /// A terminal screen field's text is the whole visible screen: it scrolls whenever output
+    /// arrives, and the text after the caret is the input box chrome and status lines below it. In
+    /// Ghostty both changed on nearly every keystroke and each request re-decoded ~1,230 tokens, so
+    /// every generation was cancelled by the next key. The prompt keeps the last few lines before
+    /// the caret and none of the text after it.
+    func test_terminalScreenFieldKeepsOnlyTheLinesNearTheCaret() {
+        let scrollback = (1...60).map { "output line \($0) OLD_SCROLLBACK" }.joined(separator: "\n")
+        let context = CotabbyTestFixtures.focusedInputContext(
+            bundleIdentifier: "com.mitchellh.ghostty",
+            precedingText: scrollback + "\n> please check the",
+            trailingText: "\n────────\n  ⏵⏵ STATUS_LINE 12s"
+        )
+        let result = SuggestionRequestFactory.buildRequest(
+            context: context,
+            settings: CotabbyTestFixtures.settingsSnapshot(selectedEngine: .llamaOpenSource),
+            configuration: .standard
+        )
+        XCTAssertTrue(result.request.prompt.hasSuffix("> please check the"))
+        XCTAssertFalse(result.request.prompt.contains("STATUS_LINE"))
+        XCTAssertFalse(result.request.prompt.contains("output line 1 OLD_SCROLLBACK"))
+        XCTAssertTrue(result.request.prompt.contains("output line 60 OLD_SCROLLBACK"))
+    }
+
+    func test_terminalWindowStartsAtALineAndOnlyMovesWithWholeLines() {
+        let screen = (1...40).map { "line \($0) of terminal output" }.joined(separator: "\n") + "\n> typing he"
+        let kept = TerminalPromptWindow.precedingText(screen)
+        XCTAssertLessThanOrEqual(kept.count, TerminalPromptWindow.maxPrecedingCharacters)
+        XCTAssertTrue(kept.hasPrefix("line "))
+        XCTAssertTrue(kept.hasSuffix("> typing he"))
+        // One more typed character keeps the same start, so the cached prompt before the caret
+        // line stays valid.
+        let next = TerminalPromptWindow.precedingText(screen + "r")
+        XCTAssertEqual(String(next.prefix(20)), String(kept.prefix(20)))
+        XCTAssertEqual(TerminalPromptWindow.precedingText("> short"), "> short")
+    }
+
     func test_localScreenContextExceedsOldCapButEndpointKeepsLegacyPrompt() {
         let screen = String(repeating: "Project discussion and meeting agenda. ", count: 120)
         for engine in [SuggestionEngineKind.llamaOpenSource, .appleIntelligence, .mlx, .openAICompatible] {
