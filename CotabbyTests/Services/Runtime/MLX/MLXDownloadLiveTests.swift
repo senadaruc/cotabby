@@ -48,7 +48,14 @@ final class MLXDownloadLiveTests: XCTestCase {
             .text("The capital of France is"),
             options: LlamaGenerationOptions(maxPredictionTokens: 4, temperature: 0, topK: 1, topP: 1, minP: 0, repetitionPenalty: 1),
             operation: core.beginOperation(), onPartial: nil)
-        core.unload()
         XCTAssertFalse(output.text.isEmpty)
+        XCTAssertEqual(output.tokensGenerated, 4)
+        // The budget's last token is not fed back: a reused prompt still continues correctly.
+        let again = try core.generate(
+            .text("The capital of France is"),
+            options: LlamaGenerationOptions(maxPredictionTokens: 4, temperature: 0, topK: 1, topP: 1, minP: 0, repetitionPenalty: 1),
+            operation: core.beginOperation(), onPartial: nil)
+        XCTAssertEqual(again.text, output.text, "a greedy repeat on the reused cache gives the same text")
+        core.unload()
     }
 }

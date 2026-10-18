@@ -65,6 +65,18 @@ nonisolated final class MLXRuntimeCore: @unchecked Sendable {
     private var lastWorkTime: TimeInterval?
     private var lastPingTime: TimeInterval?
 
+    /// MLX's Metal backend commits a command buffer every 50 operations or 50 MB on Max chips (40
+    /// on base and Pro), about 20 buffers per Gemma 4 E4B token, each with its own commit and
+    /// completion handler. One buffer per token cut CPU time per keystroke by 38%, CPU energy by
+    /// 21% and GPU busy time by 15% with the same first-token latency (60 keystrokes, three runs
+    /// each, M5 Max). Read once, when MLX creates its GPU device.
+    static let commandBufferEnvironment = ["MLX_MAX_OPS_PER_BUFFER": "1000", "MLX_MAX_MB_PER_BUFFER": "1000"]
+
+    init() {
+        // Before any MLX call; `overwrite: 0` keeps a value the user set for experiments.
+        for (name, value) in Self.commandBufferEnvironment { setenv(name, value, 0) }
+    }
+
     // MARK: - Model lifecycle
 
     /// Whether mlx-swift-lm can build a model of this `config.json` `model_type`, the check the
@@ -342,8 +354,13 @@ nonisolated final class MLXRuntimeCore: @unchecked Sendable {
         while decoding.tokensGenerated < step.options.maxPredictionTokens {
             if isAborted(step.operation) || Task.isCancelled { decoding.stopReason = "cancelled"; return }
             let current = next
-            next = sampler.sample(step.model(current.token.reshaped(1, 1), cache: cache))
-            asyncEval([next.token, next.argmax] + cache.flatMap(\.state))
+            // The next token is computed while this one is read back, except after the last token
+            // the budget allows: that forward pass would only be thrown away (most generations end
+            // at the budget, so it was about one pass in six).
+            if decoding.tokensGenerated + 1 < step.options.maxPredictionTokens {
+                next = sampler.sample(step.model(current.token.reshaped(1, 1), cache: cache))
+                asyncEval([next.token, next.argmax] + cache.flatMap(\.state))
+            }
 
             let token = current.token.item(Int.self)
             if eosTokenIDs.contains(token) { decoding.stopReason = "eos"; return }

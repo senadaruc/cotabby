@@ -39,4 +39,14 @@ final class MLXRuntimeCoreTests: XCTestCase {
         try Data(count: 1_234).write(to: directory.appendingPathComponent("model.safetensors"))
         XCTAssertEqual(MLXRuntimeCore.weightsBytes(in: directory), 1_234)
     }
+
+    /// MLX reads its command-buffer limits once, when its GPU device is created, so creating a core
+    /// (which the app does before any MLX call) must have set them. A value set by the user wins.
+    func testCreatingACoreRaisesMLXsCommandBufferLimits() {
+        _ = MLXRuntimeCore()
+        XCTAssertNotNil(ProcessInfo.processInfo.environment["MLX_MAX_OPS_PER_BUFFER"])
+        XCTAssertNotNil(ProcessInfo.processInfo.environment["MLX_MAX_MB_PER_BUFFER"])
+        XCTAssertEqual(MLXRuntimeCore.commandBufferEnvironment["MLX_MAX_OPS_PER_BUFFER"], "1000")
+        XCTAssertEqual(MLXRuntimeCore.commandBufferEnvironment["MLX_MAX_MB_PER_BUFFER"], "1000")
+    }
 }
