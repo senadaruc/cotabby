@@ -7,6 +7,7 @@ import Logging
 nonisolated protocol MLXRuntimeCoreProtocol: AnyObject, Sendable {
     func load(directory: URL, cacheLimitBytes: Int) async throws
     func unload()
+    func setResident(_ resident: Bool) async
     func resetPromptCache()
     func beginOperation() -> UInt64
     func abort(_ operation: UInt64)
@@ -31,6 +32,11 @@ extension MLXRuntimeCore: MLXRuntimeCoreProtocol {}
 /// Rewrite borrows it through `withRewriteModel` and, when autocomplete is not on MLX, the model
 /// is loaded for the rewrite and released after `rewriteIdleSeconds` without one. Both use the
 /// model the settings name, so there is never a second copy of the weights.
+///
+/// The weights are wired so they stay on the GPU between keystrokes. Like a memory-mapped
+/// llama.cpp model they are still given back when macOS needs memory: a pressure warning unwires
+/// them (macOS may then compress or page them out; suggestions keep working), and critical
+/// pressure unloads the model until pressure is back to normal, when it loads again.
 @MainActor
 final class MLXRuntimeManager: ObservableObject, LlamaRuntimeGenerating {
     /// How long a model loaded only for Rewrite stays in memory after the last rewrite.
@@ -49,6 +55,10 @@ final class MLXRuntimeManager: ObservableObject, LlamaRuntimeGenerating {
     private var loaded: MLXRuntimeLoad?
     private var loadTask: Task<Void, Never>?
     private var loadGeneration: UInt64 = 0
+    private var memoryPressure: MLXMemoryPressure = .normal
+    /// Set by critical pressure, cleared when pressure is back to normal: no model loads meanwhile.
+    private var heldForMemoryPressure = false
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
 
     init(
         core: any MLXRuntimeCoreProtocol = MLXRuntimeCore(),
@@ -77,6 +87,8 @@ final class MLXRuntimeManager: ObservableObject, LlamaRuntimeGenerating {
 
     /// Unloads the model now; used when the app quits.
     func shutdown() {
+        memoryPressureSource?.cancel()
+        memoryPressureSource = nil
         loadTask?.cancel()
         rewriteIdleTask?.cancel()
         loaded = nil
@@ -118,7 +130,60 @@ final class MLXRuntimeManager: ObservableObject, LlamaRuntimeGenerating {
         return rewriteLoad
     }
 
+    // MARK: - Memory pressure
+
+    /// Follows macOS's memory-pressure notifications for the app's lifetime.
+    func startObservingMemoryPressure() {
+        guard memoryPressureSource == nil else { return }
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.normal, .warning, .critical], queue: .main)
+        source.setEventHandler { [weak self, weak source] in
+            guard let event = source?.data else { return }
+            let level: MLXMemoryPressure = event.contains(.critical) ? .critical : event.contains(.warning) ? .warning : .normal
+            MainActor.assumeIsolated { self?.handleMemoryPressure(level) }
+        }
+        source.resume()
+        memoryPressureSource = source
+    }
+
+    func handleMemoryPressure(_ level: MLXMemoryPressure) {
+        let previous = memoryPressure
+        guard level != previous else { return }
+        memoryPressure = level
+        CotabbyLogger.runtime.info("MLX memory pressure", metadata: ["level": .string("\(level)")])
+        let core = self.core
+        switch level {
+        case .critical:
+            heldForMemoryPressure = true
+            unloadNow()
+            reconcile()
+        case .warning:
+            // Still tight after critical: the model stays unloaded until pressure is normal.
+            if !heldForMemoryPressure { Task { await core.setResident(false) } }
+        case .normal:
+            if heldForMemoryPressure {
+                heldForMemoryPressure = false
+                reconcile() // loading wires the weights again
+            } else if previous == .warning {
+                Task { await core.setResident(true) }
+            }
+        }
+    }
+
+    private func unloadNow() {
+        loadGeneration &+= 1
+        loadTask?.cancel()
+        loadTask = nil
+        if loaded != nil { CotabbyLogger.runtime.info("MLX model unloaded") }
+        loaded = nil
+        core.unload()
+    }
+
     private func reconcile() {
+        if heldForMemoryPressure, target != nil {
+            // Loading now would take back the memory macOS just asked for.
+            state = .unavailable(.memoryPressure)
+            return
+        }
         guard let target else {
             loadTask?.cancel()
             loadTask = nil
@@ -156,7 +221,12 @@ final class MLXRuntimeManager: ObservableObject, LlamaRuntimeGenerating {
                     _ = try core.generate(.text("Warm up."), options: Self.warmUpOptions, operation: core.beginOperation(), onPartial: nil)
                 }.value
                 core.resetPromptCache()
-                guard let self, generation == self.loadGeneration else { return }
+                guard let self, generation == self.loadGeneration, !Task.isCancelled else {
+                    // Superseded. A newer load replaces these weights itself; with none coming (MLX
+                    // deselected, or memory pressure) they must be freed, not left loaded.
+                    if let self, self.loadTask == nil, self.loaded == nil { core.unload() }
+                    return
+                }
                 self.loaded = load
                 self.loadTask = nil
                 self.state = .ready(modelID: load.modelID)

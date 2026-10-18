@@ -869,6 +869,7 @@ final class CotabbyAppEnvironment {
     /// drives the runtime.
     func startMLXEngine() {
         Task.detached(priority: .utility) { await MLXLegacyCleanup.run() }
+        mlxRuntime.startObservingMemoryPressure()
         Task { [weak self] in await self?.mlxModelDownloader.refreshCache() }
         observeMLXEngine()
     }

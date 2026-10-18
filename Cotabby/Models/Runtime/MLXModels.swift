@@ -166,6 +166,8 @@ nonisolated enum MLXUnavailableReason: Equatable, Sendable {
     case modelNotDownloaded(MLXRepoID)
     /// The model is downloaded but `MLXModelCompatibility` rejected it; the string is the reason.
     case modelIncompatible(MLXRepoID, String)
+    /// macOS reported critical memory pressure, so the model was unloaded to give its memory back.
+    case memoryPressure
 
     var message: String {
         switch self {
@@ -173,6 +175,7 @@ nonisolated enum MLXUnavailableReason: Equatable, Sendable {
         case .noModel: return "Choose an MLX model in Settings → Engine & Model."
         case .modelNotDownloaded(let id): return "Download \(id.value) in Settings → Engine & Model."
         case .modelIncompatible(let id, let reason): return "\(id.value) can't run on MLX: \(reason)"
+        case .memoryPressure: return "MLX gave its memory back to macOS and loads again when memory frees up."
         }
     }
 }
@@ -249,4 +252,19 @@ nonisolated struct MLXDownloadState: Equatable, Sendable {
     var fraction: Double?
     var failure: String?
     var isActive: Bool
+}
+
+/// macOS's memory pressure as `MLXRuntimeManager` reacts to it.
+nonisolated enum MLXMemoryPressure: Equatable, Sendable, CustomStringConvertible {
+    case normal
+    case warning
+    case critical
+
+    var description: String {
+        switch self {
+        case .normal: return "normal"
+        case .warning: return "warning"
+        case .critical: return "critical"
+        }
+    }
 }

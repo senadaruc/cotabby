@@ -15,7 +15,11 @@ final class FakeMLXRuntimeCore: MLXRuntimeCoreProtocol, @unchecked Sendable {
     private var _prompts: [MLXRuntimeCore.PromptInput] = []
     private var _options: [LlamaGenerationOptions] = []
     private var next: UInt64 = 0
+    private var _residency: [Bool] = []
     var loadError: Error?
+    /// When set, `load` waits until `releaseLoad()` is called, to test what happens mid-load.
+    var loadBlocks = false
+    private var loadReleased = false
     var generationBlocksUntilAborted = false
     /// What a (non-warm-up) generation returns.
     var generatedText = "generated"
@@ -28,11 +32,18 @@ final class FakeMLXRuntimeCore: MLXRuntimeCoreProtocol, @unchecked Sendable {
     var generationStarted: Bool { lock.withLock { _started } }
     var prompts: [MLXRuntimeCore.PromptInput] { lock.withLock { _prompts } }
     var options: [LlamaGenerationOptions] { lock.withLock { _options } }
+    /// Every `setResident` call, in order.
+    var residencyChanges: [Bool] { lock.withLock { _residency } }
+
+    func releaseLoad() { lock.withLock { loadReleased = true } }
 
     func load(directory: URL, cacheLimitBytes: Int) async throws {
         if let loadError { throw loadError }
+        // Ignores cancellation, as a real load that is already reading weights may.
+        while loadBlocks, !lock.withLock({ loadReleased }) { usleep(5_000) }
         lock.withLock { _loads.append(directory); _cacheLimits.append(cacheLimitBytes) }
     }
+    func setResident(_ resident: Bool) async { lock.withLock { _residency.append(resident) } }
     func unload() { lock.withLock { _unloads += 1 } }
     func resetPromptCache() { lock.withLock { _resets += 1 } }
     func beginOperation() -> UInt64 { lock.withLock { next += 1; return next } }

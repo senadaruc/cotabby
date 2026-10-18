@@ -56,6 +56,8 @@ nonisolated final class MLXRuntimeCore: @unchecked Sendable {
     /// live TextEdit run, every one of them after more than 1.1 s idle), the cost of bringing the
     /// weights back. llama.cpp's Metal backend keeps its weights resident the same way.
     private var wiredTicket: WiredMemoryTicket?
+    /// The loaded weights' size, for a new ticket after `setResident(false)`.
+    private var weightsBytes = 0
     /// Pings MLX's queue while suggestions are recent, for pauses longer than wiring alone covers.
     private let keepAlive = MLXResidencyKeepAlive.standard
     private var keepAliveTimer: DispatchSourceTimer?
@@ -84,10 +86,11 @@ nonisolated final class MLXRuntimeCore: @unchecked Sendable {
             pieces.append(MLXHealingVocabulary.pieceBytes(token))
         }
         let healing = MLXHealingVocabulary(pieces: pieces)
-        let ticket = MLXLMCommon.WiredSumPolicy().ticket(size: Self.weightsBytes(in: directory), kind: .active)
+        let bytes = Self.weightsBytes(in: directory)
+        let ticket = MLXLMCommon.WiredSumPolicy().ticket(size: bytes, kind: .active)
         _ = await ticket.start()
         let previousTicket = workLock.withLock { () -> WiredMemoryTicket? in
-            defer { wiredTicket = ticket }
+            defer { wiredTicket = ticket; weightsBytes = bytes }
             return wiredTicket
         }
         if let previousTicket { _ = await previousTicket.end() }
@@ -127,6 +130,31 @@ nonisolated final class MLXRuntimeCore: @unchecked Sendable {
 
     func resetPromptCache() {
         workLock.withLock { resetCacheLocked() }
+    }
+
+    /// Takes the loaded weights out of wired memory (false) so macOS may compress or page them out
+    /// under memory pressure, as it can a memory-mapped llama.cpp model, or wires them again (true).
+    /// Generation keeps working either way; unwired, the first request after a pause can be slower.
+    func setResident(_ resident: Bool) async {
+        if resident {
+            let bytes = workLock.withLock { context != nil && wiredTicket == nil ? weightsBytes : 0 }
+            guard bytes > 0 else { return }
+            let ticket = MLXLMCommon.WiredSumPolicy().ticket(size: bytes, kind: .active)
+            _ = await ticket.start()
+            let stale = workLock.withLock { () -> WiredMemoryTicket? in
+                // Unloaded or wired by a load while the ticket started: this one is not needed.
+                guard context != nil, wiredTicket == nil else { return ticket }
+                wiredTicket = ticket
+                return nil
+            }
+            if let stale { _ = await stale.end() }
+        } else {
+            let ticket = workLock.withLock { () -> WiredMemoryTicket? in
+                defer { wiredTicket = nil }
+                return wiredTicket
+            }
+            if let ticket { _ = await ticket.end() }
+        }
     }
 
     // MARK: - Residency keep-alive

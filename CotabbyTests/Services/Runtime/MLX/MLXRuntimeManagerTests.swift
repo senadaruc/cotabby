@@ -109,6 +109,66 @@ final class MLXRuntimeManagerTests: XCTestCase {
         }
         XCTFail("condition not met")
     }
+    // MARK: - Memory pressure
+
+    func test_memoryWarningReleasesTheReservationButKeepsTheModel() async throws {
+        let core = FakeMLXRuntimeCore()
+        let manager = MLXRuntimeManager(core: core)
+        manager.apply(.load(load))
+        try await waitUntil { manager.state == .ready(modelID: self.load.modelID) }
+        manager.handleMemoryPressure(.warning)
+        try await waitUntil { core.residencyChanges == [false] }
+        XCTAssertEqual(manager.state, .ready(modelID: load.modelID), "MLX keeps working while macOS may reclaim pages")
+        XCTAssertEqual(core.unloads, 0)
+        manager.handleMemoryPressure(.normal)
+        try await waitUntil { core.residencyChanges == [false, true] }
+    }
+
+    func test_criticalPressureUnloadsAndReloadsWhenMemoryIsBack() async throws {
+        let core = FakeMLXRuntimeCore()
+        let manager = MLXRuntimeManager(core: core)
+        manager.apply(.load(load))
+        try await waitUntil { manager.state == .ready(modelID: self.load.modelID) }
+        manager.handleMemoryPressure(.critical)
+        XCTAssertEqual(manager.state, .unavailable(.memoryPressure))
+        XCTAssertEqual(core.unloads, 1)
+        manager.handleMemoryPressure(.normal)
+        try await waitUntil { manager.state == .ready(modelID: self.load.modelID) }
+        XCTAssertEqual(core.loads.count, 2)
+    }
+
+    func test_aDesireChangeDuringCriticalPressureDoesNotLoad() async throws {
+        let core = FakeMLXRuntimeCore()
+        let manager = MLXRuntimeManager(core: core)
+        manager.handleMemoryPressure(.critical)
+        manager.apply(.load(load))
+        XCTAssertEqual(manager.state, .unavailable(.memoryPressure))
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(core.loads, [])
+    }
+
+    func test_aLoadInterruptedByCriticalPressureFreesItsWeights() async throws {
+        let core = FakeMLXRuntimeCore()
+        core.loadBlocks = true
+        let manager = MLXRuntimeManager(core: core)
+        manager.apply(.load(load))
+        manager.handleMemoryPressure(.critical)
+        core.releaseLoad()
+        try await waitUntil { core.loads.count == 1 && core.unloads == 2 }
+        XCTAssertEqual(manager.state, .unavailable(.memoryPressure), "the finished load must not make MLX ready")
+    }
+
+    func test_deselectingWhileLoadingNeverBecomesReady() async throws {
+        let core = FakeMLXRuntimeCore()
+        core.loadBlocks = true
+        let manager = MLXRuntimeManager(core: core)
+        manager.apply(.load(load))
+        manager.apply(.stopped)
+        core.releaseLoad()
+        try await waitUntil { core.loads.count == 1 && core.unloads >= 1 }
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(manager.state, .idle)
+    }
 }
 
 private actor IdleGate {
@@ -123,4 +183,5 @@ private actor IdleGate {
         continuation?.resume()
         continuation = nil
     }
+
 }
