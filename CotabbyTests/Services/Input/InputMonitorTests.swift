@@ -40,6 +40,46 @@ final class InputMonitorTests: XCTestCase {
         return { kinds }
     }
 
+    // MARK: - Accept tap routing off the main thread
+
+    /// The accept tap runs on its own thread so typing never waits for the main thread, which can
+    /// be busy for tens of milliseconds reading a slow host's text field (WhatsApp: 33-98 ms per
+    /// read). Only keys that could be an accept key go to the main thread for the decision.
+    func test_acceptTapPassesOrdinaryKeysWithoutTheMainThread() {
+        let monitor = makeMonitor()
+        monitor.acceptanceBindingProvider = { (Self.tab, []) }
+        monitor.fullAcceptanceBindingProvider = { (Self.backtick, [.shift]) }
+        monitor.refreshAcceptTapRouting()
+
+        XCTAssertFalse(monitor.acceptTapRouting.withLock { $0.needsMainThread(keyCode: 51) }, "Backspace")
+        XCTAssertFalse(monitor.acceptTapRouting.withLock { $0.needsMainThread(keyCode: 0) }, "a letter")
+        XCTAssertTrue(monitor.acceptTapRouting.withLock { $0.needsMainThread(keyCode: Self.tab) })
+        // Matched by key code alone: whether the modifiers make it an accept key is the main
+        // thread's decision, as before.
+        XCTAssertTrue(monitor.acceptTapRouting.withLock { $0.needsMainThread(keyCode: Self.backtick) })
+    }
+
+    func test_acceptTapSendsEveryKeyToTheMainThreadWhileAnEmojiCaptureIsOpen() {
+        let monitor = makeMonitor()
+        monitor.acceptanceBindingProvider = { (Self.tab, []) }
+        monitor.captureInterceptionActive = true
+        monitor.refreshAcceptTapRouting()
+
+        XCTAssertTrue(monitor.acceptTapRouting.withLock { $0.needsMainThread(keyCode: 51) })
+        XCTAssertTrue(monitor.acceptTapRouting.withLock { $0.needsMainThread(keyCode: 0) })
+    }
+
+    func test_acceptTapRoutingFollowsAChangedBinding() {
+        let monitor = makeMonitor()
+        monitor.acceptanceBindingProvider = { (Self.tab, []) }
+        monitor.refreshAcceptTapRouting()
+        monitor.acceptanceBindingProvider = { (Self.backtick, []) }
+        monitor.refreshAcceptTapRouting()
+
+        XCTAssertFalse(monitor.acceptTapRouting.withLock { $0.needsMainThread(keyCode: Self.tab) })
+        XCTAssertTrue(monitor.acceptTapRouting.withLock { $0.needsMainThread(keyCode: Self.backtick) })
+    }
+
     // MARK: - Observer classification
 
     func test_observerClassifiesKeysByBehavior() {

@@ -1,6 +1,7 @@
 import ApplicationServices
 import Foundation
 import Logging
+import struct os.OSAllocatedUnfairLock
 
 /// File overview:
 /// Owns the global input event taps used to detect typing, navigation, dismissal keys, `Tab`
@@ -104,6 +105,9 @@ final class InputMonitor {
 
     private var acceptTap: CFMachPort?
     private var acceptRunLoopSource: CFRunLoopSource?
+    /// What the accept tap's own thread needs to pass a key through without the main thread.
+    /// Internal so tests can check the routing without installing a tap.
+    nonisolated let acceptTapRouting = OSAllocatedUnfairLock(initialState: AcceptTapRouting())
     /// Whether `acceptTap` is currently intercepting. Between suggestions the tap is disabled
     /// rather than destroyed (see `updateAcceptTapState`), so this distinguishes an intentional
     /// pause from the system disabling it on timeout, which the callback re-enables.
@@ -224,6 +228,7 @@ final class InputMonitor {
     /// When the tap exists solely for emoji capture, the observer must keep routing the accept key
     /// (Tab) to the coordinator so the emoji controller — not the suggestion accept path — acts on it.
     private func updateAcceptTapState() {
+        refreshAcceptTapRouting()
         let wantsTap = permissionProvider() && (suggestionInterceptionActive || captureInterceptionActive)
         // Only a visible suggestion claims the accept key at the observer layer. When the tap exists
         // solely for emoji capture, the observer must keep routing the accept key (Tab) to the
@@ -262,6 +267,15 @@ final class InputMonitor {
                 }
             }
         }
+    }
+
+    /// Copies what the accept tap's thread decides on: the accept bindings' key codes and whether an
+    /// emoji capture is open. Refreshed on every suggestion show and hide, so a binding changed in
+    /// Settings applies from the next suggestion, the first time the tap can consume it.
+    func refreshAcceptTapRouting() {
+        let keyCodes: Set<CGKeyCode> = [acceptanceBindingProvider().keyCode, fullAcceptanceBindingProvider().keyCode]
+        let captureActive = captureInterceptionActive
+        acceptTapRouting.withLock { $0 = AcceptTapRouting(acceptKeyCodes: keyCodes, captureActive: captureActive) }
     }
 
     private func installObserverTapIfNeeded() {
@@ -320,14 +334,35 @@ final class InputMonitor {
         }
 
         let mask = (1 << CGEventType.keyDown.rawValue)
+        // Runs on the accept tap's own thread (`AcceptTapThread`). An active tap holds every key
+        // until its callback returns, and the main thread can be busy for tens of milliseconds at a
+        // time reading a slow host's text field over Accessibility (WhatsApp: 33-98 ms a read, 57%
+        // of the main thread while typing). Serviced on the main run loop, every keystroke,
+        // Backspace included, waited for those reads. Keys that cannot be an accept key now pass
+        // here at once; a possible accept key, or any key during an emoji capture, still gets the
+        // main thread's decision, synchronously, so "insert" and "consume the key" stay one step.
         let callback: CGEventTapCallBack = { _, type, event, userInfo in
             guard let userInfo else {
                 return Unmanaged.passUnretained(event)
             }
 
             let monitor = Unmanaged<InputMonitor>.fromOpaque(userInfo).takeUnretainedValue()
-            return MainActor.assumeIsolated {
-                monitor.handleAcceptTap(type: type, event: event)
+            switch type {
+            case .keyDown:
+                let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+                guard monitor.acceptTapRouting.withLock({ $0.needsMainThread(keyCode: keyCode) }) else {
+                    return Unmanaged.passUnretained(event)
+                }
+                return DispatchQueue.main.sync {
+                    MainActor.assumeIsolated { monitor.handleAcceptTap(type: type, event: event) }
+                }
+            case .tapDisabledByTimeout, .tapDisabledByUserInput:
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated { monitor.reenableAcceptTapAfterSystemDisable() }
+                }
+                return Unmanaged.passUnretained(event)
+            default:
+                return Unmanaged.passUnretained(event)
             }
         }
 
@@ -352,7 +387,8 @@ final class InputMonitor {
         acceptRunLoopSource = source
 
         if let source {
-            CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+            CFRunLoopAddSource(AcceptTapThread.runLoop, source, .commonModes)
+            CFRunLoopWakeUp(AcceptTapThread.runLoop)
         }
 
         CGEvent.tapEnable(tap: tap, enable: true)
@@ -432,7 +468,7 @@ final class InputMonitor {
             return
         }
         if let source = acceptRunLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+            CFRunLoopRemoveSource(AcceptTapThread.runLoop, source, .commonModes)
         }
         acceptRunLoopSource = nil
 
@@ -588,11 +624,7 @@ final class InputMonitor {
     func handleAcceptTap(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
-            // Only undo a system-initiated disable; a tap Cotabby paused between suggestions stays off.
-            if let acceptTap, acceptTapEnabled {
-                CotabbyLogger.app.warning("Accept tap was disabled by system, re-enabling")
-                CGEvent.tapEnable(tap: acceptTap, enable: true)
-            }
+            reenableAcceptTapAfterSystemDisable()
             return Unmanaged.passUnretained(event)
 
         case .keyDown:
@@ -619,6 +651,13 @@ final class InputMonitor {
         default:
             return Unmanaged.passUnretained(event)
         }
+    }
+
+    /// Only undoes a system-initiated disable; a tap Cotabby paused between suggestions stays off.
+    func reenableAcceptTapAfterSystemDisable() {
+        guard let acceptTap, acceptTapEnabled else { return }
+        CotabbyLogger.app.warning("Accept tap was disabled by system, re-enabling")
+        CGEvent.tapEnable(tap: acceptTap, enable: true)
     }
 
     /// Testable resolution of a keydown at the active tap: the emoji decider wins while a capture is
@@ -797,6 +836,43 @@ final class InputMonitor {
 
         return nil
     }
+}
+
+/// What the accept tap's thread knows without asking the main thread.
+nonisolated struct AcceptTapRouting: Equatable, Sendable {
+    var acceptKeyCodes: Set<CGKeyCode> = []
+    var captureActive = false
+
+    /// A key the main thread must decide: one whose key code an accept binding uses (whether its
+    /// modifiers make it an accept key is part of that decision), or any key while an emoji
+    /// capture is open, since the capture consumes navigation and commit keys.
+    func needsMainThread(keyCode: CGKeyCode) -> Bool {
+        captureActive || acceptKeyCodes.contains(keyCode)
+    }
+}
+
+/// The run loop the accept tap is serviced on: a thread of its own, never the main thread.
+nonisolated private enum AcceptTapThread {
+    static let runLoop: CFRunLoop = {
+        let ready = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var loop: CFRunLoop?
+        let thread = Thread {
+            loop = CFRunLoopGetCurrent()
+            // A run loop with no input source returns at once; this port keeps it running while
+            // no tap is installed.
+            RunLoop.current.add(NSMachPort(), forMode: .default)
+            ready.signal()
+            while true {
+                RunLoop.current.run()
+            }
+        }
+        thread.name = "Cotabby accept tap"
+        thread.qualityOfService = .userInteractive
+        thread.start()
+        ready.wait()
+        guard let loop else { preconditionFailure("accept tap thread started without a run loop") }
+        return loop
+    }()
 }
 
 extension InputMonitor: SuggestionInputMonitoring {}
