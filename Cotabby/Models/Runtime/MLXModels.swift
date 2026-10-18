@@ -314,6 +314,71 @@ nonisolated enum MLXServerState: Equatable, Sendable {
     }
 }
 
+/// The in-process MLX runtime's lifecycle as the router, Settings and the menu bar see it.
+nonisolated enum MLXRuntimeState: Equatable, Sendable {
+    case idle
+    case unavailable(MLXUnavailableReason)
+    case loading(modelID: String)
+    case ready(modelID: String)
+    case failed(reason: String)
+
+    var summary: String {
+        switch self {
+        case .idle: return "Not loaded"
+        case .unavailable(let reason): return reason.message
+        case .loading(let modelID): return "Loading \(modelID)…"
+        case .ready(let modelID): return "Running \(modelID)"
+        case .failed(let reason): return reason
+        }
+    }
+
+    /// Text for the Settings attention dot and callout. Nil while the model is loaded, loading, or
+    /// simply not selected: none of those need the user to act.
+    var problem: String? {
+        switch self {
+        case .unavailable(let reason): return reason.message
+        case .failed(let reason): return reason
+        case .idle, .loading, .ready: return nil
+        }
+    }
+
+    /// The `.unavailable` message a suggestion request gets while the model is not ready.
+    var notReadyMessage: String {
+        switch self {
+        case .loading(let modelID): return "MLX is loading \(modelID)…"
+        case .unavailable(let reason): return reason.message
+        case .failed(let reason): return "MLX stopped: \(reason)"
+        case .idle: return "MLX is not running."
+        case .ready: return "MLX is ready."
+        }
+    }
+
+    var readyModelID: String? {
+        if case .ready(let modelID) = self { return modelID }
+        return nil
+    }
+}
+
+/// Exactly what the runtime should hold in memory. Equality decides whether a loaded model must be
+/// replaced.
+nonisolated struct MLXRuntimeLoad: Equatable, Sendable {
+    let modelID: String
+    /// The model's snapshot directory in the Hugging Face cache.
+    let directory: URL
+    /// How much memory MLX may keep in its buffer cache between requests
+    /// (`cotabbyMLXPromptCacheBytes`).
+    let cacheLimitBytes: Int
+}
+
+/// What the resolver asks of the runtime: nothing, explain why not, or hold this model.
+nonisolated enum MLXRuntimeDesire: Equatable, Sendable {
+    /// MLX is not selected, or a prerequisite is still being checked.
+    case stopped
+    /// MLX is selected but cannot run; the reason is shown to the user.
+    case unavailable(MLXUnavailableReason)
+    case load(MLXRuntimeLoad)
+}
+
 /// One model download as the pane shows it.
 nonisolated struct MLXDownloadState: Equatable, Sendable {
     let repoID: MLXRepoID
