@@ -27,7 +27,7 @@ struct CotabbyApp: App {
                 suggestionSettings: appDelegate.suggestionSettings,
                 foundationModelAvailabilityService: appDelegate.foundationModelAvailabilityService,
                 powerSourceMonitor: appDelegate.powerSourceMonitor,
-                mlxServerManager: appDelegate.mlxServerManager,
+                mlxRuntime: appDelegate.mlxRuntime,
                 menuResourceMonitor: appDelegate.menuResourceMonitor,
                 appUpdateManager: appDelegate.appUpdateManager,
                 onOpenSettings: {

@@ -22,7 +22,7 @@ struct MenuBarView: View {
     @ObservedObject var suggestionSettings: SuggestionSettingsModel
     @ObservedObject var foundationModelAvailabilityService: FoundationModelAvailabilityService
     @ObservedObject var powerSourceMonitor: PowerSourceMonitor
-    @ObservedObject var mlxServerManager: MLXServerManager
+    @ObservedObject var mlxRuntime: MLXRuntimeManager
     @ObservedObject var menuResourceMonitor: MenuResourceMonitor
     let appUpdateManager: AppUpdateManager
     let onOpenSettings: () -> Void
@@ -209,12 +209,12 @@ struct MenuBarView: View {
 
                 // MLX pauses suggestions until its server is ready, so say why (spec section 8).
                 if suggestionSettings.selectedEngine == .mlx {
-                    if let problem = mlxServerManager.state.problem {
+                    if let problem = mlxRuntime.state.problem {
                         Text(problem)
                             .font(.caption)
                             .foregroundStyle(.orange)
-                    } else if case .starting = mlxServerManager.state {
-                        Text(mlxServerManager.state.summary)
+                    } else if case .loading = mlxRuntime.state {
+                        Text(mlxRuntime.state.summary)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

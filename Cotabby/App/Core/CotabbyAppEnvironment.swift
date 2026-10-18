@@ -25,9 +25,8 @@ final class CotabbyAppEnvironment {
     /// MLX engine services, created once and kept for the app's lifetime. Settings observes them;
     /// `startMLXEngine()` (called by AppDelegate outside the test host) starts their work.
     let mlxToolchainProvisioner: MLXToolchainProvisioner
-    let mlxServerManager: MLXServerManager
-    /// The second, on-demand MLX server that Rewrite with MLX uses (on autocomplete's MLX model).
-    let mlxRewriteServer: MLXRewriteServerController
+    /// The in-process MLX runtime: the one MLX model autocomplete and Rewrite share.
+    let mlxRuntime: MLXRuntimeManager
     let menuResourceMonitor: MenuResourceMonitor
     let mlxModelDownloader: MLXModelDownloader
     let foundationModelAvailabilityService: FoundationModelAvailabilityService
@@ -78,9 +77,6 @@ final class CotabbyAppEnvironment {
     let focusDebugOverlayController: FocusDebugOverlayController?
 
     private var cancellables = Set<AnyCancellable>()
-    /// Serializes `apply(_:)` calls to the MLX server manager: each new task awaits the previous
-    /// one, so a quick engine switch and switch-back reach the manager in order.
-    private var mlxApplyChain: Task<Void, Never>?
 
     init() {
         CotabbyLogger.app.info("Building dependency graph")
@@ -103,16 +99,8 @@ final class CotabbyAppEnvironment {
         )
         let mlxPaths = MLXPaths.standard()
         let mlxToolchainProvisioner = MLXToolchainProvisioner.live(paths: mlxPaths)
-        let mlxServerManager = MLXServerManager.live(paths: mlxPaths)
+        let mlxRuntime = MLXRuntimeManager()
         let mlxModelDownloader = MLXModelDownloader.live()
-        // The rewrite server is a second manager with its own pid file, so the launch-time orphan
-        // sweep and the two stop paths can tell the two processes apart.
-        let mlxRewriteServer = MLXRewriteServerController(
-            manager: MLXServerManager.live(paths: mlxPaths, pidFileURL: mlxPaths.rewriteServerPIDFile, label: "rewrite"),
-            toolchain: { [weak mlxToolchainProvisioner] in mlxToolchainProvisioner?.state ?? .checking },
-            cachedModels: { [weak mlxModelDownloader] in mlxModelDownloader?.cachedModels },
-            rejectedModels: { [weak mlxModelDownloader] in mlxModelDownloader?.rejectedModels ?? [:] }
-        )
         let foundationModelAvailabilityService = FoundationModelAvailabilityService()
         let powerSourceMonitor = PowerSourceMonitor()
         let lowPowerModeMonitor = LowPowerModeMonitor()
@@ -214,27 +202,13 @@ final class CotabbyAppEnvironment {
         let qualityMetricsStore = SuggestionQualityMetricsStore()
         // Live CPU/RAM graph backing for the Performance pane. Holds no state until the pane asks it
         // to start sampling, so constructing it eagerly here costs nothing.
-        // With MLX the model runs in a separate server process, so the sampler adds that process's
-        // CPU and memory while one is running; otherwise the graph would read near zero.
-        let systemMetricsStore = SystemMetricsStore(sampler: { [weak mlxServerManager, weak mlxRewriteServer] in
-            // Autocomplete's server and the rewrite server (when it is up) both count.
-            let pids = MainActor.assumeIsolated {
-                [mlxServerManager?.runningProcessIdentifier, mlxRewriteServer?.manager.runningProcessIdentifier].compactMap { $0 }
-            }
-            var sample = SystemResourceSampler.sample(extraProcessIDs: pids)
-            sample.includesMLXServer = !pids.isEmpty
-            return sample
-        })
+        // MLX runs inside Cotabby, so its CPU and memory are part of Cotabby's own process.
+        let systemMetricsStore = SystemMetricsStore(sampler: { SystemResourceSampler.sample(extraProcessIDs: []) })
         // Compact CPU/RAM/GPU line in the menu bar popover. It samples with its own baselines
         // (`MenuResourceSampler`) so it cannot disturb the Performance pane's CPU deltas.
         let menuResourceSampler = MenuResourceSampler()
         let menuResourceMonitor = MenuResourceMonitor(
-            sample: { [weak mlxServerManager, weak mlxRewriteServer] in
-                let pids = MainActor.assumeIsolated {
-                    [mlxServerManager?.runningProcessIdentifier, mlxRewriteServer?.manager.runningProcessIdentifier].compactMap { $0 }
-                }
-                return menuResourceSampler.sample(extraProcessIDs: pids)
-            },
+            sample: { menuResourceSampler.sample(extraProcessIDs: []) },
             onStop: { menuResourceSampler.reset() }
         )
         // What the performance tuner has learned per model (speed, accepted lengths), and the
@@ -340,10 +314,9 @@ final class CotabbyAppEnvironment {
                 suggestionSettings?.openAICompatibleModelName.nonEmpty
             },
             profileStore: modelProfileStore,
-            mlxEngine: OpenAICompatibleSuggestionEngine.mlx(
-                client: openAICompatibleClient,
-                serverManager: mlxServerManager
-            ),
+            // The same engine as llama.cpp, on the in-process MLX runtime: streamed partials,
+            // focus-time prefill, and a cancel that keeps the prompt cache.
+            mlxEngine: LlamaSuggestionEngine(runtimeManager: mlxRuntime),
             mlxModelNameProvider: { [weak suggestionSettings] in
                 suggestionSettings?.mlxModelID.nonEmpty
             }
@@ -447,11 +420,13 @@ final class CotabbyAppEnvironment {
                 apiKey: { [weak suggestionSettings] in try suggestionSettings?.openAICompatibleAPIKey() }
             ),
             mlx: MLXRewriteProvider(
-                controller: mlxRewriteServer,
-                autocompleteServer: mlxServerManager,
-                autocompleteEngine: { [weak suggestionSettings] in suggestionSettings?.selectedEngine ?? .llamaOpenSource },
+                runtime: mlxRuntime,
                 modelID: { [weak suggestionSettings] in suggestionSettings?.mlxModelID ?? "" },
-                client: openAICompatibleClient
+                cachedModels: { [weak mlxModelDownloader] in mlxModelDownloader?.cachedModels },
+                rejectedModels: { [weak mlxModelDownloader] in mlxModelDownloader?.rejectedModels ?? [:] },
+                cacheLimitBytes: { [weak suggestionSettings] in
+                    suggestionSettings?.mlxPromptCacheBytes ?? SuggestionSettingsStore.defaultMLXPromptCacheBytes
+                }
             ),
             api: APIRewriteProvider(
                 client: openAICompatibleClient,
@@ -502,7 +477,7 @@ final class CotabbyAppEnvironment {
             suggestionSettings: suggestionSettings,
             openAICompatibleConnectionModel: openAICompatibleConnectionModel,
             mlxToolchainProvisioner: mlxToolchainProvisioner,
-            mlxServerManager: mlxServerManager,
+            mlxRuntime: mlxRuntime,
             mlxModelDownloader: mlxModelDownloader,
             foundationModelAvailabilityService: foundationModelAvailabilityService,
             runtimeModel: runtimeModel,
@@ -658,8 +633,7 @@ final class CotabbyAppEnvironment {
         self.suggestionSettings = suggestionSettings
         self.openAICompatibleConnectionModel = openAICompatibleConnectionModel
         self.mlxToolchainProvisioner = mlxToolchainProvisioner
-        self.mlxServerManager = mlxServerManager
-        self.mlxRewriteServer = mlxRewriteServer
+        self.mlxRuntime = mlxRuntime
         self.menuResourceMonitor = menuResourceMonitor
         self.mlxModelDownloader = mlxModelDownloader
         self.foundationModelAvailabilityService = foundationModelAvailabilityService
@@ -895,13 +869,14 @@ final class CotabbyAppEnvironment {
     }
 
     /// Starts MLX housekeeping once services start; never inside the XCTest host, where a stored
-    /// MLX selection must not launch Python. Order matters: a server orphaned by an earlier crash
-    /// is stopped before the toolchain check and cache scan, whose results then drive the server.
+    /// MLX selection must not load a model. A Python `mlx_lm.server` left by an earlier version of
+    /// Cotabby is stopped first; the cache scan's result then drives the runtime.
     func startMLXEngine() {
         Task { [weak self] in
             guard let self else { return }
-            await self.mlxServerManager.cleanUpOrphan()
-            await self.mlxRewriteServer.manager.cleanUpOrphan()
+            let paths = MLXPaths.standard()
+            await MLXServerManager.live(paths: paths).cleanUpOrphan()
+            await MLXServerManager.live(paths: paths, pidFileURL: paths.rewriteServerPIDFile, label: "rewrite").cleanUpOrphan()
             await self.mlxToolchainProvisioner.rescan(models: self.mlxModelDownloader)
         }
         observeMLXEngine()
@@ -942,55 +917,26 @@ final class CotabbyAppEnvironment {
             }
             .store(in: &cancellables)
 
-        // The on-demand rewrite server serves autocomplete's MLX model, and only while autocomplete
-        // is not on MLX (otherwise rewrites share autocomplete's server). Stop it whenever what it
-        // is for changes: the resolved rewrite provider, autocomplete moving to or from MLX, or
-        // that model (the next rewrite restarts it).
-        Publishers.CombineLatest3(
-            rewritePreferences.$preferences.map(\.provider),
-            suggestionSettings.$selectedEngine,
-            suggestionSettings.$mlxModelID
-        )
-        .map { provider, engine, model in
-            (RewriteProviderResolver.resolve(provider, autocompleteEngine: engine), engine == .mlx, model)
-        }
-        .removeDuplicates { $0 == $1 }
-        .dropFirst()
-        .sink { [weak self] _ in
-            guard let self else { return }
-            Task { await self.mlxRewriteServer.stop() }
-        }
-        .store(in: &cancellables)
-
-        // One pure decision from every input; each change is applied in order, so a quick
-        // engine switch and switch-back cannot reach the manager out of order.
+        // One pure decision from every input. `apply` is synchronous on the main actor, so changes
+        // reach the runtime in order.
         Publishers.CombineLatest4(
             suggestionSettings.$selectedEngine,
             suggestionSettings.$mlxModelID,
             suggestionSettings.$mlxPromptCacheBytes,
-            Publishers.CombineLatest3(
-                mlxToolchainProvisioner.$state, mlxModelDownloader.$cachedModels, mlxModelDownloader.$rejectedModels)
+            Publishers.CombineLatest(mlxModelDownloader.$cachedModels, mlxModelDownloader.$rejectedModels)
         )
-        .map { engine, modelID, cacheBytes, toolchainAndCache in
-            MLXServerDesireResolver.desire(
+        .map { engine, modelID, cacheBytes, cache in
+            MLXRuntimeDesireResolver.desire(
                 engine: engine,
                 isAppleSilicon: MLXHardware.isAppleSilicon,
-                toolchain: toolchainAndCache.0,
                 modelID: modelID,
-                cachedModels: toolchainAndCache.1,
-                promptCacheBytes: cacheBytes,
-                rejectedModels: toolchainAndCache.2
+                cachedModels: cache.0,
+                cacheLimitBytes: cacheBytes,
+                rejectedModels: cache.1
             )
         }
         .removeDuplicates()
-        .sink { [weak self] desire in
-            guard let self else { return }
-            let previous = self.mlxApplyChain
-            self.mlxApplyChain = Task { [weak self] in
-                await previous?.value
-                await self?.mlxServerManager.apply(desire)
-            }
-        }
+        .sink { [weak self] desire in self?.mlxRuntime.apply(desire) }
         .store(in: &cancellables)
     }
 }

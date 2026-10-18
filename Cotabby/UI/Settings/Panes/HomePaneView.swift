@@ -18,7 +18,7 @@ struct HomePaneView: View {
     @ObservedObject var foundationModelAvailabilityService: FoundationModelAvailabilityService
     @ObservedObject var runtimeModel: RuntimeBootstrapModel
     @ObservedObject var openAICompatibleConnectionModel: OpenAICompatibleConnectionModel
-    @ObservedObject var mlxServerManager: MLXServerManager
+    @ObservedObject var mlxRuntime: MLXRuntimeManager
     let attentionCategories: Set<SettingsCategory>
 
     @State private var query = ""
@@ -324,7 +324,7 @@ struct HomePaneView: View {
         case .appleIntelligence:
             return foundationModelAvailabilityService.isAvailable ? "Ready on this Mac" : "Unavailable"
         case .mlx:
-            if let problem = mlxServerManager.state.problem { return problem }
+            if let problem = mlxRuntime.state.problem { return problem }
             return suggestionSettings.mlxModelID.isEmpty ? "No model selected" : suggestionSettings.mlxModelID
         case .llamaOpenSource:
             let selected = runtimeModel.availableModels

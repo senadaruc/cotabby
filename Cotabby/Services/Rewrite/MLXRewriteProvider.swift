@@ -1,144 +1,115 @@
 import Foundation
 
 /// File overview:
-/// Rewrites with the MLX model autocomplete uses, on whichever server can serve it. There is no
-/// rewrite-only model: the model is `suggestionSettings.mlxModelID`.
-///
-/// - If autocomplete is on MLX, the rewrite always goes to autocomplete's server and never starts
-///   another one: a second copy of the same weights would double the memory the user chose to
-///   spend once. While that server is starting (launch, model change, a restart after a broken
-///   generator) the rewrite waits for it; if it failed or is off, the rewrite fails with its reason.
-/// - Only when autocomplete is not on MLX does the on-demand `MLXRewriteServerController` start a
-///   server on the same model (the first rewrite after idle takes ~10 s) and stop it after it has
-///   been idle for a while.
+/// Rewrites with the MLX model autocomplete uses, on the in-process runtime. There is no
+/// rewrite-only model: the model is `suggestionSettings.mlxModelID`, and the runtime holds at most
+/// one copy of it. When autocomplete is on MLX the rewrite runs on the already loaded model; when
+/// it is not, `MLXRuntimeManager.withRewriteModel` loads the model for the rewrite and releases it
+/// after a few idle minutes.
 ///
 /// The prompt follows the model: an instruct or chat model (`MLXModelCompatibility.isInstructName`)
-/// gets the instruct prompt through `streamChat`; a base model gets the base prompt with the example
-/// through the completions route, with the rewrite stop sequences and a budget from the selection.
-/// Weaker on base models, which the Settings pane says. The text never leaves the Mac, so
-/// `sendsOffDevice` is false and memory is allowed as for the other local providers. Follow-up E's
-/// broken-generator report goes to whichever server served the request. Owned by `RewriteEngine`.
+/// gets the instruct prompt through its chat template; a base model gets the base prompt with the
+/// example, the rewrite stop sequences and a budget from the selection. Weaker on base models,
+/// which the Settings pane says. The text never leaves the Mac, so `sendsOffDevice` is false and
+/// memory is allowed as for the other local providers. Owned by `RewriteEngine`.
 @MainActor
 final class MLXRewriteProvider: RewriteProviding {
-    static let timeout: TimeInterval = 60
-    /// Shown in the popup while the on-demand server starts; the first streamed token replaces it.
+    /// Shown in the popup while the model loads; the first streamed token replaces it.
     static let loadingNote = "Loading MLX model…"
 
-    private let controller: MLXRewriteServerController
-    private let autocompleteServer: MLXServerManager
-    private let autocompleteEngine: @MainActor () -> SuggestionEngineKind
+    private let runtime: MLXRuntimeManager
     private let modelID: @MainActor () -> String
-    private let client: OpenAICompatibleAPIClient
-    private let healthCheck: MLXHealthCheck
-    private let sleep: MLXRewriteServerController.Sleep
+    private let cachedModels: @MainActor () -> [MLXCachedModel]?
+    private let rejectedModels: @MainActor () -> [MLXRepoID: MLXModelCompatibility.Reason]
+    private let cacheLimitBytes: @MainActor () -> Int
+    private let isAppleSilicon: Bool
 
     init(
-        controller: MLXRewriteServerController,
-        autocompleteServer: MLXServerManager,
-        autocompleteEngine: @escaping @MainActor () -> SuggestionEngineKind,
+        runtime: MLXRuntimeManager,
         modelID: @escaping @MainActor () -> String,
-        client: OpenAICompatibleAPIClient,
-        healthCheck: @escaping MLXHealthCheck = MLXHealthProbe.check(port:),
-        sleep: @escaping MLXRewriteServerController.Sleep = { try await Task.sleep(for: $0) }
+        cachedModels: @escaping @MainActor () -> [MLXCachedModel]?,
+        rejectedModels: @escaping @MainActor () -> [MLXRepoID: MLXModelCompatibility.Reason],
+        cacheLimitBytes: @escaping @MainActor () -> Int,
+        isAppleSilicon: Bool = MLXHardware.isAppleSilicon
     ) {
-        self.sleep = sleep
-        self.controller = controller
-        self.autocompleteServer = autocompleteServer
-        self.autocompleteEngine = autocompleteEngine
+        self.runtime = runtime
         self.modelID = modelID
-        self.client = client
-        self.healthCheck = healthCheck
+        self.cachedModels = cachedModels
+        self.rejectedModels = rejectedModels
+        self.cacheLimitBytes = cacheLimitBytes
+        self.isAppleSilicon = isAppleSilicon
     }
 
     nonisolated deinit {}
 
-    /// Autocomplete is on MLX, so its server (not the on-demand one) serves rewrites.
-    private var followsAutocompleteServer: Bool { autocompleteEngine() == .mlx }
-
-    /// Autocomplete's server endpoint when it is ready on the model the settings name.
-    private var readyAutocompleteConfiguration: OpenAICompatibleEndpointConfiguration? {
-        guard followsAutocompleteServer, case .ready(_, let model) = autocompleteServer.state,
-              model == (MLXRepoID(modelID())?.value ?? modelID()) else { return nil }
-        return try? autocompleteServer.readyConfiguration
+    /// The same decision autocomplete's runtime uses, so Rewrite and autocomplete always agree on
+    /// which model MLX can run and why not.
+    private var desire: MLXRuntimeDesire {
+        MLXRuntimeDesireResolver.desire(
+            engine: .mlx,
+            isAppleSilicon: isAppleSilicon,
+            modelID: modelID(),
+            cachedModels: cachedModels(),
+            cacheLimitBytes: cacheLimitBytes(),
+            rejectedModels: rejectedModels()
+        )
     }
 
-    /// With autocomplete on MLX: its server is ready, or on its way (starting or stopping), so a
-    /// rewrite can wait. Otherwise: Apple Silicon with mlx-lm ready and the model downloaded and
-    /// compatible, exactly when the on-demand server could start.
     var isAvailable: Bool {
-        guard followsAutocompleteServer else { return controller.canRun(modelID: modelID()) }
-        switch autocompleteServer.state {
-        case .ready, .starting, .stopping: return true
-        case .idle, .unavailable, .failed: return false
-        }
+        if case .load = desire { return true }
+        return false
     }
 
     var sendsOffDevice: Bool { false }
 
     var unavailableReason: String? {
-        guard followsAutocompleteServer else { return controller.unavailableReason(modelID: modelID()) }
-        return isAvailable ? nil : autocompleteServer.state.notReadyMessage
+        switch desire {
+        case .load: return nil
+        case .unavailable(let reason): return reason.message
+        case .stopped: return "MLX is still looking for its models."
+        }
     }
 
     func rewrite(_ request: RewriteRequest, onPartial: @escaping @MainActor (String) -> Void) async throws -> String {
-        if followsAutocompleteServer {
-            if let ready = readyAutocompleteConfiguration {
-                return try await send(request, to: ready, server: autocompleteServer, onPartial: onPartial)
-            }
-            // Autocomplete's server is loading: say so, then wait for it. Nothing is launched here.
-            onPartial(Self.loadingNote)
-            let configuration = try await autocompleteServer.waitUntilReady(
-                modelID: MLXRepoID(modelID())?.value ?? modelID(),
-                timeout: MLXRewriteServerController.defaultReadyTimeout, sleep: sleep)
-            return try await send(request, to: configuration, server: autocompleteServer, onPartial: onPartial)
+        guard case .load(let load) = desire else {
+            throw RewriteError.unavailable(unavailableReason ?? "MLX is not available.")
         }
-        // Always sent first: the popup would otherwise sit on "Rewriting…" for the whole start-up,
-        // and the first streamed token replaces it. It is never part of the returned text.
-        onPartial(Self.loadingNote)
-        // Counted as in flight so the idle timer cannot stop the server under a running rewrite.
-        controller.beginUse()
-        defer { controller.endUse() }
-        let configuration = try await controller.readyConfiguration(modelID: modelID())
-        return try await send(request, to: configuration, server: controller.manager, onPartial: onPartial)
+        if runtime.state.readyModelID != load.modelID {
+            // Without this the popup would sit on "Rewriting…" for the whole load.
+            onPartial(Self.loadingNote)
+        }
+        let instruct = Self.isInstruct(modelID: load.modelID)
+        let prompt: MLXRuntimeCore.PromptInput
+        var options = LlamaGenerationOptions(
+            maxPredictionTokens: RewritePromptBuilder.completionTokenBudget(for: request),
+            temperature: 0.3, topK: 40, topP: 0.9, minP: 0.05, repetitionPenalty: 1.05, seed: 42
+        )
+        // A rewrite can be several sentences; autocomplete's stop at the first sentence end would cut it.
+        options.sentenceStopMinimumTokens = .max
+        if instruct {
+            let instructPrompt = RewritePromptBuilder.instructPrompt(request)
+            prompt = .chat(system: instructPrompt.system, user: instructPrompt.user)
+        } else {
+            prompt = .text(RewritePromptBuilder.basePrompt(request))
+            options.stopSequences = RewritePromptBuilder.baseStopSequences
+        }
+        let relay = PartialRelay(deliver: onPartial)
+        // Stop delivery on every exit, so no partial can arrive after this function returned.
+        defer { relay.finish() }
+        let stops = options.stopSequences
+        let text = try await runtime.withRewriteModel(load) {
+            try await runtime.generate(prompt, options: options, onPartial: { text in
+                relay.send(Self.cutAtStop(text, stops: stops))
+            }).text
+        }
+        return Self.cutAtStop(text, stops: stops)
     }
 
-    /// Streams the rewrite to `configuration`'s server, shaped for the model that server runs.
-    private func send(
-        _ request: RewriteRequest,
-        to configuration: OpenAICompatibleEndpointConfiguration,
-        server: MLXServerManager,
-        onPartial: @escaping @MainActor (String) -> Void
-    ) async throws -> String {
-        do {
-            if Self.isInstruct(modelID: configuration.modelName) {
-                let prompt = RewritePromptBuilder.instructPrompt(request)
-                return try await client.streamChat(
-                    configuration: configuration,
-                    apiKey: nil,
-                    messages: [.init(role: "system", content: prompt.system), .init(role: "user", content: prompt.user)],
-                    timeout: Self.timeout,
-                    onPartialRawText: onPartial
-                )
-            }
-            return try await client.generate(
-                configuration: configuration,
-                apiKey: nil,
-                prompt: RewritePromptBuilder.basePrompt(request),
-                options: LocalEndpointRewriteProvider.completionOptions(for: request),
-                onPartialRawText: onPartial
-            )
-        } catch let error as OpenAICompatibleClientError {
-            // A 404 may mean the generator died or just that this request failed; `/health` decides.
-            if let reason = MLXGeneratorFailure.reason(for: error), let port = configuration.baseURL.port {
-                let health = await healthCheck(port)
-                // A cancelled rewrite says nothing about the server (see the engine's same guard).
-                if Task.isCancelled || health == .cancelled { throw CancellationError() }
-                guard health != .healthy else { throw error }
-                server.reportBroken(port: port, reason: reason)
-                throw RewriteError.unavailable("MLX is restarting…")
-            }
-            throw error
-        }
+    /// The text before the first stop sequence: the runtime stops once a sequence has appeared but
+    /// keeps it in the text, and a base model's "\nDraft:" must not reach the user.
+    nonisolated static func cutAtStop(_ text: String, stops: [String]) -> String {
+        let cut = stops.compactMap { text.range(of: $0)?.lowerBound }.min()
+        return cut.map { String(text[..<$0]) } ?? text
     }
 
     /// Whether the repo name ("gemma-4-e4b-it-4bit" in "org/gemma-4-e4b-it-4bit") marks an

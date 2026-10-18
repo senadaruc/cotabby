@@ -7,7 +7,7 @@ final class MLXRuntimeManagerTests: XCTestCase {
     private let load = MLXRuntimeLoad(modelID: "mlx-community/gemma-4-e4b-5bit", directory: URL(fileURLWithPath: "/models/e4b"), cacheLimitBytes: 1 << 30)
 
     func test_loadingAModelMakesTheRuntimeReady() async throws {
-        let core = FakeCore()
+        let core = FakeMLXRuntimeCore()
         let manager = MLXRuntimeManager(core: core)
         manager.apply(.load(load))
         XCTAssertEqual(manager.state, .loading(modelID: load.modelID))
@@ -17,7 +17,7 @@ final class MLXRuntimeManagerTests: XCTestCase {
     }
 
     func test_theSameDesireDoesNotReload() async throws {
-        let core = FakeCore()
+        let core = FakeMLXRuntimeCore()
         let manager = MLXRuntimeManager(core: core)
         manager.apply(.load(load))
         try await waitUntil { manager.state == .ready(modelID: self.load.modelID) }
@@ -30,7 +30,7 @@ final class MLXRuntimeManagerTests: XCTestCase {
     }
 
     func test_aFailedLoadSaysWhy() async throws {
-        let core = FakeCore()
+        let core = FakeMLXRuntimeCore()
         core.loadError = LlamaRuntimeError.generationFailed("bad weights")
         let manager = MLXRuntimeManager(core: core)
         manager.apply(.load(load))
@@ -39,7 +39,7 @@ final class MLXRuntimeManagerTests: XCTestCase {
     }
 
     func test_deselectingUnloadsAndAnUnavailableReasonIsShown() async throws {
-        let core = FakeCore()
+        let core = FakeMLXRuntimeCore()
         let manager = MLXRuntimeManager(core: core)
         manager.apply(.load(load))
         try await waitUntil { manager.state == .ready(modelID: self.load.modelID) }
@@ -49,7 +49,7 @@ final class MLXRuntimeManagerTests: XCTestCase {
     }
 
     func test_generatingBeforeTheModelIsReadyIsUnavailable() async {
-        let manager = MLXRuntimeManager(core: FakeCore())
+        let manager = MLXRuntimeManager(core: FakeMLXRuntimeCore())
         do {
             _ = try await manager.generate(prompt: "Hi", cachedPrefixBytes: nil, options: Self.options)
             XCTFail("expected unavailable")
@@ -60,7 +60,7 @@ final class MLXRuntimeManagerTests: XCTestCase {
     }
 
     func test_aCancelledGenerationAbortsItsOperationAndReportsCancelled() async throws {
-        let core = FakeCore()
+        let core = FakeMLXRuntimeCore()
         core.generationBlocksUntilAborted = true
         let manager = MLXRuntimeManager(core: core)
         manager.apply(.load(load))
@@ -78,7 +78,7 @@ final class MLXRuntimeManagerTests: XCTestCase {
     }
 
     func test_aRewriteLoadsTheModelAndReleasesItWhenIdle() async throws {
-        let core = FakeCore()
+        let core = FakeMLXRuntimeCore()
         let idle = IdleGate()
         let manager = MLXRuntimeManager(core: core, sleep: { _ in try await idle.wait() })
         let text = try await manager.withRewriteModel(load) {
@@ -92,7 +92,7 @@ final class MLXRuntimeManagerTests: XCTestCase {
     }
 
     func test_aRewriteOnAutocompletesModelDoesNotLoadItAgain() async throws {
-        let core = FakeCore()
+        let core = FakeMLXRuntimeCore()
         let manager = MLXRuntimeManager(core: core, sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
         manager.apply(.load(load))
         try await waitUntil { manager.state == .ready(modelID: self.load.modelID) }
@@ -122,49 +122,5 @@ private actor IdleGate {
         isOpen = true
         continuation?.resume()
         continuation = nil
-    }
-}
-
-private final class FakeCore: MLXRuntimeCoreProtocol, @unchecked Sendable {
-    private let lock = NSLock()
-    private var _loads: [URL] = []
-    private var _cacheLimits: [Int] = []
-    private var _unloads = 0
-    private var _resets = 0
-    private var _aborted: Set<UInt64> = []
-    private var _started = false
-    private var next: UInt64 = 0
-    var loadError: Error?
-    var generationBlocksUntilAborted = false
-
-    var loads: [URL] { lock.withLock { _loads } }
-    var cacheLimits: [Int] { lock.withLock { _cacheLimits } }
-    var unloads: Int { lock.withLock { _unloads } }
-    var promptCacheResets: Int { lock.withLock { _resets } }
-    var abortedOperations: Set<UInt64> { lock.withLock { _aborted } }
-    var generationStarted: Bool { lock.withLock { _started } }
-
-    func load(directory: URL, cacheLimitBytes: Int) async throws {
-        if let loadError { throw loadError }
-        lock.withLock { _loads.append(directory); _cacheLimits.append(cacheLimitBytes) }
-    }
-    func unload() { lock.withLock { _unloads += 1 } }
-    func resetPromptCache() { lock.withLock { _resets += 1 } }
-    func beginOperation() -> UInt64 { lock.withLock { next += 1; return next } }
-    func abort(_ operation: UInt64) { _ = lock.withLock { _aborted.insert(operation) } }
-    func prefill(_ prompt: MLXRuntimeCore.PromptInput, operation: UInt64) throws {}
-    func generate(
-        _ prompt: MLXRuntimeCore.PromptInput, options: LlamaGenerationOptions, operation: UInt64,
-        onPartial: (@Sendable (String) -> Void)?
-    ) throws -> LlamaGenerationOutput {
-        if case .text(let text) = prompt, text == "Warm up." {
-            return LlamaGenerationOutput(text: "", averageLogprob: nil, suppressedByLowConfidence: false)
-        }
-        lock.withLock { _started = true }
-        if generationBlocksUntilAborted {
-            while !lock.withLock({ _aborted.contains(operation) }) { Thread.sleep(forTimeInterval: 0.005) }
-            return LlamaGenerationOutput(text: "", averageLogprob: nil, suppressedByLowConfidence: false, stopReason: "cancelled")
-        }
-        return LlamaGenerationOutput(text: "generated", averageLogprob: nil, suppressedByLowConfidence: false)
     }
 }

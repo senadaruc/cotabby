@@ -330,17 +330,16 @@ final class SuggestionCoordinatorTypingPredictionTests: XCTestCase {
         XCTAssertNotEqual(rig.coordinator.currentWorkID, workID)
     }
 
-    func testMLXDoesNotEnableBackgroundCollectionOrRetainRequestsAcrossKeys() async {
+    /// MLX runs in process like llama.cpp, so it gets the same predict-ahead: the request collects
+    /// partials and a typing prediction is retained across keys.
+    func testMLXPredictsAheadLikeTheOtherInProcessEngines() async {
         let engine = ControlledTypingEngine()
         let rig = makeRig(engine, engineKind: .mlx)
         defer { rig.coordinator.stop(); engine.finishAll() }
         rig.coordinator.schedulePrediction()
         await waitUntil { engine.requests.count == 1 }
-        XCTAssertNil(rig.coordinator.typingPrediction)
-        XCTAssertFalse(engine.hasPartialCallback(request: 0))
-        let workID = rig.coordinator.currentWorkID
-        type("you ", in: rig)
-        XCTAssertNotEqual(rig.coordinator.currentWorkID, workID)
+        XCTAssertNotNil(rig.coordinator.typingPrediction)
+        XCTAssertTrue(engine.hasPartialCallback(request: 0))
     }
 
     func testDisabledPredictionRestartsOnTypingWithoutChangingStreamingPreference() async {

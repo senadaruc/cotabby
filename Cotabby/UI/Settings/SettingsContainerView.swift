@@ -19,7 +19,7 @@ struct SettingsContainerView: View {
     @ObservedObject var suggestionSettings: SuggestionSettingsModel
     @ObservedObject var openAICompatibleConnectionModel: OpenAICompatibleConnectionModel
     @ObservedObject var mlxToolchainProvisioner: MLXToolchainProvisioner
-    @ObservedObject var mlxServerManager: MLXServerManager
+    @ObservedObject var mlxRuntime: MLXRuntimeManager
     @ObservedObject var mlxModelDownloader: MLXModelDownloader
     @ObservedObject var foundationModelAvailabilityService: FoundationModelAvailabilityService
     @ObservedObject var runtimeModel: RuntimeBootstrapModel
@@ -116,7 +116,7 @@ struct SettingsContainerView: View {
                 llamaRuntimeFailedReason: runtimeModel.state.failureDetail,
                 endpointConfigurationError: endpointConfigurationError,
                 endpointConnectionFailedReason: openAICompatibleConnectionModel.state.failureDetail,
-                mlxProblem: mlxServerManager.state.problem
+                mlxProblem: mlxRuntime.state.problem
             )
         )
     }
@@ -132,7 +132,7 @@ struct SettingsContainerView: View {
                 foundationModelAvailabilityService: foundationModelAvailabilityService,
                 runtimeModel: runtimeModel,
                 openAICompatibleConnectionModel: openAICompatibleConnectionModel,
-                mlxServerManager: mlxServerManager,
+                mlxRuntime: mlxRuntime,
                 attentionCategories: attentionCategories
             )
         case .general:
@@ -153,7 +153,7 @@ struct SettingsContainerView: View {
                 suggestionSettings: suggestionSettings,
                 openAICompatibleConnectionModel: openAICompatibleConnectionModel,
                 mlxToolchainProvisioner: mlxToolchainProvisioner,
-                mlxServerManager: mlxServerManager,
+                mlxRuntime: mlxRuntime,
                 mlxModelDownloader: mlxModelDownloader,
                 foundationModelAvailabilityService: foundationModelAvailabilityService,
                 runtimeModel: runtimeModel,
@@ -170,7 +170,7 @@ struct SettingsContainerView: View {
             RewritePaneView(preferences: rewritePreferences, credentials: rewriteCredentials,
                             modelList: rewriteModelList, engine: rewriteEngine, suggestionSettings: suggestionSettings,
                             mlxToolchainProvisioner: mlxToolchainProvisioner, mlxModelDownloader: mlxModelDownloader,
-                            mlxServerManager: mlxServerManager,
+                            mlxRuntime: mlxRuntime,
                             foundationModelAvailabilityService: foundationModelAvailabilityService,
                             runtimeModel: runtimeModel)
         case .context:

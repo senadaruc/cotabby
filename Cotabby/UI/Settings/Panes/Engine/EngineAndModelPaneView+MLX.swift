@@ -2,7 +2,7 @@ import SwiftUI
 
 /// MLX sections of the unified engine pane: the mlx-lm install, the model list (curated, cached
 /// and custom), and the prompt-cache cap. The pane presents state and forwards actions. Installing,
-/// running and downloading live in `MLXToolchainProvisioner`, `MLXServerManager` and
+/// running and downloading live in `MLXToolchainProvisioner`, `MLXRuntimeManager` and
 /// `MLXModelDownloader`, which `CotabbyAppEnvironment` owns.
 extension EngineAndModelPaneView {
     @ViewBuilder
@@ -57,7 +57,7 @@ extension EngineAndModelPaneView {
             return phase.label
         case .ready(let toolchain):
             let owner = toolchain.isCotabbyInstall ? "Cotabby's" : "Your"
-            return "\(owner) mlx-lm \(toolchain.version). \(mlxServerManager.state.summary)"
+            return "\(owner) mlx-lm \(toolchain.version). \(mlxRuntime.state.summary)"
         case .failed(let reason, _):
             return reason
         }
@@ -78,11 +78,11 @@ extension EngineAndModelPaneView {
             }
         case .ready(let toolchain):
             HStack(spacing: 8) {
-                if case .failed = mlxServerManager.state {
+                if case .failed = mlxRuntime.state {
                     Button("Retry") {
                         Task {
                             await mlxToolchainProvisioner.rescan(models: mlxModelDownloader)
-                            await mlxServerManager.retry()
+                            mlxRuntime.retry()
                         }
                     }
                 }
@@ -94,9 +94,8 @@ extension EngineAndModelPaneView {
         }
     }
 
-    /// The server's failure tail, else the install's.
+    /// The install's failure tail (the in-process runtime reports its failure in the description).
     private var mlxVisibleLogTail: [String]? {
-        if case .failed(_, let tail) = mlxServerManager.state { return tail }
         if case .failed(_, let tail) = mlxToolchainProvisioner.state { return tail }
         return nil
     }

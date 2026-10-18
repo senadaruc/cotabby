@@ -17,7 +17,7 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
     private let suggestionSettings: SuggestionSettingsModel
     private let openAICompatibleConnectionModel: OpenAICompatibleConnectionModel
     private let mlxToolchainProvisioner: MLXToolchainProvisioner
-    private let mlxServerManager: MLXServerManager
+    private let mlxRuntime: MLXRuntimeManager
     private let mlxModelDownloader: MLXModelDownloader
     private let foundationModelAvailabilityService: FoundationModelAvailabilityService
     private let runtimeModel: RuntimeBootstrapModel
@@ -56,7 +56,7 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
         suggestionSettings: SuggestionSettingsModel,
         openAICompatibleConnectionModel: OpenAICompatibleConnectionModel,
         mlxToolchainProvisioner: MLXToolchainProvisioner,
-        mlxServerManager: MLXServerManager,
+        mlxRuntime: MLXRuntimeManager,
         mlxModelDownloader: MLXModelDownloader,
         foundationModelAvailabilityService: FoundationModelAvailabilityService,
         runtimeModel: RuntimeBootstrapModel,
@@ -85,7 +85,7 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
         self.suggestionSettings = suggestionSettings
         self.openAICompatibleConnectionModel = openAICompatibleConnectionModel
         self.mlxToolchainProvisioner = mlxToolchainProvisioner
-        self.mlxServerManager = mlxServerManager
+        self.mlxRuntime = mlxRuntime
         self.mlxModelDownloader = mlxModelDownloader
         self.foundationModelAvailabilityService = foundationModelAvailabilityService
         self.runtimeModel = runtimeModel
@@ -128,7 +128,7 @@ final class SettingsCoordinator: NSObject, NSWindowDelegate {
                     suggestionSettings: suggestionSettings,
                     openAICompatibleConnectionModel: openAICompatibleConnectionModel,
                     mlxToolchainProvisioner: mlxToolchainProvisioner,
-                    mlxServerManager: mlxServerManager,
+                    mlxRuntime: mlxRuntime,
                     mlxModelDownloader: mlxModelDownloader,
                     foundationModelAvailabilityService: foundationModelAvailabilityService,
                     runtimeModel: runtimeModel,

@@ -18,7 +18,7 @@ struct RewritePaneView: View {
     // re-enables as soon as an MLX install or a model download finishes.
     @ObservedObject var mlxToolchainProvisioner: MLXToolchainProvisioner
     @ObservedObject var mlxModelDownloader: MLXModelDownloader
-    @ObservedObject var mlxServerManager: MLXServerManager
+    @ObservedObject var mlxRuntime: MLXRuntimeManager
     @ObservedObject var foundationModelAvailabilityService: FoundationModelAvailabilityService
     @ObservedObject var runtimeModel: RuntimeBootstrapModel
 

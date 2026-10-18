@@ -1,4 +1,5 @@
 import Foundation
+import Logging
 import MLX
 import MLXLLM
 import MLXLMCommon
@@ -42,6 +43,19 @@ nonisolated final class MLXRuntimeCore: @unchecked Sendable {
     private var eosTokenIDs: Set<Int> = []
     private var cache: [KVCache] = []
     private var cachedPrompt: [Int] = []
+    /// Additive logit masks (0 or -infinity per token), built once per model from its vocabulary:
+    /// tokens that contain a line break, and tokens that start with whitespace.
+    private var newlineMask: MLXArray?
+    private var leadingWhitespaceMask: MLXArray?
+    /// Each token's decoded bytes by id, read once from the tokenizer at load, and the healing
+    /// lookup built from them.
+    private var vocabularyPieces: [[UInt8]] = []
+    private var healingVocabulary: MLXHealingVocabulary?
+    /// Keeps the loaded weights resident on the GPU between requests. Without it, the first
+    /// request after about a second of idle paid 100-150 ms extra (16 of 63 one-token steps in a
+    /// live TextEdit run, every one of them after more than 1.1 s idle), the cost of bringing the
+    /// weights back. llama.cpp's Metal backend keeps its weights resident the same way.
+    private var wiredTicket: WiredMemoryTicket?
 
     // MARK: - Model lifecycle
 
@@ -53,18 +67,43 @@ nonisolated final class MLXRuntimeCore: @unchecked Sendable {
         for name in [loaded.tokenizer.eosToken, "<end_of_turn>", "<turn|>"].compactMap({ $0 }) {
             if let id = loaded.tokenizer.convertTokenToId(name) { eos.insert(id) }
         }
+        var pieces: [[UInt8]] = []
+        while pieces.count < 4_000_000, let token = loaded.tokenizer.convertIdToToken(pieces.count) {
+            pieces.append(MLXHealingVocabulary.pieceBytes(token))
+        }
+        let healing = MLXHealingVocabulary(pieces: pieces)
+        let ticket = MLXLMCommon.WiredSumPolicy().ticket(size: Self.weightsBytes(in: directory), kind: .active)
+        _ = await ticket.start()
+        let previousTicket = workLock.withLock { () -> WiredMemoryTicket? in
+            defer { wiredTicket = ticket }
+            return wiredTicket
+        }
+        if let previousTicket { _ = await previousTicket.end() }
         workLock.withLock {
             context = loaded
             eosTokenIDs = eos
+            vocabularyPieces = pieces
+            healingVocabulary = healing
+            newlineMask = nil
+            leadingWhitespaceMask = nil
             resetCacheLocked()
         }
     }
 
     func unload() {
+        let ticket = workLock.withLock { () -> WiredMemoryTicket? in
+            defer { wiredTicket = nil }
+            return wiredTicket
+        }
+        if let ticket { Task { _ = await ticket.end() } }
         workLock.withLock {
             context = nil
             cache = []
             cachedPrompt = []
+            vocabularyPieces = []
+            healingVocabulary = nil
+            newlineMask = nil
+            leadingWhitespaceMask = nil
         }
         Memory.clearCache()
     }
@@ -120,90 +159,157 @@ nonisolated final class MLXRuntimeCore: @unchecked Sendable {
         defer { finish(operation) }
         return try workLock.withLock {
             guard let context else { throw LlamaRuntimeError.unavailable("The MLX model is not loaded.") }
-            let model = context.model
-            let tokenizer = context.tokenizer
-            let tokens = try promptTokens(prompt, context: context)
-            guard let logits = try decodePromptLocked(tokens, model: model, operation: operation) else {
+            let (tokens, replay) = try healedPrompt(prompt, options: options, context: context)
+            guard let logits = try decodePromptLocked(tokens, model: context.model, operation: operation) else {
                 return LlamaGenerationOutput(text: "", averageLogprob: nil, suppressedByLowConfidence: false, stopReason: "cancelled")
             }
-
-            let parameters = GenerateParameters(
-                temperature: Float(options.temperature),
-                topP: Float(options.topP),
-                topK: options.topK,
-                minP: Float(options.minP),
-                repetitionPenalty: options.repetitionPenalty > 1 ? Float(options.repetitionPenalty) : nil,
-                repetitionContextSize: 64,
-                seed: options.seed.map(UInt64.init)
+            buildMasksIfNeeded(vocabularySize: logits.dim(-1))
+            let sampler = MLXTokenSampler(
+                options: options, promptTokens: tokens, newlineMask: newlineMask, leadingWhitespaceMask: leadingWhitespaceMask
             )
-            let sampler = parameters.sampler()
-            var processor = parameters.processor()
-            processor?.prompt(MLXArray(tokens.map(Int32.init)))
-
-            func sample(_ logits: MLXArray) -> (token: MLXArray, argmax: MLXArray) {
-                var row = logits[0..., -1, 0...]
-                let argmax = argMax(row, axis: -1)
-                row = processor?.process(logits: row) ?? row
-                let token = sampler.sample(logits: row)
-                processor?.didSample(token: token)
-                return (token, argmax)
-            }
-
             let decodeStart = DispatchTime.now().uptimeNanoseconds
-            var next = sample(logits)
-            asyncEval([next.token, next.argmax])
-            var generated: [Int] = []
-            var text = ""
-            var stopReason = "budget_exhausted"
+            var decoding = Decoding(buffer: TokenHealingBuffer(replayedPrefix: replay), remainingReplay: replay, logits: logits)
+            let step = Step(
+                model: context.model, tokenizer: context.tokenizer, options: options, operation: operation, onPartial: onPartial
+            )
+            replayHealedPrefix(&decoding, sampler: sampler, step: step)
+            if decoding.stopReason == nil { decodeFreely(&decoding, sampler: sampler, step: step) }
 
-            while generated.count < options.maxPredictionTokens {
-                if isAborted(operation) || Task.isCancelled { stopReason = "cancelled"; break }
-                let current = next
-                // Queue the following token before reading this one, so the GPU computes it while
-                // this thread detokenizes and checks the stop rules (as mlx-lm's loop does).
-                let stepLogits = model(current.token.reshaped(1, 1), cache: cache)
-                next = sample(stepLogits)
-                asyncEval([next.token, next.argmax] + cache.flatMap(\.state))
-
-                let token = current.token.item(Int.self)
-                if eosTokenIDs.contains(token) { stopReason = "eos"; break }
-                if options.stopAtArgmaxEOG, !generated.isEmpty, eosTokenIDs.contains(current.argmax.item(Int.self)) {
-                    stopReason = "argmax_eog"
-                    break
-                }
-                generated.append(token)
-                let decoded = tokenizer.decode(tokenIds: generated, skipSpecialTokens: true)
-                // A character split across byte tokens decodes as U+FFFD until its last byte arrives.
-                if decoded.hasSuffix("\u{FFFD}") { continue }
-                text = decoded
-
-                if options.singleLine, let newline = text.firstIndex(where: \.isNewline) {
-                    text = String(text[..<newline])
-                    stopReason = "newline"
-                    break
-                }
-                onPartial?(text)
-                if let verdict = DecodeStopPolicy.verdict(
-                    accumulated: text,
-                    tokensGenerated: generated.count,
-                    minimumTokens: options.sentenceStopMinimumTokens,
-                    minimumWords: options.sentenceStopMinimumWords
-                ) {
-                    stopReason = verdict.rawValue
-                    break
-                }
-                if !options.stopSequences.isEmpty, options.stopSequences.contains(where: { text.contains($0) }) {
-                    stopReason = "stop_sequence"
-                    break
-                }
-            }
-
-            var output = LlamaGenerationOutput(text: text, averageLogprob: nil, suppressedByLowConfidence: false)
-            output.tokensGenerated = generated.count
+            var output = LlamaGenerationOutput(text: decoding.text, averageLogprob: nil, suppressedByLowConfidence: false)
+            output.tokensGenerated = decoding.tokensGenerated
             output.decodeMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - decodeStart) / 1_000_000
-            output.stopReason = stopReason
+            output.stopReason = decoding.stopReason ?? "budget_exhausted"
+            CotabbyLogger.runtime.debug(
+                "MLX decode end",
+                metadata: [
+                    "tokens_generated": .stringConvertible(decoding.tokensGenerated),
+                    "replayed_bytes": .stringConvertible(replay.count),
+                    "decode_ms": .stringConvertible(Int(output.decodeMilliseconds ?? 0)),
+                    "stop_reason": .string(output.stopReason ?? "")
+                ]
+            )
             return output
         }
+    }
+
+    /// One generation's progress, shared by its replay and free-decoding phases.
+    private struct Decoding {
+        var buffer: TokenHealingBuffer
+        var remainingReplay: [UInt8]
+        /// Logits of the last decoded position: what the next token is sampled from.
+        var logits: MLXArray
+        var tokensGenerated = 0
+        var text = ""
+        /// Set once the generation is over; nil means "budget exhausted" at the end.
+        var stopReason: String?
+    }
+
+    /// What every decoding step of one request needs.
+    private struct Step {
+        let model: any LanguageModel
+        let tokenizer: any MLXLMCommon.Tokenizer
+        let options: LlamaGenerationOptions
+        let operation: UInt64
+        let onPartial: (@Sendable (String) -> Void)?
+    }
+
+    /// The prompt's tokens after token healing, as the llama engine applies it, and the bytes the
+    /// generation must replay first. When the caret ends a word, the word's last tokens leave the
+    /// prompt, so the model can choose the whole-word token instead of continuing a fragment
+    /// ("net|wo"). A caret inside a word keeps the prompt as is; the whitespace mask covers it.
+    private func healedPrompt(
+        _ prompt: PromptInput, options: LlamaGenerationOptions, context: ModelContext
+    ) throws -> (tokens: [Int], replay: [UInt8]) {
+        let allTokens = try promptTokens(prompt, context: context)
+        guard case .text(let text) = prompt, !options.forceWordContinuation, !vocabularyPieces.isEmpty else {
+            return (allTokens, [])
+        }
+        let pieces = vocabularyPieces
+        let healing = TokenHealingPlan(
+            prompt: text, tokens: allTokens.map(Int32.init), singleLine: options.singleLine,
+            piece: { pieces.indices.contains(Int($0)) ? pieces[Int($0)] : [] }
+        )
+        return (healing.promptTokens.map(Int.init), healing.replayBytes)
+    }
+
+    /// Replays the healed bytes one token at a time, because each step's allowed tokens depend on
+    /// the bytes the previous token consumed. Usually one or two steps.
+    private func replayHealedPrefix(_ decoding: inout Decoding, sampler: MLXTokenSampler, step: Step) {
+        while !decoding.remainingReplay.isEmpty {
+            if isAborted(step.operation) || Task.isCancelled { decoding.stopReason = "cancelled"; return }
+            let candidates = healingVocabulary?.matchingTokens(prefix: decoding.remainingReplay, singleLine: step.options.singleLine) ?? []
+            guard !candidates.isEmpty else { decoding.stopReason = "healing_prefix_mismatch"; return }
+            let sampled = sampler.sample(decoding.logits, allowed: allowedMask(candidates, vocabularySize: decoding.logits.dim(-1)))
+            let token = sampled.token.item(Int.self)
+            if eosTokenIDs.contains(token) { decoding.stopReason = "eos"; return }
+            let piece = pieceBytes(token, tokenizer: step.tokenizer)
+            let partial = decoding.buffer.append(tokenBytes: piece)
+            if decoding.buffer.hasReplayMismatch {
+                decoding.text = ""
+                decoding.stopReason = "healing_prefix_mismatch"
+                return
+            }
+            decoding.remainingReplay = Array(decoding.remainingReplay.dropFirst(min(piece.count, decoding.remainingReplay.count)))
+            decoding.logits = step.model(sampled.token.reshaped(1, 1), cache: cache)
+            // A covering token can finish the replay and begin the new text in one piece.
+            if decoding.buffer.hasVisibleBytes { decoding.tokensGenerated += 1 }
+            if let partial {
+                decoding.text = partial
+                step.onPartial?(partial)
+            }
+        }
+    }
+
+    /// Samples freely until a stop rule or the token budget ends the generation. The following
+    /// token is queued before the current one is read, so the GPU computes it while this thread
+    /// checks the stop rules (as mlx-lm's loop does).
+    private func decodeFreely(_ decoding: inout Decoding, sampler: MLXTokenSampler, step: Step) {
+        var next = sampler.sample(decoding.logits)
+        asyncEval([next.token, next.argmax])
+        while decoding.tokensGenerated < step.options.maxPredictionTokens {
+            if isAborted(step.operation) || Task.isCancelled { decoding.stopReason = "cancelled"; return }
+            let current = next
+            next = sampler.sample(step.model(current.token.reshaped(1, 1), cache: cache))
+            asyncEval([next.token, next.argmax] + cache.flatMap(\.state))
+
+            let token = current.token.item(Int.self)
+            if eosTokenIDs.contains(token) { decoding.stopReason = "eos"; return }
+            if step.options.stopAtArgmaxEOG, decoding.tokensGenerated > 0, eosTokenIDs.contains(current.argmax.item(Int.self)) {
+                decoding.stopReason = "argmax_eog"
+                return
+            }
+            decoding.tokensGenerated += 1
+            // Nil while a character is split across byte tokens; the next piece completes it.
+            guard let partial = decoding.buffer.append(tokenBytes: pieceBytes(token, tokenizer: step.tokenizer)) else { continue }
+            decoding.text = partial
+            if step.options.singleLine, let newline = partial.firstIndex(where: \.isNewline) {
+                decoding.text = String(partial[..<newline])
+                decoding.stopReason = "newline"
+                return
+            }
+            step.onPartial?(partial)
+            if let reason = Self.stopRule(text: partial, tokensGenerated: decoding.tokensGenerated, options: step.options) {
+                decoding.stopReason = reason
+                return
+            }
+        }
+    }
+
+    /// The llama engine's text stop rules: a natural sentence end or a chat marker
+    /// (`DecodeStopPolicy`), and the request's stop sequences.
+    private static func stopRule(text: String, tokensGenerated: Int, options: LlamaGenerationOptions) -> String? {
+        if let verdict = DecodeStopPolicy.verdict(
+            accumulated: text,
+            tokensGenerated: tokensGenerated,
+            minimumTokens: options.sentenceStopMinimumTokens,
+            minimumWords: options.sentenceStopMinimumWords
+        ) {
+            return verdict.rawValue
+        }
+        if !options.stopSequences.isEmpty, options.stopSequences.contains(where: { text.contains($0) }) {
+            return "stop_sequence"
+        }
+        return nil
     }
 
     // MARK: - Private
@@ -238,9 +344,16 @@ nonisolated final class MLXRuntimeCore: @unchecked Sendable {
         }
         // Until the new prompt is fully decoded the cache matches no prompt we could name.
         cachedPrompt = []
+        let prefillStart = DispatchTime.now().uptimeNanoseconds
 
         var offset = plan.reusedTokens
         var logits: MLXArray?
+        // Waits for GPU work queued before this request (the previous generation's last step) so
+        // the timings below measure this prompt alone.
+        let queuedStart = DispatchTime.now().uptimeNanoseconds
+        if let first = cache.first { eval(first.state) }
+        let queuedMs = Double(DispatchTime.now().uptimeNanoseconds - queuedStart) / 1_000_000
+        var graphMs = 0.0
         while offset < tokens.count {
             if isAborted(operation) || Task.isCancelled {
                 resetCacheLocked()
@@ -248,14 +361,63 @@ nonisolated final class MLXRuntimeCore: @unchecked Sendable {
             }
             let end = min(tokens.count, offset + Self.prefillChunkTokens)
             let chunk = MLXArray(tokens[offset ..< end].map(Int32.init)).reshaped(1, end - offset)
+            let graphStart = DispatchTime.now().uptimeNanoseconds
             let chunkLogits = model(chunk, cache: cache)
+            graphMs += Double(DispatchTime.now().uptimeNanoseconds - graphStart) / 1_000_000
             // MLX's `eval` computes these lazily built arrays on the GPU now; it runs no code.
             eval([chunkLogits] + cache.flatMap(\.state))
             logits = chunkLogits
             offset = end
         }
         cachedPrompt = tokens
+        CotabbyLogger.runtime.debug(
+            "MLX prompt decoded",
+            metadata: [
+                "prompt_tokens": .stringConvertible(tokens.count),
+                "reused_tokens": .stringConvertible(plan.reusedTokens),
+                "decoded_tokens": .stringConvertible(tokens.count - plan.reusedTokens),
+                "prefill_ms": .stringConvertible(Int(Double(DispatchTime.now().uptimeNanoseconds - prefillStart) / 1_000_000)),
+                "queued_ms": .stringConvertible(Int(queuedMs)),
+                "graph_ms": .stringConvertible(Int(graphMs))
+            ]
+        )
         return logits
+    }
+
+    /// The size of the model's weight files, which the wired-memory ticket keeps resident.
+    private static func weightsBytes(in directory: URL) -> Int {
+        let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey])) ?? []
+        return files.filter { $0.pathExtension == "safetensors" }.reduce(0) { total, file in
+            total + ((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+    }
+
+    /// Builds the additive masks `generate` applies from the vocabulary bytes, once per model.
+    /// Sized to the logits, which can be padded past the tokenizer's vocabulary.
+    private func buildMasksIfNeeded(vocabularySize: Int) {
+        guard newlineMask == nil else { return }
+        var newline = [Float](repeating: 0, count: vocabularySize)
+        var leadingWhitespace = [Float](repeating: 0, count: vocabularySize)
+        for (id, piece) in vocabularyPieces.enumerated() where id < vocabularySize {
+            if piece.contains(where: { $0 == 10 || $0 == 13 }) { newline[id] = -.infinity }
+            if let first = piece.first, first == 32 || first == 9 || first == 10 || first == 13 {
+                leadingWhitespace[id] = -.infinity
+            }
+        }
+        newlineMask = MLXArray(newline)
+        leadingWhitespaceMask = MLXArray(leadingWhitespace)
+    }
+
+    /// 0 for the allowed tokens, -infinity for every other one.
+    private func allowedMask(_ allowed: [Int], vocabularySize: Int) -> MLXArray {
+        var mask = [Float](repeating: -.infinity, count: vocabularySize)
+        for token in allowed where token < vocabularySize { mask[token] = 0 }
+        return MLXArray(mask)
+    }
+
+    private func pieceBytes(_ token: Int, tokenizer: any MLXLMCommon.Tokenizer) -> [UInt8] {
+        if vocabularyPieces.indices.contains(token) { return vocabularyPieces[token] }
+        return Array(tokenizer.decode(tokenIds: [token], skipSpecialTokens: true).utf8)
     }
 
     /// Full-size caches for every layer the model caches, so any prefix can be trimmed back to.
@@ -266,6 +428,52 @@ nonisolated final class MLXRuntimeCore: @unchecked Sendable {
             return
         }
         cache = fresh.map { $0 is RotatingKVCache ? KVCacheSimple() : $0 }
+    }
+}
+
+/// Samples one token from the last position of a logits array under one request's options:
+/// llama's masks first, then mlx-swift-lm's repetition penalty and sampler. Also returns the raw
+/// distribution's most likely token, for the "the model wants to stop" rule.
+private final class MLXTokenSampler {
+    private let options: LlamaGenerationOptions
+    private let sampler: any LogitSampler
+    private var processor: (any LogitProcessor)?
+    private let newlineMask: MLXArray?
+    private let leadingWhitespaceMask: MLXArray?
+    private var isFirstToken = true
+
+    init(options: LlamaGenerationOptions, promptTokens: [Int], newlineMask: MLXArray?, leadingWhitespaceMask: MLXArray?) {
+        let parameters = GenerateParameters(
+            temperature: Float(options.temperature),
+            topP: Float(options.topP),
+            topK: options.topK,
+            minP: Float(options.minP),
+            repetitionPenalty: options.repetitionPenalty > 1 ? Float(options.repetitionPenalty) : nil,
+            repetitionContextSize: 64,
+            seed: options.seed.map(UInt64.init)
+        )
+        self.options = options
+        sampler = parameters.sampler()
+        processor = parameters.processor()
+        processor?.prompt(MLXArray(promptTokens.map(Int32.init)))
+        self.newlineMask = newlineMask
+        self.leadingWhitespaceMask = leadingWhitespaceMask
+    }
+
+    func sample(_ logits: MLXArray, allowed: MLXArray? = nil) -> (token: MLXArray, argmax: MLXArray) {
+        var row = logits[0..., -1, 0...]
+        let argmax = argMax(row, axis: -1)
+        if let allowed { row += allowed }
+        // As the llama engine does: a single-line field never gets a line break, so the model
+        // writes words instead of ending at once; a caret inside a word gets a first token that
+        // continues it.
+        if options.singleLine, let newlineMask { row += newlineMask }
+        if isFirstToken, options.forceWordContinuation, let leadingWhitespaceMask { row += leadingWhitespaceMask }
+        isFirstToken = false
+        row = processor?.process(logits: row) ?? row
+        let token = sampler.sample(logits: row)
+        processor?.didSample(token: token)
+        return (token, argmax)
     }
 }
 

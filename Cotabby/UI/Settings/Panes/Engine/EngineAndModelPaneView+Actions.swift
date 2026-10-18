@@ -21,7 +21,7 @@ extension EngineAndModelPaneView {
             guard case .failed(let detail) = runtimeModel.state else { return nil }
             return SettingsPaneCallout(tone: .warning, message: detail)
         case .mlx:
-            guard let problem = mlxServerManager.state.problem else { return nil }
+            guard let problem = mlxRuntime.state.problem else { return nil }
             return SettingsPaneCallout(tone: .warning, message: problem)
         case .openAICompatible:
             do {

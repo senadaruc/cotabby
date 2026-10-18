@@ -21,7 +21,8 @@ final class SuggestionEngineKindTests: XCTestCase {
     func test_onlyInProcessEnginesRunSpeculativeWork() {
         XCTAssertTrue(SuggestionEngineKind.appleIntelligence.allowsSpeculativeGeneration)
         XCTAssertTrue(SuggestionEngineKind.llamaOpenSource.allowsSpeculativeGeneration)
-        XCTAssertFalse(SuggestionEngineKind.mlx.allowsSpeculativeGeneration)
+        // MLX runs in process too, so a superseded request stops at its next token.
+        XCTAssertTrue(SuggestionEngineKind.mlx.allowsSpeculativeGeneration)
         XCTAssertFalse(SuggestionEngineKind.openAICompatible.allowsSpeculativeGeneration)
     }
 

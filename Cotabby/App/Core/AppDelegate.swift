@@ -25,7 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let suggestionSettings: SuggestionSettingsModel
     let foundationModelAvailabilityService: FoundationModelAvailabilityService
     let powerSourceMonitor: PowerSourceMonitor
-    let mlxServerManager: MLXServerManager
+    let mlxRuntime: MLXRuntimeManager
     let menuResourceMonitor: MenuResourceMonitor
     let suggestionCoordinator: SuggestionCoordinator
     let inlineCommandCoordinator: InlineCommandCoordinator
@@ -60,7 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         suggestionSettings = environment.suggestionSettings
         foundationModelAvailabilityService = environment.foundationModelAvailabilityService
         powerSourceMonitor = environment.powerSourceMonitor
-        mlxServerManager = environment.mlxServerManager
+        mlxRuntime = environment.mlxRuntime
         menuResourceMonitor = environment.menuResourceMonitor
         suggestionCoordinator = environment.suggestionCoordinator
         inlineCommandCoordinator = environment.inlineCommandCoordinator
@@ -285,12 +285,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         inputMonitor.stop()
         focusModel.stop()
 
-        // Waits at most 3 s for mlx_lm.server to exit (SIGKILL after that), so quitting Cotabby
-        // never leaves a Python process holding the model's memory.
-        // Both servers (autocomplete's and the rewrite one) get SIGTERM first, then share the wait.
-        environment.mlxRewriteServer.prepareForShutdown()
-        MLXServerManager.shutdownSync(
-            [environment.mlxServerManager, environment.mlxRewriteServer.manager], timeoutSeconds: 3)
+        // MLX runs in this process; releasing the model is enough.
+        environment.mlxRuntime.shutdown()
         runtimeModel.shutdownSync(timeoutSeconds: 1.5)
     }
 

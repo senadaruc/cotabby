@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import Logging
 
 /// The work `MLXRuntimeManager` hands to the model runtime. `MLXRuntimeCore` is the production
 /// conformer; tests drive the manager with a fake instead of loading weights.
@@ -68,6 +69,12 @@ final class MLXRuntimeManager: ObservableObject, LlamaRuntimeGenerating {
         reconcile()
     }
 
+    /// Loads the wanted model again after a failed load (Settings' Retry).
+    func retry() {
+        guard case .failed = state, let target else { return }
+        startLoading(target)
+    }
+
     /// Unloads the model now; used when the app quits.
     func shutdown() {
         loadTask?.cancel()
@@ -118,6 +125,7 @@ final class MLXRuntimeManager: ObservableObject, LlamaRuntimeGenerating {
             if loaded != nil {
                 loaded = nil
                 core.unload()
+                CotabbyLogger.runtime.info("MLX model unloaded")
             }
             if case .unavailable(let reason) = autocompleteDesire {
                 state = .unavailable(reason)
@@ -138,6 +146,8 @@ final class MLXRuntimeManager: ObservableObject, LlamaRuntimeGenerating {
         loaded = nil
         state = .loading(modelID: load.modelID)
         let core = self.core
+        CotabbyLogger.runtime.info("MLX model loading", metadata: ["model": .string(load.modelID)])
+        let loadStart = Date()
         loadTask = Task { [weak self] in
             do {
                 try await core.load(directory: load.directory, cacheLimitBytes: load.cacheLimitBytes)
@@ -150,10 +160,15 @@ final class MLXRuntimeManager: ObservableObject, LlamaRuntimeGenerating {
                 self.loaded = load
                 self.loadTask = nil
                 self.state = .ready(modelID: load.modelID)
+                CotabbyLogger.runtime.info("MLX model loaded", metadata: [
+                    "model": .string(load.modelID),
+                    "load_ms": .stringConvertible(Int(Date().timeIntervalSince(loadStart) * 1000))
+                ])
             } catch {
                 guard let self, generation == self.loadGeneration, !Task.isCancelled else { return }
                 self.loadTask = nil
                 self.state = .failed(reason: "\(load.modelID) could not be loaded: \(error.localizedDescription)")
+                CotabbyLogger.runtime.error("MLX model load failed: \(error.localizedDescription)")
             }
         }
     }

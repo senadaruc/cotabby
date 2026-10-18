@@ -10,7 +10,7 @@ struct EngineAndModelPaneView: View {
     @ObservedObject var suggestionSettings: SuggestionSettingsModel
     @ObservedObject var openAICompatibleConnectionModel: OpenAICompatibleConnectionModel
     @ObservedObject var mlxToolchainProvisioner: MLXToolchainProvisioner
-    @ObservedObject var mlxServerManager: MLXServerManager
+    @ObservedObject var mlxRuntime: MLXRuntimeManager
     @ObservedObject var mlxModelDownloader: MLXModelDownloader
     @ObservedObject var foundationModelAvailabilityService: FoundationModelAvailabilityService
     @ObservedObject var runtimeModel: RuntimeBootstrapModel
