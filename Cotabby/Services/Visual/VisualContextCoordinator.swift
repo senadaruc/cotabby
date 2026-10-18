@@ -207,22 +207,27 @@ final class VisualContextCoordinator {
                 guard !Task.isCancelled else {
                     return
                 }
+                // The field as it reads now, not at capture start: everything the capture saw of
+                // the user's typing is already in it, so the change policies can discount all of it.
+                var fieldContext = snapshotContext
                 if let provider = refreshContextProvider {
                     let liveContext = provider()
                     guard activeAugmentationSession?.sessionID == session.sessionID else { return }
-                    guard screenRecordingPermissionProvider(), liveContext?.identity == snapshotContext.identity,
-                          liveContext?.sessionIdentity == snapshotContext.sessionIdentity,
-                          liveContext?.isSecure == false else {
+                    guard screenRecordingPermissionProvider(), let liveContext,
+                          liveContext.identity == snapshotContext.identity,
+                          liveContext.sessionIdentity == snapshotContext.sessionIdentity,
+                          !liveContext.isSecure else {
                         cancel(resetState: true)
                         return
                     }
+                    fieldContext = liveContext
                 }
 
                 applyExcerpt(
                     excerpt,
                     for: session.sessionID,
                     identity: snapshotContext.identity,
-                    fieldText: snapshotContext.precedingText + snapshotContext.trailingText,
+                    fieldText: fieldContext.precedingText + fieldContext.trailingText,
                     capturedAt: capturedAt
                 )
             } catch is CancellationError {
@@ -376,7 +381,9 @@ final class VisualContextCoordinator {
         // changed in either sense, so OCR noise and the user's own typing no longer rewrite the
         // screen section (and invalidate its KV cache) on every refresh, while a newly arrived
         // message still reaches the next request without retiring what is on screen.
-        let changed = ScreenTextChangePolicy.isMeaningfulChange(from: lastReadScreenText, to: excerpt.text)
+        let changed = ScreenTextChangePolicy.isMeaningfulChange(
+            from: lastReadScreenText, to: excerpt.text, fieldText: fieldText
+        )
         lastReadScreenText = excerpt.text
         let material = changed || VisualContextChangePolicy.isMaterialChange(
             previous: previousPromptText, next: excerpt.text, fieldText: fieldText
