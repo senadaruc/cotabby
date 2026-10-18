@@ -100,6 +100,43 @@ final class RewritePromptBuilderTests: XCTestCase {
         XCTAssertTrue(RewritePromptBuilder.basePrompt(request).contains("Written in Turkish"))
     }
 
+    /// A base model continues the pattern it is shown. With only an English example, "Uc hafta hic
+    /// kilo vermedim…" came back in English in 9 of 9 runs on Gemma 4 E4B. Labelling the draft and
+    /// the rewrite with the language, and showing an example in that language, kept 15 of 15 in
+    /// Turkish.
+    func test_basePromptLabelsTheDraftAndTheRewriteWithItsLanguage() {
+        var request = RewriteRequest(selection: "selam nasilsin", action: .rewrite, memory: .empty)
+        request.language = "Turkish"
+        let prompt = RewritePromptBuilder.basePrompt(request)
+        XCTAssertTrue(prompt.hasSuffix("Draft (Turkish): selam nasilsin\nRewritten (Turkish):"))
+        XCTAssertTrue(RewritePromptBuilder.baseStopSequences.contains("\nDraft ("))
+    }
+
+    func test_everyActionHasATurkishExampleForATurkishDraft() {
+        for action in RewriteAction.tones + RewriteAction.refinements {
+            var request = RewriteRequest(selection: "x y", action: action, memory: .empty)
+            request.language = "Turkish"
+            let prompt = RewritePromptBuilder.basePrompt(request)
+            XCTAssertEqual(prompt.components(separatedBy: "Draft (Turkish): ").count - 1, 2, "\(action.label) shows a Turkish pair")
+        }
+    }
+
+    func test_aLanguageWithoutAnExampleGetsNoEnglishExampleToImitate() {
+        var request = RewriteRequest(selection: "wir sehen uns morgen", action: .formal, memory: .empty)
+        request.language = "German"
+        let prompt = RewritePromptBuilder.basePrompt(request)
+        XCTAssertFalse(prompt.contains("(English)"))
+        XCTAssertTrue(prompt.hasSuffix("Draft (German): wir sehen uns morgen\nRewritten (German):"))
+    }
+
+    func test_anEnglishDraftKeepsItsEnglishExample() {
+        var request = RewriteRequest(selection: "can u send it", action: .rewrite, memory: .empty)
+        request.language = "English"
+        let prompt = RewritePromptBuilder.basePrompt(request)
+        XCTAssertTrue(prompt.contains("Draft (English): i will send u the file tomorow"))
+        XCTAssertTrue(prompt.hasSuffix("Draft (English): can u send it\nRewritten (English):"))
+    }
+
     // MARK: - Tones and the fix tick box
 
     func test_fixTickBoxAddsTypoFixingToATone() {

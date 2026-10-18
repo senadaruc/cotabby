@@ -25,7 +25,7 @@ nonisolated enum RewritePromptBuilder {
     /// A sender name is a label, not a message, so it gets a much shorter bound.
     static let senderCharacterLimit = 60
 
-    static let baseStopSequences = ["\nDraft:", "\n\nDraft", "\n\n\n"]
+    static let baseStopSequences = ["\nDraft:", "\nDraft (", "\n\nDraft", "\n\n\n"]
 
     /// The in-process (Apple Intelligence and llama) output budget: about 1.5x the selection's
     /// tokens (about 4 characters per token) plus a margin, capped.
@@ -128,18 +128,71 @@ nonisolated enum RewritePromptBuilder {
         return "The draft is written in \(language). Write the rewrite in \(language), never in another language."
     }
 
+    /// A base model continues the pattern it is shown, so the language goes into the pattern itself:
+    /// every draft and rewrite is labelled with its language, and the example pairs show the
+    /// draft's language being kept. With a single English example, a Turkish draft came back in
+    /// English in 9 of 9 runs on Gemma 4 E4B ("Uc hafta hic kilo vermedim…"), and still in 6 of 15
+    /// with the labels alone. An English example plus one in the draft's language kept 15 of 15 in
+    /// Turkish. For a language without a shipped example the English one is left out, which also
+    /// kept 15 of 15; a draft whose language is unknown keeps the unlabelled pattern.
     static func basePrompt(_ request: RewriteRequest) -> String {
-        let example = baseExample(request.action)
-        let languageNote = request.language.map { "Written in \($0), same meaning." } ?? "Same language, same meaning."
-        var prompt = "Each draft below is rewritten. \(actionLine(request.action)) \(languageNote)\n\n"
-        if !request.memory.facts.isEmpty {
-            prompt += "Known facts: "
-            prompt += request.memory.facts.map { trim($0.text, factCharacterLimit) }.joined(separator: " ")
-            prompt += "\n\n"
+        guard let language = request.language else {
+            let example = baseExample(request.action)
+            var prompt = "Each draft below is rewritten. \(actionLine(request.action)) Same language, same meaning.\n\n"
+            prompt += factsLine(request)
+            prompt += "Draft: \(example.draft)\nRewritten: \(example.rewritten)\n\n"
+            prompt += "Draft: \(request.selection)\nRewritten:"
+            return prompt
         }
-        prompt += "Draft: \(example.draft)\nRewritten: \(example.rewritten)\n\n"
-        prompt += "Draft: \(request.selection)\nRewritten:"
+        var prompt = "Each draft below is rewritten in its own language. \(actionLine(request.action)) "
+            + "Written in \(language), same meaning.\n\n"
+        prompt += factsLine(request)
+        let english = baseExample(request.action)
+        if language == "English" {
+            prompt += labelledPair(english, language: "English")
+        } else if let native = nativeExample(request.action, language: language) {
+            prompt += labelledPair(english, language: "English") + labelledPair(native, language: language)
+        }
+        prompt += "Draft (\(language)): \(request.selection)\nRewritten (\(language)):"
         return prompt
+    }
+
+    private static func factsLine(_ request: RewriteRequest) -> String {
+        guard !request.memory.facts.isEmpty else { return "" }
+        return "Known facts: " + request.memory.facts.map { trim($0.text, factCharacterLimit) }.joined(separator: " ") + "\n\n"
+    }
+
+    private static func labelledPair(_ pair: (draft: String, rewritten: String), language: String) -> String {
+        "Draft (\(language)): \(pair.draft)\nRewritten (\(language)): \(pair.rewritten)\n\n"
+    }
+
+    /// The action's example in the draft's own language, for the languages Cotabby ships one for.
+    private static func nativeExample(_ action: RewriteAction, language: String) -> (draft: String, rewritten: String)? {
+        guard language == "Turkish" else { return nil }
+        switch action {
+        case .fixOnly:
+            return ("yarin dosyayi gonderecem, gecikme icin kusura bakma", "Yarın dosyayı göndereceğim, gecikme için kusura bakma.")
+        case .formal:
+            return ("selam, raporu bi an once atabilir misin", "Merhaba, raporu en kısa sürede gönderebilir misiniz?")
+        case .friendly:
+            return ("Raporu gönder.", "Selam! Fırsatın olunca raporu gönderebilir misin? Çok teşekkürler!")
+        case .family:
+            return ("pazar geliyor musun", "Pazar günü geliyor musun? Seni görmek çok güzel olur!")
+        case .closeFriend:
+            return ("Bu akşam görüşmek için müsait misiniz?", "bu akşam boş musun? bi şeyler yapalım")
+        case .customer:
+            return ("sorununuzu aldik yakinda duzeltecegiz",
+                    "Bize bildirdiğiniz için teşekkür ederiz. Sorunu inceliyoruz ve en kısa sürede size bilgi vereceğiz.")
+        case .shorter:
+            return ("Yarınki toplantıya katılamayacağımı sana haber vermek istedim.", "Yarınki toplantıya katılamıyorum.")
+        case .longer:
+            return ("yarin gorusebilir miyiz",
+                    "Yarın görüşebilir miyiz? Gelinen noktayı konuşup sonraki adımlarda anlaşmak istiyorum. "
+                        + "Hangi saat uygun, haber verir misin?")
+        case .rewrite, .custom:
+            return ("yarin dosyayi gonderirim, gec kaldim kusura bakma cok yogundum",
+                    "Dosyayı yarın gönderirim. Geç kaldığım için kusura bakma, çok yoğundum.")
+        }
     }
 
     private static func baseExample(_ action: RewriteAction) -> (draft: String, rewritten: String) {
