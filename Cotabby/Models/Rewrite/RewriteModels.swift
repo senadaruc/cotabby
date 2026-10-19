@@ -103,6 +103,9 @@ nonisolated enum RewriteCloudProvider: String, CaseIterable, Sendable {
 
 /// The Rewrite settings, as one snapshot the coordinator and engine read per rewrite.
 nonisolated struct RewritePreferences: Equatable, Sendable {
+    /// The master switch. Off: no selection is armed, so there is no wand, no ⌃⌥R key tap and no
+    /// selection work at all.
+    var isEnabled: Bool
     var provider: RewriteProviderKind
     /// Which cloud service the API provider uses.
     var cloudProvider: RewriteCloudProvider
@@ -123,6 +126,7 @@ nonisolated struct RewritePreferences: Equatable, Sendable {
     var shortcutLabel: String
 
     static let defaults = RewritePreferences(
+        isEnabled: true,
         provider: .sameAsAutocomplete,
         cloudProvider: .anthropic,
         apiBaseURL: "",
@@ -144,6 +148,13 @@ nonisolated struct RewritePreferences: Equatable, Sendable {
 
     /// The API root the current service is reached at.
     var effectiveBaseURL: String { cloudProvider.baseURL ?? apiBaseURL }
+
+    /// Whether a model list requested for `service` at `baseURL` still belongs to these settings.
+    /// The user may switch service or edit the URL while the list loads; its result, or its error,
+    /// must not then appear under the new one.
+    func isModelListSource(service: RewriteCloudProvider, baseURL: String) -> Bool {
+        cloudProvider == service && effectiveBaseURL == baseURL
+    }
 }
 
 /// What memory contributes to one rewrite: facts about the person or thread, and a few of the
@@ -166,30 +177,74 @@ nonisolated struct RewriteMemoryContext: Equatable, Sendable {
 nonisolated struct RewriteRequest: Equatable, Sendable {
     let selection: String
     let action: RewriteAction
-    let memory: RewriteMemoryContext
+    /// Memory facts and style examples, empty when memory is off or may not reach the provider.
+    var memory: RewriteMemoryContext = .empty
     /// The selection's language by its English name ("Turkish"), when `RewriteLanguageDetector`
     /// could tell; the prompt then requires it instead of hoping the model keeps the language.
-    var language: String? = nil
+    var language: String?
     /// The "Fix spelling & grammar" tick box at the time of the rewrite.
     var fixesMistakes: Bool = true
     /// Set when Shorter or Longer refines an earlier result: the tone (or custom instruction) that
     /// produced it, which the refinement keeps. `selection` is then that result, not the user's text.
-    var tone: RewriteAction? = nil
+    var tone: RewriteAction?
+}
+
+/// Where a popup's rewrites go, resolved once when the popup opens: the concrete provider and what
+/// the disclosure says about it. Every run from that popup (the first action, Retry, Shorter, Longer)
+/// goes to this destination, so the host the popup named is the host that receives the text, and
+/// the memory policy is decided for that same provider.
+nonisolated struct RewriteDestination: Equatable, Sendable {
+    /// The resolved provider; never `sameAsAutocomplete`.
+    let kind: RewriteProviderKind
+    let sendsOffDevice: Bool
+    let hostName: String?
+    /// The server's full base URL (scheme, host, port, path) for a provider that talks to one over
+    /// the network, nil otherwise. Not shown; it lets the engine notice a change the host alone
+    /// would miss, such as another port on the same machine.
+    let endpointURL: String?
+
+    init(kind: RewriteProviderKind, sendsOffDevice: Bool, hostName: String?, endpointURL: String? = nil) {
+        self.kind = kind
+        self.sendsOffDevice = sendsOffDevice
+        self.hostName = hostName
+        self.endpointURL = endpointURL
+    }
+
+    /// The popup's line naming the host the selected text goes to; nil when it stays on this Mac.
+    var disclosure: String? { disclosure(usesMemory: false) }
+
+    /// The disclosure for the popup's memory toggle: memory facts are named only while memory is on.
+    /// A Local Endpoint is the endpoint set up in Engine & Model, which the line says, because the
+    /// user may know that host as autocomplete's rather than as a rewrite destination.
+    func disclosure(usesMemory: Bool) -> String? {
+        guard sendsOffDevice, let hostName else { return nil }
+        let what = usesMemory ? "The selected text and memory facts are" : "The selected text is"
+        if kind == .localEndpoint {
+            return "\(what) sent to \(hostName), the endpoint set up in Engine & Model."
+        }
+        return "\(what) sent to \(hostName)."
+    }
 }
 
 nonisolated enum RewriteError: LocalizedError, Equatable {
     case noProvider
+    /// A named cloud service with no key saved; carries the service's display name.
+    case missingAPIKey(String)
     case unusableOutput
     case selectionTooLong
     /// The chosen provider cannot run (MLX not ready, no model, ...); the text says why.
     case unavailable(String)
+    /// Settings changed where the text would go after the popup named a destination.
+    case destinationChanged
 
     var errorDescription: String? {
         switch self {
         case .noProvider: return "Set up a rewrite model in Settings → Rewrite."
+        case .missingAPIKey(let service): return "Add your \(service) API key in Settings → Rewrite."
         case .unusableOutput: return "Couldn't rewrite this — try again."
         case .selectionTooLong: return "Selection too long to rewrite."
         case .unavailable(let reason): return reason
+        case .destinationChanged: return "Rewrite settings changed. Close this popup and open it again."
         }
     }
 }

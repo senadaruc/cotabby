@@ -1,7 +1,8 @@
 import XCTest
 @testable import Cotabby
 
-/// The engine picks the provider the user chose, never lets memory reach an API unless the user
+/// The engine resolves "Same as autocomplete" to the provider of the autocomplete engine, runs the
+/// provider the user chose, never lets memory reach an API or an off-device endpoint unless the user
 /// allowed it, and returns cleaned text or a clear error.
 @MainActor
 final class RewriteEngineTests: XCTestCase {
@@ -11,6 +12,8 @@ final class RewriteEngineTests: XCTestCase {
     private final class StubProvider: RewriteProviding {
         var isAvailable = true
         var unavailableReason: String?
+        var hostName: String?
+        var endpointURL: String?
         var sendsOffDevice: Bool
         var output = "Please let me know if the dates work for you."
         private(set) var received: [RewriteRequest] = []
@@ -23,11 +26,11 @@ final class RewriteEngineTests: XCTestCase {
     }
 
     private let draft = "Please let me know if te dates are ok and wors for you."
-    private let memory = RewriteMemoryContext(facts: [.init(text: "Dinner on the 28th", source: "whatsapp", sender: "Richard")],
-                                              styleExamples: ["Best regards, Senad"])
+    private let memory = RewriteMemoryContext(facts: [.init(text: "Dinner on the 28th", source: "whatsapp", sender: "Charlie")],
+                                              styleExamples: ["Best regards, Alex"])
 
-    /// Every provider slot, as stubs: Apple Intelligence and Open Source and MLX stay on this Mac,
-    /// the Local Endpoint stub is on loopback unless a test flips it, the API stub is off device.
+    /// Every provider slot, as stubs: Apple Intelligence, Open Source and MLX stay on this Mac, the
+    /// Local Endpoint stub is on loopback unless a test flips it, the API stub is off device.
     private struct Rig {
         let engine: RewriteEngine
         let apple: StubProvider
@@ -37,7 +40,11 @@ final class RewriteEngineTests: XCTestCase {
         let api: StubProvider
     }
 
-    private func makeRig(_ prefs: RewritePreferences, autocomplete: SuggestionEngineKind = .llamaOpenSource) -> Rig {
+    private func makeRig(
+        _ prefs: RewritePreferences = .defaults,
+        autocomplete: SuggestionEngineKind = .llamaOpenSource,
+        endpointScope: OpenAICompatibleHostScope? = .loopback
+    ) -> Rig {
         let apple = StubProvider(offDevice: false)
         let openSource = StubProvider(offDevice: false)
         let endpoint = StubProvider(offDevice: false)
@@ -45,49 +52,24 @@ final class RewriteEngineTests: XCTestCase {
         let api = StubProvider(offDevice: true)
         let engine = RewriteEngine(
             appleIntelligence: apple, openSource: openSource, localEndpoint: endpoint, mlx: mlx, api: api,
-            autocompleteEngine: { autocomplete }, preferences: { prefs })
+            autocompleteEngine: { autocomplete }, endpointHostScope: { endpointScope }, preferences: { prefs })
         Self.retained.append(contentsOf: [engine, apple, openSource, endpoint, mlx, api] as [AnyObject])
         return Rig(engine: engine, apple: apple, openSource: openSource, endpoint: endpoint, mlx: mlx, api: api)
     }
 
-    /// The old three-slot shape: `local` is the Open Source stub (the default resolves to it).
-    private func make(_ prefs: RewritePreferences) -> (RewriteEngine, StubProvider, StubProvider) {
-        let rig = makeRig(prefs)
-        return (rig.engine, rig.openSource, rig.api)
-    }
-
-    func test_unavailableMLXThrowsItsOwnReason() async {
+    private func prefs(_ provider: RewriteProviderKind) -> RewritePreferences {
         var prefs = RewritePreferences.defaults
-        prefs.provider = .mlx
-        let rig = makeRig(prefs)
-        rig.mlx.isAvailable = false
-        rig.mlx.unavailableReason = "Download an MLX model in Settings → Engine & Model."
-        do {
-            _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: .empty), onPartial: { _ in })
-            XCTFail("expected an error")
-        } catch {
-            XCTAssertEqual(error as? RewriteError, .unavailable("Download an MLX model in Settings → Engine & Model."))
-        }
-    }
-
-    func test_mlxProviderIsChosenAndKeepsMemory() async throws {
-        var prefs = RewritePreferences.defaults
-        prefs.provider = .mlx
-        let rig = makeRig(prefs)
-        XCTAssertTrue(rig.engine.memoryAllowed)
-        _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: memory), onPartial: { _ in })
-        XCTAssertEqual(rig.mlx.received.first?.memory, memory)
-        XCTAssertTrue(rig.openSource.received.isEmpty)
-        XCTAssertTrue(rig.api.received.isEmpty)
+        prefs.provider = provider
+        return prefs
     }
 
     func test_sameAsAutocompleteRunsOnTheProviderOfTheAutocompleteEngine() async throws {
-        let request = RewriteRequest(selection: draft, action: .fixOnly, memory: .empty)
+        let request = RewriteRequest(selection: draft, action: .fixOnly)
         for (engineKind, pick) in [
             (SuggestionEngineKind.appleIntelligence, \Rig.apple), (.llamaOpenSource, \Rig.openSource),
             (.openAICompatible, \Rig.endpoint), (.mlx, \Rig.mlx)
         ] {
-            let rig = makeRig(RewritePreferences.defaults, autocomplete: engineKind)
+            let rig = makeRig(autocomplete: engineKind)
             _ = try await rig.engine.rewrite(request, onPartial: { _ in })
             XCTAssertEqual(rig[keyPath: pick].received.count, 1, "\(engineKind)")
             XCTAssertTrue(rig.api.received.isEmpty)
@@ -95,106 +77,133 @@ final class RewriteEngineTests: XCTestCase {
     }
 
     func test_anExplicitChoiceBeatsTheAutocompleteEngine() async throws {
-        var prefs = RewritePreferences.defaults
-        prefs.provider = .appleIntelligence
-        let rig = makeRig(prefs, autocomplete: .mlx)
-        _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .fixOnly, memory: .empty), onPartial: { _ in })
+        let rig = makeRig(prefs(.appleIntelligence), autocomplete: .mlx)
+        _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .fixOnly), onPartial: { _ in })
         XCTAssertEqual(rig.apple.received.count, 1)
         XCTAssertTrue(rig.mlx.received.isEmpty)
     }
 
-    // MARK: - Memory policy on the resolved provider
-
-    func test_memoryIsAllowedOnTheThreeLocalProviders() {
-        for kind in [RewriteProviderKind.appleIntelligence, .openSource, .mlx] {
-            var prefs = RewritePreferences.defaults
-            prefs.provider = kind
-            prefs.sendsMemoryToAPI = false
-            XCTAssertTrue(makeRig(prefs).engine.memoryAllowed, "\(kind)")
+    func test_eachExplicitKindRunsItsOwnProvider() async throws {
+        for (kind, pick) in [
+            (RewriteProviderKind.appleIntelligence, \Rig.apple), (.openSource, \Rig.openSource),
+            (.localEndpoint, \Rig.endpoint), (.mlx, \Rig.mlx), (.api, \Rig.api)
+        ] {
+            let rig = makeRig(prefs(kind))
+            _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .fixOnly), onPartial: { _ in })
+            XCTAssertEqual(rig[keyPath: pick].received.count, 1, "\(kind)")
+            XCTAssertTrue(rig.engine.activeProvider === rig[keyPath: pick], "\(kind)")
         }
     }
 
-    func test_localEndpointOnLoopbackAllowsMemory() async throws {
-        var prefs = RewritePreferences.defaults
-        prefs.provider = .localEndpoint
-        prefs.sendsMemoryToAPI = false
-        let rig = makeRig(prefs)
-        rig.endpoint.sendsOffDevice = false
-        XCTAssertTrue(rig.engine.memoryAllowed)
-        _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: memory), onPartial: { _ in })
-        XCTAssertEqual(rig.endpoint.received.first?.memory, memory)
+    func test_sameAsAutocompleteOnALoopbackEndpointUsesIt() {
+        let rig = makeRig(autocomplete: .openAICompatible, endpointScope: .loopback)
+        XCTAssertEqual(rig.engine.resolvedKind, .localEndpoint)
+        XCTAssertTrue(rig.engine.activeProvider === rig.endpoint)
+        XCTAssertEqual(rig.engine.destination(), RewriteDestination(kind: .localEndpoint, sendsOffDevice: false, hostName: nil))
+        XCTAssertNil(rig.engine.destination().disclosure)
+        XCTAssertFalse(rig.engine.sameAsAutocompleteStaysOnDevice)
     }
 
-    func test_localEndpointOnTheLANFollowsTheMemoryToggle() async throws {
-        var prefs = RewritePreferences.defaults
-        prefs.provider = .localEndpoint
-        prefs.sendsMemoryToAPI = false
-        let rig = makeRig(prefs)
+    /// The default never sends a rewrite to a LAN or public endpoint on its own.
+    func test_sameAsAutocompleteOnARemoteEndpointRunsOnThisMac() async throws {
+        let rig = makeRig(autocomplete: .openAICompatible, endpointScope: .localNetwork)
         rig.endpoint.sendsOffDevice = true
-        XCTAssertFalse(rig.engine.memoryAllowed)
-        _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: memory), onPartial: { _ in })
-        XCTAssertEqual(rig.endpoint.received.first?.memory, RewriteMemoryContext.empty, "the engine strips it")
+        XCTAssertTrue(rig.engine.sameAsAutocompleteStaysOnDevice)
+        XCTAssertEqual(rig.engine.resolvedKind, .appleIntelligence)
+        XCTAssertNil(rig.engine.destination().disclosure)
+        _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .fixOnly), onPartial: { _ in })
+        XCTAssertEqual(rig.apple.received.count, 1)
+        XCTAssertTrue(rig.endpoint.received.isEmpty, "nothing reached the remote endpoint")
 
-        prefs.sendsMemoryToAPI = true
-        let allowed = makeRig(prefs)
-        allowed.endpoint.sendsOffDevice = true
-        XCTAssertTrue(allowed.engine.memoryAllowed)
+        let noAppleIntelligence = makeRig(autocomplete: .openAICompatible, endpointScope: .publicInternet)
+        noAppleIntelligence.apple.isAvailable = false
+        XCTAssertEqual(noAppleIntelligence.engine.resolvedKind, .openSource)
     }
 
-    func test_sameAsAutocompleteOnALANEndpointStripsMemory() async throws {
-        let rig = makeRig(RewritePreferences.defaults, autocomplete: .openAICompatible)
+    func test_explicitLocalEndpointOnARemoteHostIsUsedAndDisclosed() {
+        let rig = makeRig(prefs(.localEndpoint), autocomplete: .openAICompatible, endpointScope: .publicInternet)
         rig.endpoint.sendsOffDevice = true
-        XCTAssertFalse(rig.engine.memoryAllowed)
-        _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: memory), onPartial: { _ in })
-        XCTAssertEqual(rig.endpoint.received.first?.memory, RewriteMemoryContext.empty)
+        rig.endpoint.hostName = "api.example.com"
+        XCTAssertTrue(rig.engine.activeProvider === rig.endpoint)
+        XCTAssertEqual(rig.engine.destination().kind, .localEndpoint)
+        XCTAssertNotNil(rig.engine.destination().disclosure)
     }
 
-    func test_activeProviderFollowsTheResolvedKind() {
-        let rig = makeRig(RewritePreferences.defaults, autocomplete: .mlx)
-        XCTAssertTrue(rig.engine.activeProvider === rig.mlx)
-        XCTAssertEqual(rig.engine.resolvedKind, .mlx)
-    }
-
-    func test_usesTheChosenProvider() async throws {
-        var prefs = RewritePreferences.defaults
-        prefs.provider = .api
-        let (engine, local, api) = make(prefs)
-        _ = try await engine.rewrite(RewriteRequest(selection: draft, action: .fixOnly, memory: .empty), onPartial: { _ in })
-        XCTAssertEqual(api.received.count, 1)
-        XCTAssertTrue(local.received.isEmpty)
-    }
-
-    func test_engineStripsMemoryForAPIWhenSendingIsOff() async throws {
-        var prefs = RewritePreferences.defaults
-        prefs.provider = .api
-        prefs.sendsMemoryToAPI = false
-        let (engine, _, api) = make(prefs)
-        XCTAssertFalse(engine.memoryAllowed)
-        _ = try await engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: memory), onPartial: { _ in })
-        XCTAssertEqual(api.received.first?.memory, RewriteMemoryContext.empty)
-    }
-
-    func test_memoryReachesTheAPIOnlyWhenAllowed() async throws {
-        var prefs = RewritePreferences.defaults
-        prefs.provider = .api
-        prefs.sendsMemoryToAPI = true
-        let (engine, _, api) = make(prefs)
-        _ = try await engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: memory), onPartial: { _ in })
-        XCTAssertEqual(api.received.first?.memory, memory)
-    }
-
-    func test_localAlwaysKeepsMemory() async throws {
-        let (engine, local, _) = make(RewritePreferences.defaults)
-        XCTAssertTrue(engine.memoryAllowed)
-        _ = try await engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: memory), onPartial: { _ in })
-        XCTAssertEqual(local.received.first?.memory, memory)
-    }
-
-    func test_unavailableProviderThrowsNoProvider() async {
-        let (engine, local, _) = make(RewritePreferences.defaults)
-        local.isAvailable = false
+    /// A popup's destination is fixed when it opens; if the provider would now send elsewhere (the
+    /// endpoint's URL was edited meanwhile), the run sends nothing.
+    func test_aDestinationThatNoLongerMatchesSendsNothing() async {
+        let rig = makeRig(prefs(.localEndpoint), autocomplete: .openAICompatible)
+        let disclosed = rig.engine.destination()
+        rig.endpoint.sendsOffDevice = true
         do {
-            _ = try await engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: .empty), onPartial: { _ in })
+            _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .fixOnly), to: disclosed, onPartial: { _ in })
+            XCTFail("expected an error")
+        } catch {
+            XCTAssertEqual(error as? RewriteError, .destinationChanged)
+        }
+        XCTAssertTrue(rig.endpoint.received.isEmpty)
+    }
+
+    /// Another port on the same host is another server: a popup opened for :8000 must not send to :9000.
+    func test_aDestinationOnAnotherPortOfTheSameHostSendsNothing() async {
+        let rig = makeRig(prefs(.localEndpoint), autocomplete: .openAICompatible, endpointScope: .localNetwork)
+        rig.endpoint.sendsOffDevice = true
+        rig.endpoint.hostName = "192.168.1.50"
+        rig.endpoint.endpointURL = "http://192.168.1.50:8000/v1"
+        let disclosed = rig.engine.destination()
+        XCTAssertEqual(disclosed.endpointURL, "http://192.168.1.50:8000/v1")
+        rig.endpoint.endpointURL = "http://192.168.1.50:9000/v1"
+        do {
+            _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .fixOnly), to: disclosed, onPartial: { _ in })
+            XCTFail("expected an error")
+        } catch {
+            XCTAssertEqual(error as? RewriteError, .destinationChanged)
+        }
+        XCTAssertTrue(rig.endpoint.received.isEmpty)
+    }
+
+    func test_destinationDisclosureWording() {
+        XCTAssertEqual(RewriteDestination(kind: .api, sendsOffDevice: true, hostName: "api.example.com").disclosure,
+                       "The selected text is sent to api.example.com.")
+        XCTAssertEqual(RewriteDestination(kind: .localEndpoint, sendsOffDevice: true, hostName: "10.0.0.5").disclosure,
+                       "The selected text is sent to 10.0.0.5, the endpoint set up in Engine & Model.")
+        XCTAssertNil(RewriteDestination(kind: .openSource, sendsOffDevice: false, hostName: nil).disclosure)
+    }
+
+    func test_providerForSameAsAutocompleteIsTheResolvedOne() {
+        let rig = makeRig(autocomplete: .mlx)
+        XCTAssertTrue(rig.engine.provider(for: .sameAsAutocomplete) === rig.mlx)
+        XCTAssertTrue(rig.engine.provider(for: .openSource) === rig.openSource)
+    }
+
+    /// The request reaches the provider whole: language, tick box and the tone a refinement keeps.
+    func test_requestReachesTheProviderUnchanged() async throws {
+        let rig = makeRig(prefs(.api))
+        var request = RewriteRequest(selection: draft, action: .shorter)
+        request.language = "Turkish"
+        request.fixesMistakes = false
+        request.tone = .family
+        _ = try await rig.engine.rewrite(request, onPartial: { _ in })
+        XCTAssertEqual(rig.api.received.first, request)
+    }
+
+    func test_unavailableProviderThrowsItsOwnReason() async {
+        let rig = makeRig(prefs(.mlx))
+        rig.mlx.isAvailable = false
+        rig.mlx.unavailableReason = "Download an MLX model in Settings → Engine & Model."
+        do {
+            _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .rewrite), onPartial: { _ in })
+            XCTFail("expected an error")
+        } catch {
+            XCTAssertEqual(error as? RewriteError, .unavailable("Download an MLX model in Settings → Engine & Model."))
+        }
+    }
+
+    func test_unavailableProviderWithoutAReasonThrowsNoProvider() async {
+        let rig = makeRig()
+        rig.openSource.isAvailable = false
+        do {
+            _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .rewrite), onPartial: { _ in })
             XCTFail("Expected noProvider")
         } catch {
             XCTAssertEqual(error as? RewriteError, .noProvider)
@@ -202,10 +211,10 @@ final class RewriteEngineTests: XCTestCase {
     }
 
     func test_unusableOutputThrows() async {
-        let (engine, local, _) = make(RewritePreferences.defaults)
-        local.output = "   "
+        let rig = makeRig()
+        rig.openSource.output = "   "
         do {
-            _ = try await engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: .empty), onPartial: { _ in })
+            _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .rewrite), onPartial: { _ in })
             XCTFail("Expected unusableOutput")
         } catch {
             XCTAssertEqual(error as? RewriteError, .unusableOutput)
@@ -213,25 +222,91 @@ final class RewriteEngineTests: XCTestCase {
     }
 
     func test_tooLongSelectionThrows() async {
-        let (engine, _, _) = make(RewritePreferences.defaults)
+        let rig = makeRig()
         let long = String(repeating: "word ", count: 401)
         do {
-            _ = try await engine.rewrite(RewriteRequest(selection: long, action: .rewrite, memory: .empty), onPartial: { _ in })
+            _ = try await rig.engine.rewrite(RewriteRequest(selection: long, action: .rewrite), onPartial: { _ in })
             XCTFail("Expected selectionTooLong")
         } catch {
             XCTAssertEqual(error as? RewriteError, .selectionTooLong)
         }
     }
 
-    func test_languageSurvivesMemoryStrippingForTheAPI() async throws {
-        var prefs = RewritePreferences.defaults
-        prefs.provider = .api
-        let (engine, _, api) = make(prefs)
-        var request = RewriteRequest(selection: draft, action: .rewrite, memory: memory)
+    // MARK: - Memory policy on the resolved destination
+
+    func test_memoryIsAllowedOnTheThreeLocalProviders() async throws {
+        for (kind, pick) in [(RewriteProviderKind.appleIntelligence, \Rig.apple), (.openSource, \Rig.openSource), (.mlx, \Rig.mlx)] {
+            var prefs = prefs(kind)
+            prefs.sendsMemoryToAPI = false
+            let rig = makeRig(prefs)
+            XCTAssertTrue(rig.engine.memoryAllowed, "\(kind)")
+            _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: memory), onPartial: { _ in })
+            XCTAssertEqual(rig[keyPath: pick].received.first?.memory, memory, "\(kind)")
+        }
+    }
+
+    func test_localEndpointOnLoopbackAllowsMemory() async throws {
+        let rig = makeRig(prefs(.localEndpoint))
+        XCTAssertTrue(rig.engine.memoryAllowed)
+        _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: memory), onPartial: { _ in })
+        XCTAssertEqual(rig.endpoint.received.first?.memory, memory)
+    }
+
+    func test_localEndpointOffThisMacFollowsTheMemoryToggle() async throws {
+        let rig = makeRig(prefs(.localEndpoint), endpointScope: .localNetwork)
+        rig.endpoint.sendsOffDevice = true
+        XCTAssertFalse(rig.engine.memoryAllowed)
+        _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: memory), onPartial: { _ in })
+        XCTAssertEqual(rig.endpoint.received.first?.memory, RewriteMemoryContext.empty, "the engine strips it")
+
+        var allowedPrefs = prefs(.localEndpoint)
+        allowedPrefs.sendsMemoryToAPI = true
+        let allowed = makeRig(allowedPrefs, endpointScope: .localNetwork)
+        allowed.endpoint.sendsOffDevice = true
+        XCTAssertTrue(allowed.engine.memoryAllowed)
+    }
+
+    /// "Same as autocomplete" with a LAN endpoint runs on this Mac, so memory stays and nothing
+    /// reaches the endpoint.
+    func test_sameAsAutocompleteOnALANEndpointKeepsMemoryOnThisMac() async throws {
+        let rig = makeRig(autocomplete: .openAICompatible, endpointScope: .localNetwork)
+        rig.endpoint.sendsOffDevice = true
+        XCTAssertTrue(rig.engine.memoryAllowed)
+        _ = try await rig.engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: memory), onPartial: { _ in })
+        XCTAssertEqual(rig.apple.received.first?.memory, memory)
+        XCTAssertTrue(rig.endpoint.received.isEmpty)
+    }
+
+    func test_memoryReachesTheAPIOnlyWhenAllowed() async throws {
+        let stripped = makeRig(prefs(.api))
+        XCTAssertFalse(stripped.engine.memoryAllowed)
+        _ = try await stripped.engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: memory), onPartial: { _ in })
+        XCTAssertEqual(stripped.api.received.first?.memory, RewriteMemoryContext.empty)
+
+        var allowedPrefs = prefs(.api)
+        allowedPrefs.sendsMemoryToAPI = true
+        let allowed = makeRig(allowedPrefs)
+        _ = try await allowed.engine.rewrite(RewriteRequest(selection: draft, action: .rewrite, memory: memory), onPartial: { _ in })
+        XCTAssertEqual(allowed.api.received.first?.memory, memory)
+    }
+
+    /// Dropping memory keeps the rest of the request: language, tick box and a refinement's tone.
+    func test_strippingMemoryKeepsTheRestOfTheRequest() async throws {
+        let rig = makeRig(prefs(.api))
+        var request = RewriteRequest(selection: draft, action: .shorter, memory: memory)
         request.language = "Turkish"
-        _ = try await engine.rewrite(request, onPartial: { _ in })
-        XCTAssertEqual(api.received.first?.language, "Turkish")
-        XCTAssertEqual(api.received.first?.memory, .empty)
+        request.fixesMistakes = false
+        request.tone = .family
+        _ = try await rig.engine.rewrite(request, onPartial: { _ in })
+        var expected = request
+        expected.memory = .empty
+        XCTAssertEqual(rig.api.received.first, expected)
+    }
+
+    func test_memoryDisclosureNamesMemoryOnlyWhenOn() {
+        let destination = RewriteDestination(kind: .api, sendsOffDevice: true, hostName: "api.example.com")
+        XCTAssertEqual(destination.disclosure(usesMemory: true), "The selected text and memory facts are sent to api.example.com.")
+        XCTAssertEqual(destination.disclosure(usesMemory: false), "The selected text is sent to api.example.com.")
     }
 }
 

@@ -71,9 +71,11 @@ enum SuggestionEngineKind: String, CaseIterable, Equatable, Hashable, Sendable, 
     }
 
     /// Whether Cotabby may start generations the user has not asked for yet: predict-ahead while
-    /// typing and speculative continuation after an accept. Both rely on the in-process runtimes'
-    /// cheap cancellation (llama.cpp and MLX). An HTTP server keeps decoding an abandoned request
-    /// until its next token write fails, so speculative traffic to the endpoint is mostly wasted.
+    /// typing and speculative continuation after an accept. Both rely on the in-process runtimes
+    /// (llama.cpp and MLX), where a speculative decode yields to the real request at once. A server
+    /// is shared work: it may queue or batch a speculative request beside the one the user is
+    /// waiting for and drop a cancelled one only after its next write fails, so speculation there
+    /// delays real suggestions. The endpoint would also receive text the user never typed.
     var allowsSpeculativeGeneration: Bool {
         switch self {
         case .appleIntelligence, .llamaOpenSource, .mlx:

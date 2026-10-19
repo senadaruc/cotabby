@@ -28,6 +28,9 @@ final class SuggestionEngineRouter {
     /// The machine's conditions for the Recent Requests entry (battery, thermal); nil leaves those
     /// fields out. Set by `CotabbyAppEnvironment` once the conditions monitor exists.
     var conditionsProvider: @MainActor () -> PerformanceConditions? = { nil }
+    /// Generations running right now, whatever the engine. Background work that competes for the
+    /// same GPU (conversation memory's indexing) waits while this is above zero.
+    private(set) var generationsInFlight = 0
 
     init(
         suggestionSettings: SuggestionSettingsModel,
@@ -67,6 +70,8 @@ final class SuggestionEngineRouter {
         for request: SuggestionRequest,
         onPartial: (@MainActor (SuggestionResult) -> Void)?
     ) async throws -> SuggestionResult {
+        generationsInFlight += 1
+        defer { generationsInFlight -= 1 }
         let metadata: Logger.Metadata = [
             "request_id": .string(request.requestID),
             "engine": .string(engineMetadataLabel(for: suggestionSettings.selectedEngine))

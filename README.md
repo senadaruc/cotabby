@@ -55,10 +55,17 @@ feed, which would replace these features.
 **Conversation memory**: suggestions and answers can draw on what was said before, in the same
 conversation and with the same people.
 - Reads WhatsApp, Apple Mail, Outlook (New Outlook and the classic database), Microsoft Teams'
-  local cache, your calendars, and a folder of notes you choose. Each source is opt-in.
+  local cache, your calendars, a folder of notes you choose, and documents in iCloud Drive, Google
+  Drive and OneDrive. Each source is opt-in.
+- Suggestions use it in WhatsApp and Teams chats (the open chat, then chats with exactly the same
+  people; a group never stands for a 1:1 chat). Mail and Outlook are synced and searchable, but a
+  mail reply gets no conversation memory yet: neither its subject nor its quoted text can say who
+  it is for, so this waits for reading the compose window's To and Cc fields.
 - Everything stays on your Mac:
-  - Messages are encrypted in Cotabby's folder.
-  - Embeddings are computed on-device with llama.cpp (Qwen3-Embedding-0.6B).
+  - Message contents, names and titles are encrypted in Cotabby's folder (timestamps, sources and
+    the settings file are not).
+  - Embeddings are computed on-device with llama.cpp (Qwen3-Embedding-0.6B), downloaded once from
+    Hugging Face.
   - Memory is never sent to a remote model endpoint.
 - Hybrid search (meaning plus exact words) with retention limits and per-person or
   per-conversation exclusions.
@@ -67,13 +74,22 @@ conversation and with the same people.
 
 **Answer cards**: when a message asks you something and your reply is still empty, Cotabby drafts
 an answer from memory.
-- The draft appears on a card with the messages it is based on. **Tab** inserts it; **Esc**
-  dismisses it.
-- It only answers from facts it found. It abstains rather than guess, and treats the question as
-  untrusted text.
+- Only in Mail and Outlook replies (from the quoted message below the caret) and in WhatsApp and
+  Teams chats whose memory source is on; never in a browser or another app. Off per app or per
+  window from the field icon.
+- Facts come from the chat you reply in and from the sources you turned **Use for answers** on for
+  (off for every source until you turn it on). A quoted mail is only the question, never a way
+  into another thread, so a mail answer draws only on those sources.
+- The draft appears on a card that names what it answers and every message it was given, each
+  from another conversation marked. A click or **Tab** in an empty reply pastes it for you to edit
+  (nothing is sent); **Esc** dismisses it.
+- It only answers from facts it found and abstains rather than guess. The question and every fact
+  are treated as quoted, untrusted text, and a message that reads like instructions to an
+  assistant gets no answer.
 - "Are you free Thursday?" is answered from your calendar, with busy and free times only, never
-  what or with whom.
-- It uses Apple Intelligence or the local model, never the remote endpoint.
+  what or with whom. Calendar events themselves are never answer facts.
+- It uses Apple Intelligence, or the local model when Open Source is your engine; never the remote
+  endpoint.
 
 **Other additions** (also offered upstream as pull requests):
 - Translation of incoming messages, and of your replies.

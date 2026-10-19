@@ -6,7 +6,7 @@ import Foundation
 /// half-precision rows (`HalfPrecision`), scored exactly against a query with Accelerate.
 ///
 /// Why an exact scan rather than an approximate graph (HNSW/USearch): memory searches are filtered
-/// (one conversation, the same people, the answer sources, never an excluded chat), and a scan
+/// (one conversation, the same people, the enabled sources, never an excluded chat), and a scan
 /// applies the filter first, so it can never come back short the way a post-filtered graph search
 /// does. It is also fast enough: tens of thousands of 1024-wide rows score in a few milliseconds.
 /// `VectorSearching` is the seam where an approximate index can come in if the corpus outgrows a
@@ -19,7 +19,8 @@ nonisolated protocol VectorSearching: AnyObject, Sendable {
     func replaceAll(_ vectors: [MemoryStore.StoredVector])
     func upsert(_ vectors: [MemoryStore.StoredVector])
     func remove(recordIDs: Set<String>)
-    func search(_ query: [Float], limit: Int, where include: (FlatVectorIndex.Entry) -> Bool) -> [(entry: FlatVectorIndex.Entry, score: Float)]
+    func search(_ query: [Float], limit: Int, where include: (FlatVectorIndex.Entry) -> Bool)
+        -> [(entry: FlatVectorIndex.Entry, score: Float)]
 }
 
 nonisolated final class FlatVectorIndex: VectorSearching, @unchecked Sendable {
@@ -48,6 +49,12 @@ nonisolated final class FlatVectorIndex: VectorSearching, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return entries.count
+    }
+
+    var isEmpty: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return entries.isEmpty
     }
 
     /// Approximate resident size of the vectors, for the pane.
@@ -108,8 +115,14 @@ nonisolated final class FlatVectorIndex: VectorSearching, @unchecked Sendable {
             if row != last {
                 entries[row] = entries[last]
                 rowByPassage[entries[row].passageID] = row
-                rows.replaceSubrange((row * dimensions)..<((row + 1) * dimensions),
-                                     with: rows[(last * dimensions)..<((last + 1) * dimensions)])
+                // Copied in place through one buffer: passing a slice of `rows` to its own
+                // `replaceSubrange` would copy the whole index on every removal.
+                let dimensions = dimensions
+                rows.withUnsafeMutableBufferPointer { buffer in
+                    for offset in 0..<dimensions {
+                        buffer[row * dimensions + offset] = buffer[last * dimensions + offset]
+                    }
+                }
             }
             entries.removeLast()
             rows.removeLast(dimensions)

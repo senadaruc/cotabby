@@ -14,8 +14,12 @@ import Foundation
 /// ```
 ///
 /// `obsoleteItems` are what the earlier Python service left behind (its virtual environment, LEANN
-/// index folders, socket, logs); the engine controller deletes them once.
-nonisolated struct MemoryServicePaths: Equatable, Sendable {
+/// index folders, socket, logs); the engine controller deletes them once. The store, its settings
+/// and the model are never among them.
+///
+/// This was `MemoryServicePaths` before the rename; the layout is the same, so the store a build
+/// with the old name wrote is the store this one opens.
+nonisolated struct MemoryPaths: Equatable, Sendable {
     let root: URL
 
     init(root: URL) {
@@ -23,11 +27,11 @@ nonisolated struct MemoryServicePaths: Equatable, Sendable {
     }
 
     /// The paths for the running app, keyed by its bundle name.
-    static func standard(bundle: Bundle = .main) -> MemoryServicePaths {
+    static func standard(bundle: Bundle = .main) -> MemoryPaths {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
         let appName = (bundle.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? "Cotabby"
-        return MemoryServicePaths(root: support.appendingPathComponent(appName).appendingPathComponent("Memory"))
+        return MemoryPaths(root: support.appendingPathComponent(appName).appendingPathComponent("Memory"))
     }
 
     var dataDirectory: URL { root.appendingPathComponent("data", isDirectory: true) }
@@ -44,7 +48,7 @@ nonisolated struct MemoryServicePaths: Equatable, Sendable {
             dataDirectory.appendingPathComponent("staging", isDirectory: true),
             dataDirectory.appendingPathComponent("logs", isDirectory: true),
             dataDirectory.appendingPathComponent("memory.sock"),
-            dataDirectory.appendingPathComponent("service.lock"),
+            dataDirectory.appendingPathComponent("service.lock")
         ]
     }
 }

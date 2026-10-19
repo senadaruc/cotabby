@@ -64,7 +64,7 @@ final class RewriteOutputCleanerTests: XCTestCase {
 
     func test_longerMayGrowWellBeyondTheDraft() {
         let draft = "can we meet tomorrow"
-        let longer = "Hi Richard, I hope you are well. Could we meet tomorrow to go over the POC results and the next steps? Let me know what time suits you best."
+        let longer = "Hi Charlie, I hope you are well. Could we meet tomorrow to go over the test results and the next steps? Let me know what time suits you best."
         XCTAssertEqual(RewriteOutputCleaner.clean(longer, selection: draft, action: .longer), longer)
     }
 }

@@ -4,8 +4,8 @@ import SwiftUI
 /// File overview:
 /// The two surfaces of selection rewrite: the button, which is the field-edge Cotabby icon turned
 /// into a wand (`ActivationIndicatorController.showRewrite`), and the popup that opens beside it.
-/// Reusing the icon keeps the affordance outside the field: a separate button at the caret covered
-/// the selection's first letters (WhatsApp, 2026-10-10). The popup is a non-activating panel (like
+/// Reusing the icon keeps the affordance outside the field: a separate button at the caret would
+/// cover the start of the selected text. The popup is a non-activating panel (like
 /// `AnswerCardController`), so the host app stays the active app and keeps its selection; it takes
 /// the keyboard as soon as it opens, so Return and typing go to the popup and never fall through to
 /// the edited app (Return in a chat app would send the message). Owned by
@@ -22,7 +22,6 @@ final class SelectionRewritePanelController {
     /// the new content size with the same rule `showPopup` used.
     private var popupAnchor: CGRect?
 
-    var isPopupVisible: Bool { popupPanel?.isVisible ?? false }
     var isPopupKey: Bool { popupPanel?.isKeyWindow ?? false }
 
     /// Shows the rewrite button where the Cotabby icon sits, just outside the field's edge.
@@ -54,16 +53,6 @@ final class SelectionRewritePanelController {
         guard let panel = popupPanel, let view = panel.contentView else { return }
         place(panel, size: view.fittingSize)
     }
-
-    /// Lets the popup take the keyboard for the instruction box. `showPopup` already does this, so
-    /// this is only a second request if the popup lost key status while open.
-    func allowKeyboard() {
-        guard let panel = popupPanel else { return }
-        panel.allowsKey = true
-        panel.makeKey()
-    }
-
-    func hideButton() { indicator.endRewrite() }
 
     /// Closes both panels. Takes the keyboard back first (`allowsKey = false`) so that no later
     /// `makeKey` call can pull focus into a panel that is already gone.

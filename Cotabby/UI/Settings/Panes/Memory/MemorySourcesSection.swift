@@ -64,16 +64,18 @@ struct MemorySourcesSection: View {
                 requirementControl(requirement, source: source)
             }
 
-            if source.enabled {
+            // Calendar never answers from its events; availability answers read busy/free live.
+            if source.enabled, MemorySourceCatalog.canAnswer(source.id) {
                 Toggle(isOn: Binding(
                     get: { source.isAnswerSource },
                     set: { control.setAnswerSource(source.id, enabled: $0) }
                 )) {
-                    Text("Use for answers to questions")
+                    Text("Use for answers to questions (other conversations too)")
                         .font(.caption)
                 }
                 .controlSize(.small)
-                .help("Answers can quote facts from any conversation of this source, shown with where they came from before you insert them.")
+                .help("Off by default. When on, answers can quote facts from any conversation of this source, " +
+                      "shown with where they came from before you insert them.")
             }
 
             if source.stats.messages > 0 || source.enabled {

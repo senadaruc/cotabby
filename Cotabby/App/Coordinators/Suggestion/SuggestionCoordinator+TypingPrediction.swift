@@ -6,9 +6,9 @@ import Foundation
 extension SuggestionCoordinator {
     func beginTypingPrediction(for request: SuggestionRequest) {
         clearTypingPrediction()
-        // Internal partial collection must not add speculative traffic to an HTTP server (the
-        // endpoint or MLX). Post-acceptance speculation has its own publication contract and is
-        // kept separate.
+        // Internal partial collection must not add speculative requests to a server (the endpoint
+        // or MLX), where they would share generation work with the request the user waits for.
+        // Post-acceptance speculation has its own publication contract and is kept separate.
         guard settingsSnapshot.predictAheadWhileTyping,
               // The tuner pauses predict-ahead under pressure: it keeps a decode running through
               // a typing burst, which is exactly the GPU work battery mode is cutting.

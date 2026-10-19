@@ -11,11 +11,12 @@ struct RewritePaneView: View {
     let credentials: RewriteCredentialVault
     let modelList: RewriteModelListService
     let engine: RewriteEngine
-    /// Observed so the "Same as autocomplete" row and the MLX note follow the autocomplete engine.
+    /// Observed so the "Same as autocomplete" row, the endpoint disclosure and the MLX note follow
+    /// autocomplete's engine and settings.
     @ObservedObject var suggestionSettings: SuggestionSettingsModel
     // Everything a row's availability is computed from. `engine.provider(for:).isAvailable` reads
-    // plain state, so the pane must observe the sources itself: an "(Unavailable)" row then
-    // re-enables as soon as a model download finishes.
+    // plain state, so the pane observes the sources itself: an "(Unavailable)" row then re-enables
+    // as soon as a model download finishes or Apple Intelligence becomes ready.
     @ObservedObject var mlxModelDownloader: MLXModelDownloader
     @ObservedObject var mlxRuntime: MLXRuntimeManager
     @ObservedObject var foundationModelAvailabilityService: FoundationModelAvailabilityService
@@ -38,6 +39,15 @@ struct RewritePaneView: View {
 
     var body: some View {
         SettingsPaneScaffold {
+            Section {
+                Toggle(isOn: Binding(get: { preferences.preferences.isEnabled }, set: preferences.setEnabled)) {
+                    SettingsRowLabel(title: "Rewrite Selected Text",
+                                     description: "Off: Cotabby ignores selections, with no wand, no "
+                                         + "\(preferences.preferences.shortcutLabel) shortcut and no key tap.",
+                                     systemImage: "wand.and.stars")
+                }
+                .settingsItem(.rewriteEnabled)
+            }
             Section("Model") {
                 Picker(selection: Binding(get: { preferences.preferences.provider }, set: preferences.setProvider)) {
                     ForEach(RewriteProviderKind.allCases, id: \.self) { kind in
@@ -48,7 +58,11 @@ struct RewritePaneView: View {
                     }
                 } label: {
                     SettingsRowLabel(title: "Rewrite Model",
-                                     description: "Apple Intelligence, Open Source, Local Endpoint and MLX run on the model you already set up for autocomplete; there is no separate rewrite model. Instruction-following models (Apple Intelligence, chat models) rewrite best; a base model gives basic-quality rewrites. An API model usually rewrites better, but the selected text is sent to it.",
+                                     description: "Apple Intelligence, Open Source, Local Endpoint and MLX use the "
+                                         + "model you set up for autocomplete; there is no separate rewrite model. "
+                                         + "Instruction-following models (Apple Intelligence, chat models) rewrite "
+                                         + "best; a base model gives basic-quality rewrites. An API model usually "
+                                         + "rewrites better, but the selected text is sent to it.",
                                      systemImage: "cpu")
                 }
                 .settingsItem(.rewriteProvider)
@@ -59,6 +73,10 @@ struct RewritePaneView: View {
                 if let reason = selectedUnavailableReason {
                     Text(reason).font(.caption).foregroundStyle(.orange)
                 }
+                if let host = endpointDisclosureHost {
+                    Text("Rewrites go to the endpoint set up in Engine & Model: the selected text is sent to \(host).")
+                        .font(.caption).foregroundStyle(.orange)
+                }
 
                 if preferences.preferences.provider == .api {
                     Picker("Service", selection: Binding(get: { preferences.preferences.cloudProvider }, set: switchService)) {
@@ -68,7 +86,7 @@ struct RewritePaneView: View {
                     }
                     if preferences.preferences.cloudProvider == .custom {
                         TextField("Base URL (e.g. https://gateway.example.com/v1)",
-                                  text: Binding(get: { preferences.preferences.apiBaseURL }, set: preferences.setAPIBaseURL))
+                                  text: Binding(get: { preferences.preferences.apiBaseURL }, set: setBaseURL))
                     }
                     HStack {
                         TextField("Model", text: Binding(get: { preferences.preferences.apiModelName }, set: preferences.setAPIModelName))
@@ -91,7 +109,7 @@ struct RewritePaneView: View {
                     if let keyStatus {
                         Text(keyStatus).font(.caption).foregroundStyle(keyStatusIsError ? .red : .secondary)
                     }
-                    if let host = URL(string: preferences.preferences.effectiveBaseURL)?.host {
+                    if let host = offDeviceHost {
                         Text("The selected text is sent to \(host) when you rewrite.").font(.caption).foregroundStyle(.orange)
                     }
                 }
@@ -113,7 +131,8 @@ struct RewritePaneView: View {
             Section("Selection") {
                 Toggle(isOn: Binding(get: { preferences.preferences.showsButtonOnSelection }, set: preferences.setShowsButtonOnSelection)) {
                     SettingsRowLabel(title: "Show Button on Selection",
-                                     description: "A small button appears when you select text in a field. \(preferences.preferences.shortcutLabel) opens the rewrite either way.",
+                                     description: "The Cotabby icon beside a field becomes a rewrite button when you "
+                                         + "select text. \(preferences.preferences.shortcutLabel) opens the rewrite either way.",
                                      systemImage: "wand.and.stars")
                 }
                 .settingsItem(.rewriteButton)
@@ -140,31 +159,17 @@ struct RewritePaneView: View {
 
     // MARK: - Rewrite Model rows
 
-    /// The row text. "Same as autocomplete" names the engine it would follow; a row whose provider
-    /// cannot run right now says so (and is also disabled, see `isSelectable`).
     private func rowTitle(_ kind: RewriteProviderKind) -> String {
-        switch kind {
-        case .sameAsAutocomplete: return "Same as autocomplete (\(suggestionSettings.selectedEngine.displayLabel))"
-        case .appleIntelligence: return decorated("Apple Intelligence", kind)
-        case .openSource: return decorated("Open Source", kind)
-        case .localEndpoint: return decorated("Local Endpoint", kind)
-        case .mlx: return decorated("MLX", kind)
-        case .api: return "API model"
-        }
+        RewriteProviderRowPolicy.title(
+            for: kind,
+            autocompleteEngineLabel: suggestionSettings.selectedEngine.displayLabel,
+            sameAsAutocompleteStaysOnDevice: engine.sameAsAutocompleteStaysOnDevice,
+            isAvailable: engine.provider(for: kind).isAvailable
+        )
     }
 
-    private func decorated(_ label: String, _ kind: RewriteProviderKind) -> String {
-        engine.provider(for: kind).isAvailable ? label : "\(label) (Unavailable)"
-    }
-
-    /// An unavailable row stays visible but cannot be picked. "Same as autocomplete" and "API model"
-    /// stay pickable: the first is the default and shows the reason below instead of trapping the
-    /// user on another row; the API model is configured right here.
     private func isSelectable(_ kind: RewriteProviderKind) -> Bool {
-        switch kind {
-        case .sameAsAutocomplete, .api: return true
-        default: return engine.provider(for: kind).isAvailable
-        }
+        RewriteProviderRowPolicy.isSelectable(kind, isAvailable: engine.provider(for: kind).isAvailable)
     }
 
     /// The reason the selected choice cannot run, shown under the picker.
@@ -176,9 +181,32 @@ struct RewritePaneView: View {
 
     /// What the selected local choice runs on, when that is worth saying.
     private var selectedNote: String? {
+        if preferences.preferences.provider == .sameAsAutocomplete, engine.sameAsAutocompleteStaysOnDevice {
+            let fallback = engine.resolvedKind == .appleIntelligence ? "Apple Intelligence" : "Open Source"
+            return "Autocomplete's endpoint is not on this Mac, so rewrites run on \(fallback) here. "
+                + "Choose Local Endpoint to send them to the endpoint."
+        }
         guard engine.resolvedKind == .mlx else { return nil }
         let model = suggestionSettings.mlxModelID
         return model.isEmpty ? nil : "Uses your MLX model: \(model)"
+    }
+
+    /// The LAN or public host an explicitly chosen Local Endpoint sends the selection to; nil when
+    /// that endpoint is on this Mac. "Same as autocomplete" never resolves to such a host.
+    private var endpointDisclosureHost: String? {
+        guard engine.resolvedKind == .localEndpoint else { return nil }
+        let provider = engine.provider(for: .localEndpoint)
+        guard provider.isAvailable, provider.sendsOffDevice else { return nil }
+        return provider.hostName
+    }
+
+    /// The host the selected text leaves the Mac for, or nil for a loopback URL (a local Ollama),
+    /// which keeps the text on this Mac, the same rule the popup's disclosure follows.
+    private var offDeviceHost: String? {
+        guard let configuration = try? OpenAICompatibleEndpointConfiguration(
+            baseURLString: preferences.preferences.effectiveBaseURL, modelName: "", apiMode: .chatCompletions
+        ), configuration.hostScope != .loopback else { return nil }
+        return configuration.baseURL.host
     }
 
     /// The models offered in "Choose": the service's own list once loaded, else its suggestions.
@@ -204,6 +232,14 @@ struct RewritePaneView: View {
     }
 
     /// Asks the service for the models this key can use.
+    /// A new URL is a different server: its model list must be loaded again, so the old one goes.
+    private func setBaseURL(_ value: String) {
+        guard value != preferences.preferences.apiBaseURL else { return }
+        preferences.setAPIBaseURL(value)
+        loadedModels = []
+        modelListStatus = nil
+    }
+
     private func loadModels() {
         if apiKey != savedAPIKey { saveAPIKey() }
         let service = preferences.preferences.cloudProvider
@@ -215,10 +251,13 @@ struct RewritePaneView: View {
             defer { isLoadingModels = false }
             do {
                 let models = try await modelList.models(for: service, baseURL: baseURL, apiKey: key)
-                guard preferences.preferences.cloudProvider == service else { return }
+                // The user may have switched service or edited the URL while the list loaded; a list
+                // from another server must not be offered for this one.
+                guard preferences.preferences.isModelListSource(service: service, baseURL: baseURL) else { return }
                 loadedModels = models
                 modelListStatus = models.isEmpty ? "The service listed no models." : "\(models.count) models — pick one with Choose."
             } catch {
+                guard preferences.preferences.isModelListSource(service: service, baseURL: baseURL) else { return }
                 modelListStatus = "Couldn't load models: \(error.localizedDescription)"
             }
         }

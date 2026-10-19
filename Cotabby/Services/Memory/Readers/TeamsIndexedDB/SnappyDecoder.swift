@@ -55,61 +55,70 @@ nonisolated enum SnappyDecoder {
             while position < input.count {
                 let tag = input[position]
                 position += 1
-                switch tag & 0x03 {
-                case 0:
-                    var literalLength = Int(tag >> 2)
-                    if literalLength >= 60 {
-                        // 60...63 mean "the length is in the next 1...4 bytes".
-                        let extraBytes = literalLength - 59
-                        guard position + extraBytes <= input.count else { throw DecodeError.truncated }
-                        literalLength = 0
-                        for index in 0..<extraBytes {
-                            literalLength |= Int(input[position + index]) << (8 * index)
-                        }
-                        position += extraBytes
-                    }
-                    literalLength += 1
+                if tag & 0x03 == 0 {
+                    let literalLength = try readLiteralLength(tag, input, &position)
                     guard position + literalLength <= input.count else { throw DecodeError.truncated }
                     guard count + literalLength <= length else { throw DecodeError.lengthMismatch }
                     (output.baseAddress! + count).update(from: input.baseAddress! + position, count: literalLength)
                     position += literalLength
                     count += literalLength
-                default:
-                    let copyLength: Int
-                    let offset: Int
-                    switch tag & 0x03 {
-                    case 1:
-                        guard position < input.count else { throw DecodeError.truncated }
-                        copyLength = Int((tag >> 2) & 0x07) + 4
-                        offset = (Int(tag & 0xE0) << 3) | Int(input[position])
-                        position += 1
-                    case 2:
-                        guard position + 2 <= input.count else { throw DecodeError.truncated }
-                        copyLength = Int(tag >> 2) + 1
-                        offset = Int(input[position]) | Int(input[position + 1]) << 8
-                        position += 2
-                    default:
-                        guard position + 4 <= input.count else { throw DecodeError.truncated }
-                        copyLength = Int(tag >> 2) + 1
-                        offset = Int(input[position]) | Int(input[position + 1]) << 8
-                            | Int(input[position + 2]) << 16 | Int(input[position + 3]) << 24
-                        position += 4
-                    }
-                    guard offset > 0, offset <= count else { throw DecodeError.invalidOffset }
-                    guard count + copyLength <= length else { throw DecodeError.lengthMismatch }
-                    let source = count - offset
-                    if offset >= copyLength {
-                        (output.baseAddress! + count).update(from: output.baseAddress! + source, count: copyLength)
+                } else {
+                    let copy = try readCopy(tag, input, &position)
+                    guard copy.offset > 0, copy.offset <= count else { throw DecodeError.invalidOffset }
+                    guard count + copy.length <= length else { throw DecodeError.lengthMismatch }
+                    let source = count - copy.offset
+                    if copy.offset >= copy.length {
+                        (output.baseAddress! + count).update(from: output.baseAddress! + source, count: copy.length)
                     } else {
                         // Overlapping copy: each byte may be one this copy just wrote.
-                        for index in 0..<copyLength {
+                        for index in 0..<copy.length {
                             output[count + index] = output[source + index]
                         }
                     }
-                    count += copyLength
+                    count += copy.length
                 }
             }
             guard count == length else { throw DecodeError.lengthMismatch }
+        }
+    }
+
+    /// A literal's length: in the tag itself, or for 60...63 in the next 1...4 bytes (little endian).
+    private static func readLiteralLength(_ tag: UInt8, _ input: UnsafeBufferPointer<UInt8>, _ position: inout Int) throws -> Int {
+        var literalLength = Int(tag >> 2)
+        if literalLength >= 60 {
+            let extraBytes = literalLength - 59
+            guard position + extraBytes <= input.count else { throw DecodeError.truncated }
+            literalLength = 0
+            for index in 0..<extraBytes {
+                literalLength |= Int(input[position + index]) << (8 * index)
+            }
+            position += extraBytes
+        }
+        return literalLength + 1
+    }
+
+    /// A copy element's length and back-reference offset, for tag types 1 (11-bit offset), 2 (16-bit)
+    /// and 3 (32-bit).
+    private static func readCopy(
+        _ tag: UInt8, _ input: UnsafeBufferPointer<UInt8>, _ position: inout Int
+    ) throws -> (length: Int, offset: Int) {
+        switch tag & 0x03 {
+        case 1:
+            guard position < input.count else { throw DecodeError.truncated }
+            let offset = (Int(tag & 0xE0) << 3) | Int(input[position])
+            position += 1
+            return (Int((tag >> 2) & 0x07) + 4, offset)
+        case 2:
+            guard position + 2 <= input.count else { throw DecodeError.truncated }
+            let offset = Int(input[position]) | Int(input[position + 1]) << 8
+            position += 2
+            return (Int(tag >> 2) + 1, offset)
+        default:
+            guard position + 4 <= input.count else { throw DecodeError.truncated }
+            var offset = 0
+            for index in (0..<4).reversed() { offset = offset << 8 | Int(input[position + index]) }
+            position += 4
+            return (Int(tag >> 2) + 1, offset)
         }
     }
 

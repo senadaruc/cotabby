@@ -6,12 +6,12 @@ import Foundation
 ///
 /// Why pure and separate from the cache reader: these rules decide which messages a suggestion in
 /// a given chat may see, so they are pinned by tests with small dictionary fixtures shaped like
-/// Teams' IndexedDB values, without a LevelDB. They are the rules of the Python memory service's
-/// `records_from` (`connectors/teams.py`), reproduced exactly (including its tie-breaks), so
-/// messages remembered before the move to Swift keep the same ids, titles and participants.
+/// Teams' IndexedDB values, without a LevelDB. They were first prototyped in Python on top of
+/// CCL Forensics' `ccl_chromium_reader`, which is why some helpers name the Python behaviour they
+/// keep (string stripping, code-point sorting, dict order): the tie-breaks depend on it.
 ///
-/// Inputs, as `TeamsCacheReader` decodes them (plain Foundation values, the shape of the Python
-/// dicts): the rows of `conversations` (`id`, `threadProperties.topic`, `members[].id`), the
+/// Inputs, as `TeamsCacheReader` decodes them (plain Foundation values: dictionaries, arrays,
+/// strings, numbers): the rows of `conversations` (`id`, `threadProperties.topic`, `members[].id`), the
 /// messages of every reply chain's `messageMap` (`id`, `conversationId`, `creator`,
 /// `imDisplayName`, `fromDisplayNameInToken`, `content`, `messageType`, `originalArrivalTime`,
 /// `clientArrivalTime`, `deletionInfo`), and display names by member id from `profiles`.
@@ -27,7 +27,7 @@ import Foundation
 ///   group after one person, which would let a group pass for a 1:1.
 /// - Participants: the cached members, the two ids of a 1:1 and everyone who wrote, minus the
 ///   user. Only a 1:1's audience is certain; every other conversation also gets
-///   `teams-group:<conversationId>`, so a group where only Ali wrote never equals the 1:1 with Ali
+///   `teams-group:<conversationId>`, so a group where only Avery wrote never equals the 1:1 with Avery
 ///   and the two never share memory.
 /// - Names: a person's directory profile, else the name most of their messages carry (a message
 ///   sent on someone's behalf carries the other name).
@@ -73,7 +73,7 @@ nonisolated enum TeamsMessageMapper {
         afterMilliseconds: Double
     ) -> Result {
         // Conversation rows by id; a later row for the same id replaces the earlier one but keeps
-        // its position (a Python dict), which the "me" tie-break below depends on.
+        // its position (a Python dict).
         var chatOrder: [String] = []
         var chats: [String: Conversation] = [:]
         for raw in rawConversations {
@@ -119,25 +119,17 @@ nonisolated enum TeamsMessageMapper {
         var newest = afterMilliseconds
         for message in messages {
             let conversationID = text(message["conversationId"])
-            guard !conversationID.isEmpty,
-                  !systemConversationPrefixes.contains(where: { conversationID.hasPrefix($0) }) else { continue }
-            guard textTypes.contains(text(message["messageType"]).lowercased()),
-                  !isTruthy(message["deletionInfo"]) else { continue }
-            guard let arrived = milliseconds(message["originalArrivalTime"]) ?? milliseconds(message["clientArrivalTime"]),
-                  arrived <= latestAcceptedMilliseconds else {
-                // No time, or one from the future: a message from the future must never become
-                // the cursor, or every real message after it would be skipped.
-                continue
-            }
+            // No time, or one from the future: a message from the future must never become the
+            // cursor, or every real message after it would be skipped.
+            guard isWrittenByPeople(message, conversationID: conversationID),
+                  let arrived = trustedArrival(message) else { continue }
             newest = max(newest, arrived)
             guard arrived > afterMilliseconds else { continue }
             let body = TeamsMessageHTML.text(text(message["content"]))
             guard !body.isEmpty else { continue }
             let creator = mri(text(message["creator"]))
             let people = participants(of: conversationID)
-            var sender = names[creator] ?? ""
-            if sender.isEmpty { sender = PythonText.strip(text(message["imDisplayName"])) }
-            if sender.isEmpty { sender = PythonText.strip(text(message["fromDisplayNameInToken"])) }
+            let sender = senderName(message, creator: creator, names: names)
             let messageID = text(message["id"])
             mapped.append(Message(
                 sourceMessageID: "\(conversationID)/\(messageID.isEmpty ? String(Int64(arrived)) : messageID)",
@@ -155,6 +147,30 @@ nonisolated enum TeamsMessageMapper {
 
     // MARK: - Rules
 
+    /// A message a person wrote in a real conversation: not in Teams' own feeds, of a text type, and
+    /// not deleted.
+    static func isWrittenByPeople(_ message: [String: Any], conversationID: String) -> Bool {
+        !conversationID.isEmpty
+            && !systemConversationPrefixes.contains(where: { conversationID.hasPrefix($0) })
+            && textTypes.contains(text(message["messageType"]).lowercased())
+            && !isTruthy(message["deletionInfo"])
+    }
+
+    /// The message's arrival time, or nil when it has none or one beyond `latestAcceptedMilliseconds`.
+    static func trustedArrival(_ message: [String: Any]) -> Double? {
+        guard let arrived = milliseconds(message["originalArrivalTime"]) ?? milliseconds(message["clientArrivalTime"]),
+              arrived <= latestAcceptedMilliseconds else { return nil }
+        return arrived
+    }
+
+    /// The sender's profile name, else the names the message itself carries.
+    static func senderName(_ message: [String: Any], creator: String, names: [String: String]) -> String {
+        var sender = names[creator] ?? ""
+        if sender.isEmpty { sender = PythonText.strip(text(message["imDisplayName"])) }
+        if sender.isEmpty { sender = PythonText.strip(text(message["fromDisplayNameInToken"])) }
+        return sender
+    }
+
     /// `8:orgid:<guid>` of both people of a 1:1 chat id, lowercased; empty for any other id.
     static func oneToOneMembers(_ conversationID: String) -> [String] {
         let prefix = "19:"
@@ -164,8 +180,11 @@ nonisolated enum TeamsMessageMapper {
         // `([0-9a-fA-F-]{36})_([0-9a-fA-F-]{36})`: the underscore cannot be part of a guid, so the
         // split is fixed.
         guard middle.count == 73, middle[36] == "_" else { return [] }
-        let isGUIDCharacter: (Unicode.Scalar) -> Bool = {
-            ("0"..."9").contains($0) || ("a"..."f").contains($0) || ("A"..."F").contains($0) || $0 == "-"
+        let isGUIDCharacter: (Unicode.Scalar) -> Bool = { (scalar: Unicode.Scalar) -> Bool in
+            switch scalar {
+            case "0"..."9", "a"..."f", "A"..."F", "-": return true
+            default: return false
+            }
         }
         let first = middle[0..<36]
         let second = middle[37...]
@@ -185,22 +204,17 @@ nonisolated enum TeamsMessageMapper {
         return Conversation(id: id, topic: PythonText.strip(text(properties["topic"])), members: pythonSorted(memberIDs))
     }
 
-    /// The member in the most conversations; a tie goes to the most frequent sender among the tied
-    /// (the first of them when that ties too, in the order they were first counted).
+    /// The signed-in user of one profile's cache: the member of the most conversations (the user
+    /// is in every one of their chats). When several people tie (a cache whose chats are all with
+    /// one person), the cache cannot say which is the user, and nobody is: guessing by who wrote
+    /// more would label the other person's messages "You" and title the chat after the user.
     static func me(chats: [Conversation], messages: [[String: Any]]) -> String {
         var counts = OrderedCounter()
         for chat in chats { counts.add(chat.members) }
         for message in messages { counts.add(oneToOneMembers(text(message["conversationId"]))) }
         guard let top = counts.highestCount else { return "" }
         let best = counts.keys.filter { counts[$0] == top }
-        guard best.count > 1 else { return best.first ?? "" }
-        var senders: [String: Int] = [:]
-        for message in messages { senders[mri(text(message["creator"])), default: 0] += 1 }
-        var winner = best[0]
-        for candidate in best.dropFirst() where senders[candidate, default: 0] > senders[winner, default: 0] {
-            winner = candidate
-        }
-        return winner
+        return best.count == 1 ? best[0] : ""
     }
 
     /// A display name per person: the profile's, else the most common name on their messages
@@ -323,60 +337,22 @@ nonisolated struct OrderedCounter {
 /// separator. Without an offset the time is local, as a naive Python datetime's `timestamp()` is.
 nonisolated enum ISO8601Time {
     static func milliseconds(_ text: String) -> Double? {
-        let s = Array(text.unicodeScalars)
-        var index = 0
-        func digits(_ count: Int) -> Int? {
-            guard index + count <= s.count else { return nil }
-            var value = 0
-            for scalar in s[index..<(index + count)] {
-                guard ("0"..."9").contains(scalar) else { return nil }
-                value = value * 10 + Int(scalar.value - 48)
-            }
-            index += count
-            return value
-        }
-        func expect(_ scalar: Unicode.Scalar) -> Bool {
-            guard index < s.count, s[index] == scalar else { return false }
-            index += 1
-            return true
-        }
-        guard let year = digits(4), expect("-"), let month = digits(2), expect("-"), let day = digits(2) else { return nil }
+        var scanner = Scanner(scalars: Array(text.unicodeScalars))
+        guard let year = scanner.digits(4), scanner.expect("-"), let month = scanner.digits(2), scanner.expect("-"),
+              let day = scanner.digits(2) else { return nil }
         var components = DateComponents(year: year, month: month, day: day, hour: 0, minute: 0, second: 0)
         var fraction = 0.0
         var offsetSeconds: Int?
-        if index < s.count {
-            index += 1 // the separator
-            guard let hour = digits(2) else { return nil }
-            components.hour = hour
-            if expect(":") {
-                guard let minute = digits(2) else { return nil }
-                components.minute = minute
-                if expect(":") {
-                    guard let second = digits(2) else { return nil }
-                    components.second = second
-                    if expect(".") || expect(",") {
-                        var scale = 0.1
-                        var count = 0
-                        while index < s.count, ("0"..."9").contains(s[index]) {
-                            if count < 6 { fraction += Double(s[index].value - 48) * scale }
-                            scale /= 10
-                            count += 1
-                            index += 1
-                        }
-                        guard count > 0 else { return nil }
-                    }
-                }
-            }
-            if index < s.count {
-                let sign: Int
-                if expect("+") { sign = 1 } else if expect("-") { sign = -1 } else { return nil }
-                guard let hours = digits(2) else { return nil }
-                _ = expect(":")
-                let minutes = digits(2) ?? 0
-                offsetSeconds = sign * (hours * 3600 + minutes * 60)
+        if !scanner.isAtEnd {
+            scanner.index += 1 // the separator
+            guard let seconds = scanner.time(into: &components) else { return nil }
+            fraction = seconds
+            if !scanner.isAtEnd {
+                guard let offset = scanner.offsetSeconds() else { return nil }
+                offsetSeconds = offset
             }
         }
-        guard index == s.count else { return nil }
+        guard scanner.isAtEnd else { return nil }
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = offsetSeconds.flatMap { TimeZone(secondsFromGMT: $0) } ?? .current
         // A date that does not exist (Feb 30, hour 24) rolls over in `Calendar`; Python rejects it.
@@ -385,5 +361,68 @@ nonisolated enum ISO8601Time {
         guard check.year == year, check.month == month, check.day == day, check.hour == components.hour,
               check.minute == components.minute else { return nil }
         return (date.timeIntervalSince1970 + fraction) * 1000
+    }
+
+    /// A cursor over the text's scalars, consuming one field at a time.
+    private struct Scanner {
+        let scalars: [Unicode.Scalar]
+        var index = 0
+
+        var isAtEnd: Bool { index >= scalars.count }
+
+        mutating func digits(_ count: Int) -> Int? {
+            guard index + count <= scalars.count else { return nil }
+            var value = 0
+            for scalar in scalars[index..<(index + count)] {
+                guard ("0"..."9").contains(scalar) else { return nil }
+                value = value * 10 + Int(scalar.value - 48)
+            }
+            index += count
+            return value
+        }
+
+        mutating func expect(_ scalar: Unicode.Scalar) -> Bool {
+            guard index < scalars.count, scalars[index] == scalar else { return false }
+            index += 1
+            return true
+        }
+
+        /// `hh[:mm[:ss[.ffffff]]]` into `components`; returns the fractional second, nil when malformed.
+        mutating func time(into components: inout DateComponents) -> Double? {
+            guard let hour = digits(2) else { return nil }
+            components.hour = hour
+            guard expect(":") else { return 0 }
+            guard let minute = digits(2) else { return nil }
+            components.minute = minute
+            guard expect(":") else { return 0 }
+            guard let second = digits(2) else { return nil }
+            components.second = second
+            guard expect(".") || expect(",") else { return 0 }
+            return fraction()
+        }
+
+        /// The digits after the decimal mark (only the first six count); nil when there are none.
+        mutating func fraction() -> Double? {
+            var fraction = 0.0
+            var scale = 0.1
+            var count = 0
+            while index < scalars.count, ("0"..."9").contains(scalars[index]) {
+                if count < 6 { fraction += Double(scalars[index].value - 48) * scale }
+                scale /= 10
+                count += 1
+                index += 1
+            }
+            return count > 0 ? fraction : nil
+        }
+
+        /// `±hh[:]mm` or `±hh` as seconds east of UTC; nil when malformed.
+        mutating func offsetSeconds() -> Int? {
+            let sign: Int
+            if expect("+") { sign = 1 } else if expect("-") { sign = -1 } else { return nil }
+            guard let hours = digits(2) else { return nil }
+            _ = expect(":")
+            let minutes = digits(2) ?? 0
+            return sign * (hours * 3600 + minutes * 60)
+        }
     }
 }

@@ -16,6 +16,9 @@ protocol RewriteProviding: AnyObject {
     var unavailableReason: String? { get }
     /// The remote host the text goes to, for the popup's disclosure; nil for providers on this Mac.
     var hostName: String? { get }
+    /// The full base URL of the server the text goes to, for checking that a popup's destination
+    /// still holds; nil for providers on this Mac.
+    var endpointURL: String? { get }
     /// Runs the rewrite. `onPartial` receives the cumulative raw text while it streams.
     func rewrite(_ request: RewriteRequest, onPartial: @escaping @MainActor (String) -> Void) async throws -> String
 }
@@ -23,6 +26,7 @@ protocol RewriteProviding: AnyObject {
 extension RewriteProviding {
     var unavailableReason: String? { nil }
     var hostName: String? { nil }
+    var endpointURL: String? { nil }
 }
 
 /// Rewrites through the user's cloud service: Claude through Anthropic's Messages API
@@ -73,15 +77,20 @@ final class APIRewriteProvider: RewriteProviding {
 
     var hostName: String? { configuration?.baseURL.host }
 
+    var endpointURL: String? { configuration?.baseURL.absoluteString }
+
     func rewrite(_ request: RewriteRequest, onPartial: @escaping @MainActor (String) -> Void) async throws -> String {
         guard let configuration, !configuration.modelName.isEmpty else { throw RewriteError.noProvider }
         let service = preferences().cloudProvider
+        let apiKey = (try? credentials(service).readAPIKey())?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // Every named service needs a key, so say so before sending a request bound to fail with a
+        // 401. A custom URL may legitimately need none (a local Ollama or a keyless gateway).
+        if service != .custom, apiKey.isEmpty { throw RewriteError.missingAPIKey(service.displayName) }
         let prompt = RewritePromptBuilder.instructPrompt(request)
-        let apiKey = try? credentials(service).readAPIKey()
         if service == .anthropic {
             return try await anthropic.streamMessage(
-                baseURL: configuration.baseURL.absoluteString, apiKey: apiKey, model: configuration.modelName,
-                system: prompt.system, user: prompt.user, timeout: Self.timeout, onPartial: onPartial
+                AnthropicMessage(model: configuration.modelName, system: prompt.system, user: prompt.user),
+                baseURL: configuration.baseURL.absoluteString, apiKey: apiKey, timeout: Self.timeout, onPartial: onPartial
             )
         }
         return try await client.streamChat(

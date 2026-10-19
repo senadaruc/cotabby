@@ -1,9 +1,9 @@
 import XCTest
 @testable import Cotabby
 
-/// Memory for a rewrite comes from the conversation the focused window names, then from the same
-/// title in other sources; never from a global search. Style examples come only from the app's own
-/// conversation and only from the user's own messages.
+/// Memory for a rewrite comes only from the conversation the focused window names, in the focused
+/// app's own sources; never from another app's history, a mail window or a global search. Style
+/// examples come only from that conversation and only from the user's own messages.
 @MainActor
 final class RewriteMemoryGathererTests: XCTestCase {
     private static var retained: [AnyObject] = []
@@ -20,51 +20,69 @@ final class RewriteMemoryGathererTests: XCTestCase {
         func latestMessages(source: String, conversationID: String, limit: Int) async -> [MemoryStore.StoredMessage] { messages }
     }
 
-    private let conversation = MemoryConversation(source: "whatsapp", conversationId: "c1", title: "Richard",
-                                                  participants: ["Richard"], lastTimestamp: 0)
+    private let conversation = MemoryConversation(source: "whatsapp", conversationId: "c1", title: "Charlie",
+                                                  participants: ["Charlie"], lastTimestamp: 0)
 
-    private func hit(_ text: String, sender: String = "Richard", fromMe: Bool = false) -> MemorySearchResult.Hit {
-        MemorySearchResult.Hit(recordId: UUID().uuidString, source: "whatsapp", conversationId: "c1", conversationTitle: "Richard",
+    private func hit(_ text: String, sender: String = "Charlie", fromMe: Bool = false) -> MemorySearchResult.Hit {
+        MemorySearchResult.Hit(recordId: UUID().uuidString, source: "whatsapp", conversationId: "c1", conversationTitle: "Charlie",
                                sender: sender, isFromMe: fromMe, timestamp: 0, subject: nil, text: text, score: 1,
                                similarity: 0.8, via: "vector")
     }
 
     private func message(_ text: String, fromMe: Bool) -> MemoryStore.StoredMessage {
         MemoryStore.StoredMessage(recordID: UUID().uuidString, source: "whatsapp", conversationID: "c1", conversationKey: "k",
-                                  sender: fromMe ? "Me" : "Richard", isFromMe: fromMe, timestamp: 0, subject: nil, text: text)
+                                  sender: fromMe ? "Me" : "Charlie", isFromMe: fromMe, timestamp: 0, subject: nil, text: text)
     }
 
     private func input() -> FocusedInputSnapshot {
-        CotabbyTestFixtures.focusedInputSnapshot(bundleIdentifier: "net.whatsapp.WhatsApp", windowTitle: "Richard")
+        CotabbyTestFixtures.focusedInputSnapshot(bundleIdentifier: "net.whatsapp.WhatsApp", windowTitle: "Charlie")
     }
 
     func test_factsAndOwnStyleFromTheAppsConversation() async {
         let search = StubSearch()
         search.resultsBySources[["whatsapp"]] = MemorySearchResult(scope: "conversation", conversation: conversation, elapsedMs: 1,
                                                                    hits: (1...8).map { hit("fact \($0)") })
-        search.messages = [message("Hi Richard, see you then. Best regards, Senad", fromMe: true),
+        search.messages = [message("Hi Charlie, see you then. Best regards, Alex", fromMe: true),
                            message("Great, the 28th works", fromMe: false)]
         let gatherer = RewriteMemoryGatherer(search: search, sourcesByBundle: { ["net.whatsapp.WhatsApp": ["whatsapp"], "com.apple.mail": ["apple_mail"]] })
         Self.retained.append(gatherer)
 
         let memory = await gatherer.gather(for: input(), selection: "dinner 27th or 28th")
         XCTAssertEqual(memory?.facts.count, 6)
-        XCTAssertEqual(memory?.styleExamples, ["Hi Richard, see you then. Best regards, Senad"])
+        XCTAssertEqual(memory?.styleExamples, ["Hi Charlie, see you then. Best regards, Alex"])
         XCTAssertFalse(search.scopes.contains { $0.global })
     }
 
-    func test_fallsBackToOtherSourcesWithoutStyle() async {
+    /// The same title in another app is not the same conversation: titles never cross apps.
+    func test_aTitleNeverCrossesIntoAnotherAppsHistory() async {
         let search = StubSearch()
-        search.resultsBySources[["apple_mail"]] = MemorySearchResult(scope: "conversation", conversation: conversation, elapsedMs: 1,
-                                                                     hits: [hit("Richard asked about cigars")])
-        search.messages = [message("Dear Richard, …", fromMe: true)]
-        let gatherer = RewriteMemoryGatherer(search: search, sourcesByBundle: { ["com.apple.mail": ["apple_mail"]] })
+        search.resultsBySources[["teams"]] = MemorySearchResult(scope: "conversation", conversation: conversation, elapsedMs: 1,
+                                                                hits: [hit("Charlie asked about hiking")])
+        let gatherer = RewriteMemoryGatherer(search: search, sourcesByBundle: { ["com.microsoft.teams2": ["teams"]] })
         Self.retained.append(gatherer)
 
-        let memory = await gatherer.gather(for: input(), selection: "the book for cigars")
-        XCTAssertEqual(memory?.facts.map(\.text), ["Richard asked about cigars"])
-        XCTAssertEqual(memory?.styleExamples, [], "Mail must not stand as the style of a chat message")
-        XCTAssertFalse(search.scopes.contains { $0.global })
+        let memory = await gatherer.gather(for: input(), selection: "the book for hiking")
+        XCTAssertNil(memory)
+        XCTAssertTrue(search.scopes.isEmpty, "WhatsApp has no source of its own here, so nothing is searched")
+    }
+
+    /// A mail window names no conversation memory may use (its subject says nothing of who the
+    /// mail is for, and its body is the other person's to shape).
+    func test_aMailWindowGetsNoMemory() async {
+        let search = StubSearch()
+        search.resultsBySources[["apple_mail"]] = MemorySearchResult(scope: "conversation", conversation: conversation, elapsedMs: 1,
+                                                                     hits: [hit("Charlie asked about hiking")])
+        let gatherer = RewriteMemoryGatherer(search: search, sourcesByBundle: { ["com.apple.mail": ["apple_mail"]] })
+        Self.retained.append(gatherer)
+        let mail = CotabbyTestFixtures.focusedInputSnapshot(
+            bundleIdentifier: "com.apple.mail",
+            trailingText: "\n\nOn 3 Oct 2026, at 10:00, Charlie <charlie@example.com> wrote:\n> Which book?",
+            windowTitle: "Re: Hiking"
+        )
+
+        let memory = await gatherer.gather(for: mail, selection: "the book for hiking")
+        XCTAssertNil(memory)
+        XCTAssertTrue(search.scopes.isEmpty)
     }
 
     func test_windowMemorySwitchOffGivesNoMemory() async {

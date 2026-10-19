@@ -35,7 +35,8 @@ nonisolated struct CalendarEventSnapshot: Equatable, Sendable {
     let isCancelled: Bool
     /// Whether the event blocks the user's time (EventKit availability busy, tentative or out of
     /// office; a timed event the calendar gives no availability for counts too, an all-day one
-    /// such as a holiday does not).
+    /// such as a holiday does not, and neither does an invitation the user declined). Only answers'
+    /// free/busy facts read it (`AvailabilityFacts`).
     let showsAsBusy: Bool
     /// When the event last changed, for incremental syncs.
     let lastModified: Date?

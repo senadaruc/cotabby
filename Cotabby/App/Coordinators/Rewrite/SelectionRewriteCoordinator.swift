@@ -7,14 +7,16 @@ import Logging
 /// Selection rewrite's state machine: hidden → button → popup → generating → preview.
 ///
 /// 1. A selection in an eligible field (`SelectionRewriteEligibility`) that stays the same for
-///    `stableSelectionDelay` shows the button at the selection's end, if the setting allows it, and
-///    arms the ⌃⌥R shortcut either way.
-/// 2. The button or the shortcut opens the popup (`SelectionRewritePopupModel`), with the memory
-///    toggle set from Settings and disabled when the provider is an API that memory may not reach.
-/// 3. An action runs one rewrite (`RewriteEngine`): memory first when asked for
+///    `stableSelectionDelay` turns the field-edge Cotabby icon into the rewrite button, if the setting
+///    allows it, and arms the ⌃⌥R shortcut either way.
+/// 2. The button or the shortcut opens the popup (`SelectionRewritePopupModel`). Its destination is
+///    resolved once (`RewriteEngine.destination()`): the disclosure names the host when the text
+///    leaves the Mac, and the memory toggle is set from Settings and disabled when memory may not
+///    reach that destination.
+/// 3. An action runs one rewrite (`RewriteEngine`) on that destination: memory first when asked for
 ///    (`RewriteMemoryGatherer`), then the model, streaming into the preview. A rewrite whose names or
-///    numbers are in neither the selection nor the facts (`AnswerGroundingPolicy`) previews with
-///    Replace off.
+///    numbers are in neither the selection nor the facts (`RewriteSpecificsCheck`) previews with
+///    plain Replace off.
 /// 4. Replace re-validates the selection (`SelectionReplaceValidator`), restoring it once if focus
 ///    came back from the instruction box, then pastes over it; any mismatch copies the result to the
 ///    clipboard instead.
@@ -25,6 +27,9 @@ import Logging
 @MainActor
 final class SelectionRewriteCoordinator {
     private let snapshots: AnyPublisher<FocusSnapshot, Never>
+    /// The Rewrite master switch as it changes, so turning it off tears down an armed selection at
+    /// once instead of at the next focus change.
+    private let enabledChanges: AnyPublisher<Bool, Never>
     private let currentSnapshot: @MainActor () -> FocusSnapshot
     private let refreshFocus: @MainActor () -> Void
     private let presenter: SelectionRewritePresenting
@@ -32,8 +37,13 @@ final class SelectionRewriteCoordinator {
     private let engine: SelectionRewriteRunning
     private let memory: SelectionRewriteMemoryGathering
     private let preferences: @MainActor () -> RewritePreferences
-    private let isAppAllowed: @MainActor (String) -> Bool
+    /// Whether Cotabby is on where the selection is (app, domain, pause, Low Power Mode). Asked when
+    /// a selection arms and again before the popup opens or a rewrite runs, because those switches
+    /// can change while a selection stays armed.
+    private let isAppAllowed: @MainActor (FocusedInputSnapshot) -> Bool
+    /// The ⌃⌥R shortcut, armed only while an eligible selection exists.
     private let hotkey: TranslationHotkeyTap?
+    /// Esc and Return while the popup is open.
     private let keyTap: TemporaryKeyTap?
     private let stableSelectionDelay: UInt64
     /// The languages the user declared in Settings → Writing, which limit language detection.
@@ -47,7 +57,10 @@ final class SelectionRewriteCoordinator {
     private var model: SelectionRewritePopupModel?
     /// What the last run did, for Retry: the action, the text it reshaped (nil: the user's selection),
     /// and the tone a refinement keeps.
-    private var lastRun: (action: RewriteAction, draft: String?, tone: RewriteAction?)?
+    private var lastRun: RewriteRun?
+    /// Where this popup's rewrites go, resolved once when it opens: the disclosure names it and every
+    /// run uses it, so a Settings change cannot send the text somewhere the popup did not name.
+    private var destination: RewriteDestination?
     /// Identifies the newest rewrite run. A superseded run (Retry, or another action) can still throw
     /// or resolve after its replacement started, so every write after an `await` compares its own
     /// id with this before touching the popup. `close()` bumps it too, so closing cancels in-flight runs.
@@ -69,6 +82,7 @@ final class SelectionRewriteCoordinator {
 
     init(
         snapshots: AnyPublisher<FocusSnapshot, Never>,
+        enabledChanges: AnyPublisher<Bool, Never> = Empty().eraseToAnyPublisher(),
         currentSnapshot: @escaping @MainActor () -> FocusSnapshot,
         refreshFocus: @escaping @MainActor () -> Void,
         presenter: SelectionRewritePresenting,
@@ -76,7 +90,7 @@ final class SelectionRewriteCoordinator {
         engine: SelectionRewriteRunning,
         memory: SelectionRewriteMemoryGathering,
         preferences: @escaping @MainActor () -> RewritePreferences,
-        isAppAllowed: @escaping @MainActor (String) -> Bool,
+        isAppAllowed: @escaping @MainActor (FocusedInputSnapshot) -> Bool,
         hotkey: TranslationHotkeyTap?,
         keyTap: TemporaryKeyTap?,
         writingLanguages: @escaping @MainActor () -> [String] = { [] },
@@ -84,6 +98,7 @@ final class SelectionRewriteCoordinator {
         stableSelectionDelay: UInt64 = 250_000_000
     ) {
         self.snapshots = snapshots
+        self.enabledChanges = enabledChanges
         self.currentSnapshot = currentSnapshot
         self.refreshFocus = refreshFocus
         self.presenter = presenter
@@ -103,6 +118,11 @@ final class SelectionRewriteCoordinator {
 
     func start() {
         snapshots.sink { [weak self] in self?.observe($0) }.store(in: &cancellables)
+        // Switching rewrite on needs no work here: the next focus snapshot arms a selection.
+        enabledChanges.sink { [weak self] enabled in
+            if !enabled { self?.close() }
+        }
+        .store(in: &cancellables)
     }
 
     func stop() {
@@ -114,6 +134,11 @@ final class SelectionRewriteCoordinator {
 
     private func observe(_ snapshot: FocusSnapshot) {
         if isReplacing { return }
+        // Off means no selection work at all: no eligibility check, no wand, no key tap.
+        guard preferences().isEnabled else {
+            close()
+            return
+        }
         // While the user types in the popup's instruction box, focus reports Cotabby or no field;
         // that is not the user leaving the selection.
         if presenter.isPopupKey, snapshot.context == nil || snapshot.bundleIdentifier == Bundle.main.bundleIdentifier {
@@ -155,6 +180,7 @@ final class SelectionRewriteCoordinator {
 
     /// ⌃⌥R: open the popup for the current selection.
     func handleShortcut() {
+        guard preferences().isEnabled else { return }
         if target == nil, let input = rewritableInput(in: currentSnapshot()) {
             target = SelectionRewriteTarget(snapshot: input)
             targetInput = input
@@ -169,7 +195,7 @@ final class SelectionRewriteCoordinator {
         guard snapshot.capability != .blocked(CredentialFieldDetector.blockedReason),
               let input = snapshot.context
         else { return nil }
-        switch SelectionRewriteEligibility.verdict(for: input, appAllowed: isAppAllowed(input.bundleIdentifier)) {
+        switch SelectionRewriteEligibility.verdict(for: input, appAllowed: isAppAllowed(input)) {
         case .eligible, .tooLong: return input
         case .noSelection, .tooShort, .ineligible: return nil
         }
@@ -179,23 +205,28 @@ final class SelectionRewriteCoordinator {
 
     private func openPopup() {
         guard let input = targetInput, model == nil else { return }
+        // Pause, Low Power Mode or a disabled app or domain may have come on since the selection armed.
+        guard isAppAllowed(input) else { return close() }
         stableTask?.cancel()
         let prefs = preferences()
         let model = SelectionRewritePopupModel()
-        model.memoryToggleEnabled = engine.memoryAllowed
-        model.usesMemory = engine.memoryAllowed && prefs.usesMemoryByDefault
+        let destination = engine.destination()
+        self.destination = destination
+        let memoryAllowed = engine.memoryAllowed(for: destination)
+        model.memoryToggleEnabled = memoryAllowed
+        model.usesMemory = memoryAllowed && prefs.usesMemoryByDefault
         model.fixesMistakes = prefs.fixesMistakes
+        // `dropFirst` skips the value just seeded from Settings; only the user's own clicks are saved.
         fixesMistakesCancellable = model.$fixesMistakes.dropFirst().sink { [weak self] value in
             self?.setFixesMistakes(value)
         }
-        if !engine.memoryAllowed {
+        if !memoryAllowed {
             model.memoryNote = "Memory stays on this Mac. Allow it in Settings → Rewrite to use it with your API model."
         }
         // The disclosure names memory only while the toggle is on, so it is recomputed on every toggle
         // change. `$usesMemory` emits the new value when it is set, so the sink reads it directly.
-        disclosureCancellable = model.$usesMemory.sink { [weak self, weak model] usesMemory in
-            guard let self, let model else { return }
-            model.disclosure = self.disclosure(usesMemory: usesMemory)
+        disclosureCancellable = model.$usesMemory.sink { [weak model] usesMemory in
+            model?.disclosure = destination.disclosure(usesMemory: usesMemory)
         }
         model.onAction = { [weak self] in self?.run($0) }
         model.onRetry = { [weak self] in
@@ -219,24 +250,17 @@ final class SelectionRewriteCoordinator {
                 DispatchQueue.main.async { self?.dismiss() }
                 return .consume
             }
-            // Return reaches this tap only while the popup is open. When the popup lost the keyboard
-            // (the host is key), Return would send a chat message in the host; a preview that may be
-            // replaced takes the Return and replaces instead.
-            if keyCode == Self.returnKeyCode, let self, self.canReplaceFromTap {
+            guard keyCode == Self.returnKeyCode, let self, let model = self.model else { return .pass }
+            switch Self.returnKeyAction(popupIsKey: self.presenter.isPopupKey, phase: model.phase) {
+            case .passToPopup:
+                return .pass
+            case .replace:
                 DispatchQueue.main.async { self.replace() }
                 return .consume
+            case .swallow:
+                return .consume
             }
-            return .pass
         }
-    }
-
-    /// The disclosure for the current toggle: memory facts are named only while memory is on.
-    /// Empty when the provider stays on this Mac.
-    private func disclosure(usesMemory: Bool) -> String? {
-        guard engine.activeProviderSendsOffDevice, let host = engine.activeHostName else { return nil }
-        return usesMemory
-            ? "The selected text and memory facts are sent to \(host)."
-            : "The selected text is sent to \(host)."
     }
 
     /// Shorter or Longer on the preview: reshapes the text on screen and keeps the tone (or custom
@@ -249,8 +273,9 @@ final class SelectionRewriteCoordinator {
     /// Runs one rewrite. `draft` is the text to reshape (the user's selection when nil); `tone` is the
     /// tone a refinement keeps.
     private func run(_ action: RewriteAction, draft: String? = nil, tone: RewriteAction? = nil) {
-        guard let input = targetInput, let model else { return }
-        lastRun = (action, draft, tone)
+        guard let input = targetInput, let model, let destination else { return }
+        guard isAppAllowed(input) else { return close() }
+        lastRun = RewriteRun(action: action, draft: draft, tone: tone)
         let source = draft ?? input.selectedText
         rewriteTask?.cancel()
         // A new run id supersedes any run still in flight for this popup (Retry reuses the same model,
@@ -259,7 +284,7 @@ final class SelectionRewriteCoordinator {
         let id = runID
         model.phase = .generating("")
         presenter.refit()
-        let wantsMemory = (model.usesMemory || action.alwaysUsesMemory) && engine.memoryAllowed
+        let wantsMemory = (model.usesMemory || action.alwaysUsesMemory) && engine.memoryAllowed(for: destination)
         // True only while this run is still the newest for this popup and has not been cancelled.
         let isCurrent = { [weak self, weak model] () -> Bool in
             guard let self, let model else { return false }
@@ -286,6 +311,7 @@ final class SelectionRewriteCoordinator {
                 request.fixesMistakes = model.fixesMistakes
                 let text = try await self.engine.rewrite(
                     request,
+                    to: destination,
                     onPartial: { partial in
                         guard isCurrent(), case .generating = model.phase else { return }
                         model.phase = .generating(partial)
@@ -293,9 +319,12 @@ final class SelectionRewriteCoordinator {
                 )
                 guard isCurrent() else { return }
                 let facts = context.facts.map(\.text)
-                // A refinement may keep what the earlier result said, so both texts count as the user's.
-                let ownText = draft.map { input.selectedText + "\n" + $0 } ?? input.selectedText
-                let unsupported = AnswerGroundingPolicy.unsupportedSpecifics(in: text, facts: facts, question: ownText)
+                // Always checked against the user's own selection (plus the memory facts this run was
+                // given), never an earlier preview: a refinement that keeps a change the user never
+                // accepted ("1000" → "100") must still be flagged.
+                let ownText = input.selectedText
+                let source = ([ownText] + facts).joined(separator: "\n")
+                let unsupported = RewriteSpecificsCheck.unsupportedSpecifics(in: text, source: source)
                 model.changeWarning = RewriteChangeWarning.message(
                     selection: ownText, rewrite: text, unsupported: unsupported, usedMemory: !facts.isEmpty
                 )
@@ -352,7 +381,7 @@ final class SelectionRewriteCoordinator {
             // `close()` clears the input the notice would anchor to, so its caret rect is read first.
             let anchor = targetInput?.caretRect ?? .zero
             close()
-            verifyInserted(text, in: target, anchor: anchor)
+            verifyInserted(text, original: target.selectedText, in: target, anchor: anchor)
         case .copyInstead(let reason):
             copyAndNotify(text, reason: reason)
         default:
@@ -361,19 +390,11 @@ final class SelectionRewriteCoordinator {
     }
 
     /// Spec: "after inserting, poll until Accessibility shows the new text". Some hosts swallow a
-    /// paste silently; then the result goes to the clipboard so it is not lost. Checks a short
-    /// prefix of the rewrite around the caret, up to 5 times over about a second, after the inserter
-    /// has restored the user's clipboard (~0.3 s).
-    ///
-    /// Hosts report the same text differently: some run paragraphs together or wrap lines, so line
-    /// breaks are collapsed to single spaces on both sides before comparing. A paste that landed right
-    /// at the caret shows up as the suffix of the text before the caret, which is checked first.
-    /// Only a miss in the same field after every poll copies and shows the notice.
-    private func verifyInserted(_ text: String, in target: SelectionRewriteTarget, anchor: CGRect) {
-        let flat = Self.collapsed(text)
-        let head = String(flat.prefix(30))
-        let tail = String(flat.suffix(30))
-        guard !head.isEmpty else { return }
+    /// paste silently; then the result goes to the clipboard so it is not lost. Polls up to 5 times
+    /// over about a second, after the inserter has restored the user's clipboard (~0.3 s). Only a miss
+    /// in the same field after every poll copies and shows the notice.
+    private func verifyInserted(_ text: String, original: String, in target: SelectionRewriteTarget, anchor: CGRect) {
+        guard !Self.squeezed(text).isEmpty else { return }
         Task { [weak self] in
             for _ in 0..<5 {
                 try? await Task.sleep(nanoseconds: 200_000_000)
@@ -384,10 +405,7 @@ final class SelectionRewriteCoordinator {
                 guard let input = self.currentSnapshot().context,
                       SelectionRewriteTarget.fieldKey(for: input) == target.fieldKey
                 else { return }
-                if Self.collapsed(input.precedingText).hasSuffix(tail)
-                    || Self.collapsed(input.precedingText + input.selectedText + input.trailingText).contains(head) {
-                    return
-                }
+                if Self.pasteLanded(text, replacing: original, in: input) { return }
             }
             guard let self else { return }
             self.output.copyToClipboard(text)
@@ -396,9 +414,26 @@ final class SelectionRewriteCoordinator {
         }
     }
 
-    /// Every run of whitespace and line breaks becomes one space, and the ends are trimmed.
-    private static func collapsed(_ text: String) -> String {
-        text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+    /// Whether the field shows the rewrite where the selection was. Hosts report the same text
+    /// differently (some run paragraphs together, some wrap lines), so whitespace is ignored on both
+    /// sides. A paste that landed leaves the caret right after the rewrite, so the text before the
+    /// caret ends with it; failing that, the whole rewrite must be in the field and the original
+    /// selection gone. A shared opening alone ("Please send the report today." pasted over "Please
+    /// send the report tomorrow.") is never enough.
+    static func pasteLanded(_ rewrite: String, replacing original: String, in input: FocusedInputSnapshot) -> Bool {
+        let expected = squeezed(rewrite)
+        guard !expected.isEmpty else { return true }
+        // The last part of a long rewrite is enough here, and fits in the bounded text before the caret.
+        if squeezed(input.precedingText).hasSuffix(expected.suffix(1_000)) { return true }
+        let field = squeezed(input.precedingText + input.selectedText + input.trailingText)
+        let originalText = squeezed(original)
+        let originalGone = originalText.isEmpty || expected.contains(originalText) || !field.contains(originalText)
+        return field.contains(expected) && originalGone
+    }
+
+    /// The text with every whitespace character removed.
+    private static func squeezed(_ text: String) -> String {
+        String(text.unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) }.map(Character.init))
     }
 
     /// A short notice in a fresh popup that does not take the keyboard, closed after 2.5 s. Used after
@@ -416,10 +451,23 @@ final class SelectionRewriteCoordinator {
         }
     }
 
-    /// True when the popup shows a preview that Replace may use, but the popup is not the key window.
-    private var canReplaceFromTap: Bool {
-        guard let model, case .preview(_, let unsupported) = model.phase, unsupported.isEmpty else { return false }
-        return !presenter.isPopupKey
+    /// What Return does while the popup is open.
+    enum ReturnKeyAction: Equatable {
+        /// The popup has the keyboard: its own default button or text field handles Return.
+        case passToPopup
+        /// The host has the keyboard and the preview may replace: Return replaces.
+        case replace
+        /// The host has the keyboard but nothing may replace yet (still generating, a change warning,
+        /// an error): Return is taken anyway, because in a chat app it would send the original draft.
+        case swallow
+    }
+
+    /// The Return decision, pure so the "never reaches the host while the popup is open" rule is
+    /// pinned by tests. A notice has no key tap at all, so it never gets here.
+    static func returnKeyAction(popupIsKey: Bool, phase: SelectionRewritePopupModel.Phase) -> ReturnKeyAction {
+        if popupIsKey { return .passToPopup }
+        if case .preview(_, let unsupported) = phase, unsupported.isEmpty { return .replace }
+        return .swallow
     }
 
     private func copyPreview() {
@@ -433,6 +481,8 @@ final class SelectionRewriteCoordinator {
         CotabbyLogger.app.info("Rewrite copied instead", metadata: ["category": "rewrite", "reason": .string(reason)])
         guard let model, let input = targetInput else { return close() }
         model.phase = .notice(reason)
+        // A notice takes no keys: Esc and Return belong to the host again while it is on screen.
+        keyTap?.remove()
         presenter.showPopup(near: input.caretRect, model: model, takesKeyboard: false)
         Task { [weak self, weak model] in
             try? await Task.sleep(nanoseconds: 2_500_000_000)
@@ -455,6 +505,7 @@ final class SelectionRewriteCoordinator {
         fixesMistakesCancellable = nil
         model = nil
         lastRun = nil
+        destination = nil
         keyTap?.remove()
         presenter.hideAll()
         dismissedTarget = target
@@ -476,24 +527,30 @@ final class SelectionRewriteCoordinator {
         targetInput = nil
         dismissedTarget = nil
         lastRun = nil
+        destination = nil
         keyTap?.remove()
         hotkey?.remove()
         presenter.hideAll()
     }
 }
 
+/// One rewrite run as Retry and the refinements need it again: the action, the text it reshaped (nil:
+/// the user's selection), and the tone a refinement keeps.
+private struct RewriteRun {
+    let action: RewriteAction
+    let draft: String?
+    let tone: RewriteAction?
+}
+
 /// The narrow surface the coordinator needs from the popup panel. `SelectionRewritePanelController`
 /// conforms; tests substitute a stub that records calls. `@MainActor` because the panel is AppKit.
 @MainActor protocol SelectionRewritePresenting: AnyObject {
-    var isPopupVisible: Bool { get }
     var isPopupKey: Bool { get }
     func showButton(caretRect: CGRect, fieldFrame: CGRect?, onPress: @escaping () -> Void)
     /// `takesKeyboard` is true for a popup the user opened (it needs typing and Return) and false for a
     /// notice, which must not swallow the user's keystrokes while it is on screen.
     func showPopup(near anchor: CGRect, model: SelectionRewritePopupModel, takesKeyboard: Bool)
     func refit()
-    func allowKeyboard()
-    func hideButton()
     func hideAll()
 }
 extension SelectionRewritePanelController: SelectionRewritePresenting {}
@@ -507,13 +564,16 @@ extension SelectionRewritePanelController: SelectionRewritePresenting {}
     func activate(pid: pid_t)
 }
 
-/// The rewrite engine as the coordinator sees it: the provider facts for the popup disclosure, and
-/// one generation. Narrower than `RewriteEngine` so tests need no providers.
+/// The rewrite engine as the coordinator sees it: the destination a popup discloses, whether memory
+/// may reach it, and one generation on it. Narrower than `RewriteEngine` so tests need no providers.
 @MainActor protocol SelectionRewriteRunning: AnyObject {
-    var memoryAllowed: Bool { get }
-    var activeProviderSendsOffDevice: Bool { get }
-    var activeHostName: String? { get }
-    func rewrite(_ request: RewriteRequest, onPartial: @escaping @MainActor (String) -> Void) async throws -> String
+    func destination() -> RewriteDestination
+    func memoryAllowed(for destination: RewriteDestination) -> Bool
+    func rewrite(
+        _ request: RewriteRequest,
+        to destination: RewriteDestination,
+        onPartial: @escaping @MainActor (String) -> Void
+    ) async throws -> String
 }
 
 /// Memory lookup for one rewrite, behind a protocol so tests can return a fixed context.
@@ -522,10 +582,7 @@ extension SelectionRewritePanelController: SelectionRewritePresenting {}
 }
 extension RewriteMemoryGatherer: SelectionRewriteMemoryGathering {}
 
-extension RewriteEngine: SelectionRewriteRunning {
-    var activeProviderSendsOffDevice: Bool { activeProvider.sendsOffDevice }
-    var activeHostName: String? { activeProvider.hostName }
-}
+extension RewriteEngine: SelectionRewriteRunning {}
 
 /// Writes a rewrite into the host: pastes over the live selection (paste, not keystrokes, because a
 /// typed line break would send a chat message), or puts it on the clipboard.

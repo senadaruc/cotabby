@@ -5,10 +5,11 @@ import SwiftUI
 /// from, then how to take or leave it.
 ///
 /// Why the sources are always shown: an answer can quote facts from a different conversation than
-/// the one being replied in (the user chose that for answers), so the card names each fact's sender,
-/// chat, date and app before anything is inserted. Presentation only; built by
-/// `AnswerCardController` from an `AnswerOffer`. The whole card is the insert button: a click pastes
-/// the draft at the caret, where the user edits it.
+/// the one being replied in (the user chose that for answers), so the card names every fact's
+/// sender, chat, date and app, and which message it answers, before anything is inserted.
+/// Presentation only; built by `AnswerCardController` from an `AnswerOffer` (`AnswerAttribution`).
+/// The whole card is the insert button: a click pastes the draft at the caret, where the user edits
+/// it.
 struct AnswerCardView: View {
     let offer: AnswerOffer
     /// Whether Tab inserts too (an empty reply), or only a click (ghost text owns Tab there).
@@ -25,6 +26,10 @@ struct AnswerCardView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Text("Answering \(offer.answering)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
             Text(offer.draft)
                 .font(.system(size: 13))
                 .fixedSize(horizontal: false, vertical: true)
@@ -46,7 +51,8 @@ struct AnswerCardView: View {
                             }
                             Text(source.excerpt)
                                 .font(.caption)
-                                .lineLimit(2)
+                                .lineLimit(3)
+                                .help(source.excerpt)
                         }
                     }
                 }
@@ -59,20 +65,4 @@ struct AnswerCardView: View {
         .onTapGesture(perform: onInsert)
         .padding(2)
     }
-}
-
-/// A drafted answer and where its facts came from.
-nonisolated struct AnswerOffer: Equatable, Sendable {
-    struct Source: Equatable, Identifiable, Sendable {
-        let id: String
-        /// "Irem Dogru · THY – Imperum · 10 May · Outlook"
-        let byline: String
-        let excerpt: String
-        /// From a conversation other than the one being answered: shown with a warning, since its
-        /// people may differ from the one who will read the answer.
-        let isFromAnotherConversation: Bool
-    }
-
-    let draft: String
-    let sources: [Source]
 }

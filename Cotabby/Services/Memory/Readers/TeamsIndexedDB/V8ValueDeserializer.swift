@@ -32,9 +32,8 @@ import Foundation
 /// see THIRD_PARTY_LICENSES.md). Two deliberate differences from that port, both following V8:
 /// a Latin-1 string with characters above 0x7F decodes to its text (the port returned raw bytes,
 /// which the Teams mapping then treated as missing, so every message with an "ü" or "é" and no
-/// character beyond Latin-1 was dropped; `Options.latin1AsOpaqueBytes` reproduces that for the
-/// golden comparison only), and an array buffer view takes an object id (the port skipped it,
-/// shifting later back-references).
+/// character beyond Latin-1 was dropped), and an array buffer view takes an object id (the port
+/// skipped it, shifting later back-references).
 nonisolated indirect enum V8Value: Equatable {
     case undefined
     case null
@@ -58,9 +57,9 @@ nonisolated indirect enum V8Value: Equatable {
         return nil
     }
 
-    /// The value as plain Foundation types, the shape `TeamsMessageMapper` consumes (it mirrors
-    /// the Python dicts the original mapping was written against): `String`, `Double`, `Bool`,
-    /// `Date`, `[Any]`, `[String: Any]`, and `NSNull` for null, undefined and opaque values.
+    /// The value as plain Foundation types, the shape `TeamsMessageMapper` consumes: `String`,
+    /// `Double`, `Bool`, `Date`, `[Any]`, `[String: Any]`, and `NSNull` for null, undefined and
+    /// opaque values.
     var plainValue: Any {
         switch self {
         case .undefined, .null, .opaque: return NSNull()
@@ -122,21 +121,7 @@ nonisolated struct V8ValueDeserializer {
     /// bound keeps a hostile value from exhausting a background thread's stack.
     static let maximumDepth = 200
 
-    struct Options: Equatable {
-        /// Reproduces the Python reader's handling of Latin-1 strings with characters above 0x7F:
-        /// `ccl_v8_value_deserializer` returned their raw bytes instead of text, and the Teams
-        /// mapping treated those values as missing (the message skipped, the name unknown). Only
-        /// the golden test sets it, to compare this port with the Python output record for record;
-        /// Cotabby itself always decodes the text.
-        var latin1AsOpaqueBytes = false
-
-        init(latin1AsOpaqueBytes: Bool = false) {
-            self.latin1AsOpaqueBytes = latin1AsOpaqueBytes
-        }
-    }
-
     private var reader: ByteReader
-    private let options: Options
     private(set) var version: UInt32 = 0
     /// Objects by id, in the order V8 assigned ids. `nil` marks one still being read.
     private var objects: [V8Value?] = []
@@ -144,15 +129,14 @@ nonisolated struct V8ValueDeserializer {
     private var depth = 0
 
     /// Decodes one serialized value (starting at its `0xFF` version header).
-    static func deserialize(_ bytes: ArraySlice<UInt8>, options: Options = Options()) throws -> V8Value {
-        var deserializer = V8ValueDeserializer(reader: ByteReader(bytes), options: options)
+    static func deserialize(_ bytes: ArraySlice<UInt8>) throws -> V8Value {
+        var deserializer = V8ValueDeserializer(reader: ByteReader(bytes))
         try deserializer.readHeader()
         return try deserializer.readObject()
     }
 
-    private init(reader: ByteReader, options: Options) {
+    private init(reader: ByteReader) {
         self.reader = reader
-        self.options = options
     }
 
     // MARK: - Primitives
@@ -200,15 +184,14 @@ nonisolated struct V8ValueDeserializer {
 
     private mutating func latin1String() throws -> V8Value {
         let raw = try bytes(try varint32())
-        if raw.allSatisfy({ $0 < 0x80 }) { return .string(String(decoding: raw, as: UTF8.self)) }
-        if options.latin1AsOpaqueBytes { return .opaque }
+        if raw.allSatisfy({ $0 < 0x80 }) { return .string(String(lossyUTF8: raw)) }
         var scalars = String.UnicodeScalarView()
         scalars.append(contentsOf: raw.map { Unicode.Scalar($0) })
         return .string(String(scalars))
     }
 
     private mutating func utf8String() throws -> String {
-        String(decoding: try bytes(try varint32()), as: UTF8.self)
+        String(lossyUTF8: try bytes(try varint32()))
     }
 
     private mutating func twoByteString() throws -> String {
@@ -226,7 +209,7 @@ nonisolated struct V8ValueDeserializer {
     }
 
     /// A BigInt: a bitfield (sign in bit 0, digit byte length above it) and little-endian digits.
-    /// Kept as a number, as the Python mapping saw an `int`.
+    /// Kept as a number, which is what the mapping reads.
     private mutating func bigInt() throws -> Double {
         let bitfield = try varint32()
         let raw = try bytes((bitfield >> 1) & 0x3FFF_FFFF)
@@ -260,7 +243,18 @@ nonisolated struct V8ValueDeserializer {
         defer { depth -= 1 }
         guard depth <= Self.maximumDepth else { throw DeserializeError.tooDeep }
 
+        // One switch per family of tags, so each stays readable: plain values, strings and
+        // containers, boxed primitives (which take an object id), then buffers, references and
+        // host objects.
         let tag = try readTag()
+        if let value = try readPrimitive(tag) { return value }
+        if let value = try readStringOrContainer(tag) { return value }
+        if let value = try readBoxedPrimitive(tag) { return value }
+        if let value = try readBufferReferenceOrHostObject(tag) { return value }
+        throw DeserializeError.unknownTag(tag)
+    }
+
+    private mutating func readPrimitive(_ tag: UInt8) throws -> V8Value? {
         switch tag {
         case UInt8(ascii: "?"): // kVerifyObjectCount: a legacy count, then the real value
             _ = try varint32()
@@ -275,21 +269,26 @@ nonisolated struct V8ValueDeserializer {
         case UInt8(ascii: "U"): return .number(Double(try varint32()))
         case UInt8(ascii: "N"): return .number(try double())
         case UInt8(ascii: "Z"): return .number(try bigInt())
+        default: return nil
+        }
+    }
+
+    private mutating func readStringOrContainer(_ tag: UInt8) throws -> V8Value? {
+        switch tag {
         case UInt8(ascii: "\""): return try latin1String()
         case UInt8(ascii: "c"): return .string(try twoByteString())
         case UInt8(ascii: "S"): return .string(try utf8String())
-        case UInt8(ascii: "^"):
-            let id = Int(try varint32())
-            guard id < objects.count else { throw DeserializeError.malformed("reference to an unknown object") }
-            let value = objects[id] ?? .undefined
-            if arrayBufferIDs.contains(id), peekTag() == UInt8(ascii: "V") {
-                _ = try readTag()
-                return try readArrayBufferView()
-            }
-            return value
         case UInt8(ascii: "o"): return try readJSObject()
         case UInt8(ascii: "A"): return try readDenseArray()
         case UInt8(ascii: "a"): return try readSparseArray()
+        case UInt8(ascii: ";"): return try readMap()
+        case UInt8(ascii: "'"): return try readSet()
+        default: return nil
+        }
+    }
+
+    private mutating func readBoxedPrimitive(_ tag: UInt8) throws -> V8Value? {
+        switch tag {
         case UInt8(ascii: "D"):
             let id = reserveID()
             return complete(id, .date(try double()))
@@ -310,8 +309,21 @@ nonisolated struct V8ValueDeserializer {
             _ = try wrappedString() // pattern
             _ = try varint32() // flags
             return complete(id, .opaque)
-        case UInt8(ascii: ";"): return try readMap()
-        case UInt8(ascii: "'"): return try readSet()
+        default: return nil
+        }
+    }
+
+    private mutating func readBufferReferenceOrHostObject(_ tag: UInt8) throws -> V8Value? {
+        switch tag {
+        case UInt8(ascii: "^"):
+            let id = Int(try varint32())
+            guard id < objects.count else { throw DeserializeError.malformed("reference to an unknown object") }
+            let value = objects[id] ?? .undefined
+            if arrayBufferIDs.contains(id), peekTag() == UInt8(ascii: "V") {
+                _ = try readTag()
+                return try readArrayBufferView()
+            }
+            return value
         case UInt8(ascii: "B"):
             let id = reserveID()
             _ = try bytes(try varint32())
@@ -332,8 +344,7 @@ nonisolated struct V8ValueDeserializer {
             let id = reserveID()
             try skipBlinkHostObject()
             return complete(id, .opaque)
-        default:
-            throw DeserializeError.unknownTag(tag)
+        default: return nil
         }
     }
 
@@ -365,11 +376,15 @@ nonisolated struct V8ValueDeserializer {
         switch value {
         case .string(let key): return key
         case .number(let number):
-            if number == number.rounded(), abs(number) < 1e15 { return String(Int64(number)) }
-            return String(number)
+            // Explicit types and `magnitude`, not `abs`: with Accelerate imported elsewhere in the
+            // module, older compilers find `abs` ambiguous here.
+            if number == number.rounded(), number.magnitude < 1e15 {
+                let integer = Int64(number)
+                return String(integer)
+            }
+            return String(describing: number)
         case .opaque:
-            // Only with `latin1AsOpaqueBytes`: Python kept such a key as bytes, which no lookup
-            // by name matches; a key no lookup uses does the same.
+            // A key that is neither text nor a number gets a name no lookup by name can match.
             return "\u{0}bytes"
         default: throw DeserializeError.malformed("unsupported property key")
         }
@@ -409,7 +424,10 @@ nonisolated struct V8ValueDeserializer {
         // A sparse array can claim a huge length, and one element at index four billion would make
         // a dense copy of it allocate gigabytes from a few input bytes. Holes are only expanded
         // when the array is reasonably dense; otherwise its elements are kept in index order.
-        let indexed = pairs.compactMap { pair in Int(pair.0).map { ($0, pair.1) } }.filter { $0.0 >= 0 && $0.0 < length }
+        var indexed: [(Int, V8Value)] = []
+        for (key, value) in pairs {
+            if let index = Int(key), index >= 0, index < length { indexed.append((index, value)) }
+        }
         let highest = indexed.map(\.0).max()
         var elements: [V8Value]
         if let highest, highest >= Self.maximumSparseExpansion(elements: indexed.count) {
@@ -496,8 +514,22 @@ nonisolated struct V8ValueDeserializer {
     /// Consumes one Blink host object (third_party/blink/renderer/bindings/core/v8/serialization).
     /// Their payloads are references to blobs and files stored elsewhere, keys and geometry, none
     /// of which memory reads, but each must be skipped by its exact size for the rest to decode.
+    /// The fixed payload size of a geometry host object (doubles), or nil for any other tag.
+    private static func geometryHostObjectSize(_ tag: UInt8) -> UInt32? {
+        switch tag {
+        case UInt8(ascii: "Q"), UInt8(ascii: "W"), UInt8(ascii: "E"), UInt8(ascii: "R"): return 4 * 8 // point, rect
+        case UInt8(ascii: "I"), UInt8(ascii: "O"): return 6 * 8 // 2D matrix
+        case UInt8(ascii: "T"), UInt8(ascii: "Y"), UInt8(ascii: "U"): return 16 * 8 // quad (4 points), 4x4 matrix
+        default: return nil
+        }
+    }
+
     private mutating func skipBlinkHostObject() throws {
         let tag = try bytes(1).first!
+        if let size = Self.geometryHostObjectSize(tag) {
+            _ = try bytes(size)
+            return
+        }
         switch tag {
         case UInt8(ascii: "i"), UInt8(ascii: "e"): // blob index, file index
             _ = try varint32()
@@ -512,12 +544,6 @@ nonisolated struct V8ValueDeserializer {
             _ = try utf8String()
             _ = try utf8String()
             _ = try varint64()
-        case UInt8(ascii: "Q"), UInt8(ascii: "W"), UInt8(ascii: "E"), UInt8(ascii: "R"): // point, rect
-            _ = try bytes(4 * 8)
-        case UInt8(ascii: "I"), UInt8(ascii: "O"): // 2D matrix
-            _ = try bytes(6 * 8)
-        case UInt8(ascii: "T"), UInt8(ascii: "Y"), UInt8(ascii: "U"): // quad (4 points), 4x4 matrix
-            _ = try bytes(16 * 8)
         case UInt8(ascii: "x"): // DOMException: name, message, stack
             _ = try utf8String()
             _ = try utf8String()

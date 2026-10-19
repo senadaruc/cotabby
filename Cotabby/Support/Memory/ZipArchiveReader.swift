@@ -74,18 +74,21 @@ nonisolated struct ZipArchiveReader: Sendable {
 
     // MARK: - Format
 
-    private static func centralDirectory(_ data: Data) throws -> [Entry] {
-        // The end-of-central-directory record is in the last 64 KB plus its 22 bytes (the comment
-        // can be up to 65,535 bytes); searched backwards for its signature.
+    /// Where the end-of-central-directory record starts. It is in the last 64 KB plus its 22 bytes
+    /// (the comment can be up to 65,535 bytes), searched backwards for its signature.
+    private static func endOfCentralDirectory(_ data: Data) throws -> Int {
         guard data.count >= 22 else { throw ZipError.notAZip }
-        var end: Int?
         var position = data.count - 22
         let floor = max(0, data.count - 22 - 65_535)
         while position >= floor {
-            if u32(data, position) == 0x0605_4B50 { end = position; break }
+            if u32(data, position) == 0x0605_4B50 { return position }
             position -= 1
         }
-        guard let end else { throw ZipError.notAZip }
+        throw ZipError.notAZip
+    }
+
+    private static func centralDirectory(_ data: Data) throws -> [Entry] {
+        let end = try endOfCentralDirectory(data)
         let count = Int(u16(data, end + 10))
         let size = Int(u32(data, end + 12))
         let offset = Int(u32(data, end + 16))
@@ -107,7 +110,7 @@ nonisolated struct ZipArchiveReader: Sendable {
             guard nameStart + nameLength <= end else { throw ZipError.corrupt }
             let nameBytes = data.subdata(in: (data.startIndex + nameStart)..<(data.startIndex + nameStart + nameLength))
             entries.append(Entry(
-                name: String(decoding: nameBytes, as: UTF8.self),
+                name: String(lossyUTF8: nameBytes),
                 method: u16(data, cursor + 10),
                 compressedSize: Int(u32(data, cursor + 20)),
                 uncompressedSize: Int(u32(data, cursor + 24)),
@@ -136,12 +139,15 @@ nonisolated struct ZipArchiveReader: Sendable {
     private static func u16(_ data: Data, _ offset: Int) -> UInt16 {
         guard offset >= 0, offset + 2 <= data.count else { return 0 }
         let base = data.startIndex + offset
-        return UInt16(data[base]) | UInt16(data[base + 1]) << 8
+        let high = UInt16(data[base + 1]) << 8
+        return high | UInt16(data[base])
     }
 
     private static func u32(_ data: Data, _ offset: Int) -> UInt32 {
         guard offset >= 0, offset + 4 <= data.count else { return 0 }
         let base = data.startIndex + offset
-        return UInt32(data[base]) | UInt32(data[base + 1]) << 8 | UInt32(data[base + 2]) << 16 | UInt32(data[base + 3]) << 24
+        var value: UInt32 = 0
+        for index in (0..<4).reversed() { value = value << 8 | UInt32(data[base + index]) }
+        return value
     }
 }

@@ -3,8 +3,8 @@ import XCTest
 @testable import Cotabby
 
 /// Pins the text rules memory applies before storing a message and the keys it matches
-/// conversations and people by. These were ported from the Python memory service, whose tests the
-/// cases mirror, so stored data keeps meaning the same thing.
+/// conversations and people by. A change here changes what existing stored data means (its keys and
+/// what was redacted), so the cases are exact.
 final class MemoryTextRulesTests: XCTestCase {
     func test_scrubRedactsSecretsAndDropsOneTimeCodes() {
         XCTAssertNil(MemoryTextScrubber.scrub("Your verification code is 482913"))
@@ -21,7 +21,7 @@ final class MemoryTextRulesTests: XCTestCase {
         let body = "Sounds good, see you then.\n\nOn Mon, 3 Oct 2026, Ayşe wrote:\n> Shall we meet?\n> Thanks"
         XCTAssertEqual(MailQuoteStripper.strip(body), "Sounds good, see you then.")
         XCTAssertEqual(MailQuoteStripper.strip("Tamam.\n\n3 Eki 2026 tarihinde Ayşe şunu yazdı:\n> Olur mu?"), "Tamam.")
-        XCTAssertEqual(MailQuoteStripper.strip("Done.\n-- \nSenad"), "Done.")
+        XCTAssertEqual(MailQuoteStripper.strip("Done.\n-- \nSam"), "Done.")
         XCTAssertEqual(MailQuoteStripper.strip("Yes\n> quoted line\nand more"), "Yes\nand more")
     }
 
@@ -32,8 +32,8 @@ final class MemoryTextRulesTests: XCTestCase {
     }
 
     func test_participantsAreNormalizedToTheirAddress() {
-        XCTAssertEqual(ParticipantNormalizer.normalize("Ayşe Yılmaz <AYSE@x.com>"), "ayse@x.com")
-        XCTAssertEqual(ParticipantNormalizer.normalize("  Ali Pakkan "), "ali pakkan")
+        XCTAssertEqual(ParticipantNormalizer.normalize("Ayşe Yılmaz <AYSE@example.com>"), "ayse@example.com")
+        XCTAssertEqual(ParticipantNormalizer.normalize("  Avery Stone "), "avery stone")
     }
 
     func test_chunksOverlapAndShortTextIsOnePassage() {

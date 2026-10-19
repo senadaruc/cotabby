@@ -18,7 +18,8 @@ struct MemoryIndexSection: View {
 
     var body: some View {
         if let saved = control.configuration?.index {
-            let binding = Binding(get: { draft ?? saved }, set: { draft = $0 })
+            // Clamped on every edit: shrinking the passage size takes the overlap down with it.
+            let binding = Binding(get: { draft ?? saved }, set: { draft = $0.clamped() })
             Section {
                 indexStatus
                 Stepper("Results per suggestion: \(binding.wrappedValue.topK)", value: binding.topK, in: 1...20)
@@ -62,7 +63,8 @@ struct MemoryIndexSection: View {
                         ? "Keep messages: forever" : "Keep messages: last \(privacy.wrappedValue.retentionDays) days",
                     value: privacy.retentionDays, in: 0...3650, step: 30
                 )
-                listField("Never remember conversations (ids, one per line)", privacy.excludedConversations)
+                listField("Never remember conversations (one id per line; add one from the Playground)",
+                          privacy.excludedConversations)
                 listField("Never remember people (names or addresses, one per line)", privacy.excludedParticipants)
                 HStack {
                     Button("Delete All Memory…", role: .destructive) { confirmingDeleteAll = true }
@@ -128,7 +130,11 @@ struct MemoryIndexSection: View {
             Text(title).font(.caption).foregroundStyle(.secondary)
             TextEditor(text: Binding(
                 get: { values.wrappedValue.joined(separator: "\n") },
-                set: { values.wrappedValue = $0.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }
+                set: {
+                    values.wrappedValue = $0.split(separator: "\n")
+                        .map { $0.trimmingCharacters(in: .whitespaces) }
+                        .filter { !$0.isEmpty }
+                }
             ))
             .font(.callout)
             .frame(minHeight: 44, maxHeight: 90)

@@ -32,7 +32,7 @@ nonisolated enum HxStoreFile {
             // Pass 1: find every mail record and remember where the fullest version of each message
             // is. Bodies are not converted yet: a message has several versions, and converting each
             // one would do most of the work for versions that are then replaced.
-            var best: [String: (record: HxMailRecord, rank: Int, block: Range<Int>, size: Int)] = [:]
+            var best: [String: Version] = [:]
             let count = buffer.count
             var offset = 8
             while offset + headerSize <= count {
@@ -41,8 +41,10 @@ nonisolated enum HxStoreFile {
                 let type = readUInt32(buffer, offset + 8)
                 let start = offset + headerSize
                 // LZ4 can expand incompressible data slightly (its worst case is n + n/255 + 16).
-                guard compressed >= 8, compressed <= uncompressed + uncompressed / 255 + 16, uncompressed <= maximumRecordSize,
-                      uncompressed <= compressed * 255, type < 64, start + compressed <= count,
+                let worstCaseCompressed: Int = uncompressed + uncompressed / 255 + 16
+                let maximumExpansion: Int = compressed * 255
+                guard compressed >= 8, compressed <= worstCaseCompressed, uncompressed <= maximumRecordSize,
+                      uncompressed <= maximumExpansion, type < 64, start + compressed <= count,
                       let record = try? LZ4BlockDecoder.decode(buffer, range: start..<(start + compressed), maximumOutput: uncompressed),
                       record.count == uncompressed else {
                     offset += 1
@@ -58,7 +60,7 @@ nonisolated enum HxStoreFile {
                     let key = versionKey(message)
                     guard rank >= (best[key]?.rank ?? -1) else { return }
                     message.bodyHTML = nil
-                    best[key] = (message, rank, start..<(start + compressed), uncompressed)
+                    best[key] = Version(record: message, rank: rank, block: start..<(start + compressed), size: uncompressed)
                 }
                 offset = start + compressed
             }
@@ -74,11 +76,21 @@ nonisolated enum HxStoreFile {
                 autoreleasepool {
                     guard let record = try? LZ4BlockDecoder.decode(buffer, range: entry.block, maximumOutput: entry.size),
                           let html = HxStoreRecordParser.parse(record, now: now)?.bodyHTML else { return }
-                    message.bodyText = String(TeamsMessageHTML.text(String(html.prefix(maximumHTMLCharacters))).prefix(maximumBodyCharacters))
+                    let text = TeamsMessageHTML.text(String(html.prefix(maximumHTMLCharacters)))
+                    message.bodyText = String(text.prefix(maximumBodyCharacters))
                 }
                 return message
             }
         }
+    }
+
+    /// The fullest version of one message seen so far: its record (body not converted yet), how
+    /// full it is, and where its compressed block is, so pass 2 can decode only the winners.
+    private struct Version {
+        let record: HxMailRecord
+        let rank: Int
+        let block: Range<Int>
+        let size: Int
     }
 
     private static func versionKey(_ message: HxMailRecord) -> String {
@@ -86,6 +98,8 @@ nonisolated enum HxStoreFile {
     }
 
     private static func readUInt32(_ buffer: UnsafeRawBufferPointer, _ offset: Int) -> UInt32 {
-        UInt32(buffer[offset]) | UInt32(buffer[offset + 1]) << 8 | UInt32(buffer[offset + 2]) << 16 | UInt32(buffer[offset + 3]) << 24
+        var value: UInt32 = 0
+        for index in (0..<4).reversed() { value = value << 8 | UInt32(buffer[offset + index]) }
+        return value
     }
 }

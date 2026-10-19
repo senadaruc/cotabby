@@ -4,13 +4,14 @@ import Foundation
 /// Gathers what memory knows for one rewrite: up to 6 facts about the person or thread, and up to 3
 /// of the user's own messages there as style.
 ///
-/// Where it looks, in order, never wider:
-/// 1. The conversation the focused window names, within the focused app's own memory sources
-///    (`ConversationScopeResolver`, the same rule autocomplete uses). Style examples come only from
-///    here, so a chat is never styled after mail.
-/// 2. The same title in the user's other enabled sources (a WhatsApp chat named "Richard" finds
-///    Richard's mail thread). Facts only.
-/// Nil when neither finds anything: the popup then says "No memory for this person".
+/// Where it looks: only the conversation the focused window names, within the focused app's own
+/// memory sources, by the same rules autocomplete's memory follows (`ConversationScopeResolver`):
+/// the engine's search stays in that conversation, then widens only to conversations with exactly
+/// the same people. A title never crosses into another app's history (a WhatsApp chat named
+/// "Charlie" is not the Teams chat or the mail thread of another Charlie), and mail gets no
+/// conversation from its window or body at all, so a rewrite in Mail or Outlook has no memory.
+/// Style examples come from the same conversation, the user's own messages only.
+/// Nil when nothing is found: the popup then says "No memory for this person".
 /// Built by `CotabbyAppEnvironment`; used by `SelectionRewriteCoordinator`.
 @MainActor
 protocol RewriteMemorySearching: AnyObject {
@@ -60,25 +61,15 @@ final class RewriteMemoryGatherer {
     nonisolated deinit {}
 
     func gather(for input: FocusedInputSnapshot, selection: String) async -> RewriteMemoryContext? {
-        guard isAllowed(input) else { return nil }
-        let map = sourcesByBundle()
-        if let own = ConversationScopeResolver.scope(
-            bundleIdentifier: input.bundleIdentifier, conversationTitle: input.featureScopeWindowTitle,
-            trailingText: input.trailingText, sourcesByBundle: map
-        ), let result = await search.search(query: selection, scope: Self.scope(own)), !result.hits.isEmpty {
-            let style = await styleExamples(in: result.conversation)
-            return RewriteMemoryContext(facts: Self.facts(result), styleExamples: style)
-        }
-        let ownSources = Set(map[input.bundleIdentifier] ?? [])
-        let otherSources = Array(Set(map.values.flatMap { $0 }).subtracting(ownSources)).sorted()
-        guard !otherSources.isEmpty,
-              let other = ConversationScopeResolver.scope(
+        guard isAllowed(input),
+              let own = ConversationScopeResolver.scope(
                   bundleIdentifier: input.bundleIdentifier, conversationTitle: input.featureScopeWindowTitle,
-                  trailingText: input.trailingText, sourcesByBundle: [input.bundleIdentifier: otherSources]
+                  sourcesByBundle: sourcesByBundle()
               ),
-              let result = await search.search(query: selection, scope: Self.scope(other)), !result.hits.isEmpty
+              let result = await search.search(query: selection, scope: Self.scope(own)), !result.hits.isEmpty
         else { return nil }
-        return RewriteMemoryContext(facts: Self.facts(result), styleExamples: [])
+        let style = await styleExamples(in: result.conversation)
+        return RewriteMemoryContext(facts: Self.facts(result), styleExamples: style)
     }
 
     private static func scope(_ conversation: ConversationScope) -> MemoryEngine.Scope {

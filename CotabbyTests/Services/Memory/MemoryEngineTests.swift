@@ -4,8 +4,9 @@ import XCTest
 @testable import Cotabby
 
 /// Pins conversation memory's engine: the ingest pipeline, the scope rule suggestions rely on
-/// (this conversation, then exactly the same people, never a guess), what answers may draw on, and
-/// with the embedding model present, indexing and search by meaning end to end.
+/// (this conversation, then exactly the same people, never a guess), the Playground's exploring
+/// search, what answers may draw on, and with the embedding model present, indexing and search by
+/// meaning end to end.
 ///
 /// Without a model the engine searches by keywords only (the index is empty), which pins every
 /// scope rule exactly and runs in milliseconds.
@@ -24,7 +25,7 @@ final class MemoryEngineTests: XCTestCase {
     private func makeEngine(sources: [String], modelURL: URL? = nil) throws -> MemoryEngine {
         let engine = try MemoryEngine(
             paths: MemoryEngine.Paths(dataDirectory: directory),
-            masterKey: SymmetricKey(data: Data(0..<32)),
+            rootKey: SymmetricKey(data: Data(0..<32)),
             modelURL: modelURL ?? directory.appendingPathComponent("none.gguf"),
             conditions: {
                 EmbeddingSchedulePolicy.Conditions(isOnACPower: true, isLowPowerMode: false, thermalState: .nominal,
@@ -72,13 +73,111 @@ final class MemoryEngineTests: XCTestCase {
         try engine.ingest(source: "apple_mail", records: [
             record("t1", "Numbers are in.\n\nOn Mon, Ayşe wrote:\n> old quoted text", title: "POC", subject: "POC")
         ], cursor: nil)
-        let hits = engine.search(query: "numbers", scope: scope("POC", ["apple_mail"])).hits
+        var thread = MemoryEngine.Scope()
+        thread.conversation = ("apple_mail", "t1")
+        let hits = engine.search(query: "numbers", scope: thread).hits
         XCTAssertEqual(hits.map(\.text), ["Numbers are in."])
     }
 
     func test_aDisabledSourceStoresNothing() throws {
         let engine = try makeEngine(sources: ["whatsapp"])
         XCTAssertEqual(try engine.ingest(source: "apple_mail", records: [record("t1", "hello")], cursor: nil).stored, 0)
+    }
+
+    /// Every removal or settings change moves the data generation the retriever's caches follow.
+    func test_deletionsAndSettingChangesMoveTheDataGeneration() throws {
+        let engine = try makeEngine(sources: ["whatsapp", "icloud_drive"])
+        var seen = engine.dataGeneration
+        func moved(_ what: String, file: StaticString = #filePath, line: UInt = #line) {
+            XCTAssertNotEqual(engine.dataGeneration, seen, what, file: file, line: line)
+            seen = engine.dataGeneration
+        }
+        try engine.ingest(source: "whatsapp", records: [record("c1", "the invoice is paid")], cursor: nil)
+        XCTAssertEqual(engine.dataGeneration, seen, "adding is not a removal")
+        try engine.updateConfiguration { $0.privacy.excludedConversations = ["c1"] }
+        moved("never remember")
+        try engine.forget(source: "whatsapp")
+        moved("forget")
+        try engine.deleteEverything()
+        moved("delete all")
+        try engine.ingest(source: "icloud_drive", records: [record("doc", "first section of the document")], cursor: nil)
+        seen = engine.dataGeneration
+        try engine.forget(source: "icloud_drive", conversationsNotIn: [])
+        moved("a deleted document")
+        try engine.ingest(source: "icloud_drive", records: [record("doc", "first section of the document")], cursor: nil)
+        seen = engine.dataGeneration
+        try engine.ingest(source: "icloud_drive", records: [], cursor: nil, completeConversations: ["doc"])
+        moved("a shortened document")
+    }
+
+    /// The Documents Folder source pointed at another folder starts over: the old folder's records
+    /// and cursor go, so the new folder's older files are read and nothing of the old one stays.
+    func test_changingTheDocumentsFolderForgetsWhatTheOldOneGave() throws {
+        let engine = try makeEngine(sources: [])
+        try engine.updateConfiguration { $0.sources["documents"] = MemorySourceSettings(enabled: true, options: ["folder": "/notes/a"]) }
+        try engine.ingest(source: "documents", records: [record("plan.md", "the plan for the pilot is ready")], cursor: "1790000000")
+        try engine.updateConfiguration { $0.sources["documents"]?.options["note"] = "unrelated" }
+        XCTAssertEqual(engine.cursor(source: "documents"), "1790000000", "another option changes nothing")
+        try engine.updateConfiguration { $0.sources["documents"]?.options["folder"] = "/notes/b" }
+        XCTAssertNil(engine.cursor(source: "documents"))
+        XCTAssertEqual(engine.sources().first { $0.id == "documents" }?.stats.messages, 0)
+    }
+
+    /// A hand-edited settings file with a whole number beyond Int's range still loads (the value
+    /// stays a Double) instead of trapping at launch; ordinary whole numbers read as integers.
+    func test_aHugeOptionNumberLoads() throws {
+        let url = directory.appendingPathComponent("config.json")
+        try Data(#"{"sources": {"documents": {"enabled": true, "options": {"limit": 1e20, "count": 3, "ratio": 2.5}}}}"#.utf8)
+            .write(to: url)
+        let options = MemoryEngine.loadConfiguration(url).sources["documents"]?.options
+        XCTAssertEqual(options?["count"], "3")
+        XCTAssertEqual(options?["ratio"], "2.5")
+        XCTAssertEqual(options?["limit"], String(1e20))
+    }
+
+    /// Shrinking the passage size takes the overlap down with it (the pane applies this on every edit).
+    func test_indexSettingsClampTheOverlapToHalfAPassage() {
+        var settings = MemoryIndexSettings()
+        settings.chunkSize = 128
+        settings.chunkOverlap = 64
+        settings.chunkSize = 64
+        XCTAssertEqual(settings.clamped().chunkOverlap, 32)
+        settings.topK = 99
+        settings.vectorWeight = -1
+        XCTAssertEqual(settings.clamped().topK, 20)
+        XCTAssertEqual(settings.clamped().vectorWeight, 0)
+    }
+
+    /// Removing passages moves the last row into the gap: the moved row keeps its vector exactly
+    /// and every remaining passage is still found.
+    func test_theVectorIndexRemovesRowsAndKeepsTheOthersIntact() {
+        let index = FlatVectorIndex(dimensions: 0)
+        func unit(_ axis: Int) -> [UInt16] { HalfPrecision.encode((0..<4).map { $0 == axis ? 1 : 0 }) }
+        index.replaceAll((0..<4).map {
+            MemoryStore.StoredVector(passageID: "p\($0)", recordID: "r\($0)", source: "chat", conversationKey: "c",
+                                     timestamp: Double($0), vector: unit($0))
+        })
+        index.remove(recordIDs: ["r1"])
+        XCTAssertEqual(index.count, 3)
+        for axis in [0, 2, 3] {
+            let query: [Float] = (0..<4).map { $0 == axis ? 1 : 0 }
+            let best = index.search(query, limit: 1, where: { _ in true }).first
+            XCTAssertEqual(best?.entry.recordID, "r\(axis)")
+            XCTAssertEqual(best?.score ?? 0, 1, accuracy: 0.001)
+        }
+        index.remove(recordIDs: ["r0", "r3"])
+        XCTAssertEqual(index.search([0, 0, 1, 0], limit: 5, where: { _ in true }).map(\.entry.recordID), ["r2"])
+    }
+
+    /// An indexing step stopped between native calls saves only the messages embedded whole.
+    func test_aStoppedIndexingStepKeepsOnlyWholeMessages() {
+        // Passages of messages 0, 0, 1, 2, 2, 2.
+        let owners = [0, 0, 1, 2, 2, 2]
+        XCTAssertEqual(MemoryEngine.wholeMessages(passageMessages: owners, embedded: 6, messageCount: 3), 3)
+        XCTAssertEqual(MemoryEngine.wholeMessages(passageMessages: owners, embedded: 4, messageCount: 3), 2)
+        XCTAssertEqual(MemoryEngine.wholeMessages(passageMessages: owners, embedded: 1, messageCount: 3), 0)
+        XCTAssertEqual(MemoryEngine.wholeMessages(passageMessages: owners, embedded: 0, messageCount: 3), 0)
+        XCTAssertEqual(MemoryEngine.wholeMessages(passageMessages: [], embedded: 0, messageCount: 2), 2)
     }
 
     // MARK: - Scope rule
@@ -106,12 +205,38 @@ final class MemoryEngineTests: XCTestCase {
     func test_unknownAmbiguousOrForeignAppTitlesFindNothing() throws {
         let engine = try makeEngine(sources: ["whatsapp", "apple_mail"])
         try engine.ingest(source: "whatsapp", records: [
-            record("ali-1", "the budget is fixed", sender: "Ali", title: "Ali"),
-            record("ali-2", "the budget is late", sender: "Ali B", title: "Ali"),
+            record("avery-1", "the budget is fixed", sender: "Avery", title: "Avery"),
+            record("avery-2", "the budget is late", sender: "Avery B", title: "Avery"),
         ], cursor: nil)
-        XCTAssertEqual(engine.search(query: "budget", scope: scope("Ali", ["whatsapp"])).scope, "none", "two chats called Ali")
+        XCTAssertEqual(engine.search(query: "budget", scope: scope("Avery", ["whatsapp"])).scope, "none", "two chats called Avery")
         XCTAssertEqual(engine.search(query: "budget", scope: scope("Nobody", ["whatsapp"])).hits, [])
-        XCTAssertEqual(engine.search(query: "budget", scope: scope("Ali", ["apple_mail"])).hits, [], "titles never cross apps")
+        XCTAssertEqual(engine.search(query: "budget", scope: scope("Avery", ["apple_mail"])).hits, [], "titles never cross apps")
+    }
+
+    /// Titles match whole (after case, space and reply-prefix normalization), never in part.
+    func test_aPartialTitleIsNotTheConversation() throws {
+        let engine = try makeEngine(sources: ["whatsapp"])
+        try engine.ingest(source: "whatsapp", records: [record("c1", "the invoice is paid", title: "Ayşe Yılmaz")], cursor: nil)
+        XCTAssertEqual(engine.search(query: "invoice", scope: scope("Ayşe", ["whatsapp"])).scope, "none")
+        XCTAssertEqual(engine.search(query: "invoice", scope: scope("Ayşe Yılmaz Office", ["whatsapp"])).scope, "none")
+        XCTAssertEqual(engine.search(query: "invoice", scope: scope("  ayşe   yılmaz ", ["whatsapp"])).scope, "conversation")
+    }
+
+    /// A WhatsApp group whose only other member is Ayşe still never shares memory with the 1:1 chat
+    /// with her (the group marker the reader adds), in either direction.
+    func test_aWhatsAppGroupNeverWidensIntoAOneToOneChat() throws {
+        let engine = try makeEngine(sources: ["whatsapp"])
+        let ayse = "15550100001@s.whatsapp.net"
+        try engine.ingest(source: "whatsapp", records: [
+            record(ayse, "my invoice question is private", title: "Ayşe", participants: [ayse]),
+            record("12036@g.us", "the trip invoice is shared", title: "Trip",
+                   participants: [ayse, "whatsapp-group:12036@g.us"])  // the marker WhatsAppHistoryReader adds
+        ], cursor: nil)
+        let direct = engine.search(query: "invoice", scope: scope("Ayşe", ["whatsapp"]), topK: 4)
+        XCTAssertEqual(direct.hits.map(\.text), ["my invoice question is private"])
+        XCTAssertEqual(direct.scope, "conversation")
+        let group = engine.search(query: "invoice", scope: scope("Trip", ["whatsapp"]), topK: 4)
+        XCTAssertEqual(group.hits.map(\.text), ["the trip invoice is shared"])
     }
 
     func test_disabledSourcesAreNeverSearched() throws {
@@ -124,12 +249,39 @@ final class MemoryEngineTests: XCTestCase {
     func test_teamsGroupsNeverShareMemoryWithOneToOneChats() throws {
         let engine = try makeEngine(sources: ["teams"])
         try engine.ingest(source: "teams", records: [
-            record("dm", "my salary negotiation is private", sender: "Ali Pakkan", title: "Ali Pakkan", participants: ["8:orgid:ali"]),
-            record("group", "the release is on Friday", sender: "Ali Pakkan", title: "Ops",
-                   participants: ["8:orgid:ali", "teams-group:group"]),
+            record("dm", "my salary negotiation is private", sender: "Avery Stone", title: "Avery Stone", participants: ["8:orgid:avery"]),
+            record("group", "the release is on Friday", sender: "Avery Stone", title: "Ops",
+                   participants: ["8:orgid:avery", "teams-group:group"]),
         ], cursor: nil)
         XCTAssertTrue(engine.search(query: "salary", scope: scope("Ops", ["teams"])).hits.isEmpty)
-        XCTAssertTrue(engine.search(query: "release", scope: scope("Ali Pakkan", ["teams"])).hits.isEmpty)
+        XCTAssertTrue(engine.search(query: "release", scope: scope("Avery Stone", ["teams"])).hits.isEmpty)
+    }
+
+    // MARK: - Exploring search (Playground)
+
+    func test_exploringSearchCoversOnlyTheRequestedEnabledSources() throws {
+        let engine = try makeEngine(sources: ["outlook", "whatsapp"])
+        try engine.ingest(source: "outlook", records: [
+            record("pilot", "The pilot passed all acceptance tests", sender: "Sam", title: "Pilot - Acme"),
+        ], cursor: nil)
+        try engine.ingest(source: "whatsapp", records: [
+            record("family", "The pilot of our flight to Izmir is late", title: "Family"),
+        ], cursor: nil)
+
+        var outlookOnly = MemoryEngine.Scope()
+        outlookOnly.global = true
+        outlookOnly.sources = ["outlook"]
+        let result = engine.search(query: "pilot", scope: outlookOnly)
+        XCTAssertEqual(result.scope, "global")
+        XCTAssertEqual(result.hits.map(\.text), ["The pilot passed all acceptance tests"])
+
+        var everything = MemoryEngine.Scope()
+        everything.global = true
+        XCTAssertEqual(engine.search(query: "pilot", scope: everything).hits.count, 2, "no sources means every enabled one")
+        var disabled = MemoryEngine.Scope()
+        disabled.global = true
+        disabled.sources = ["teams"]
+        XCTAssertTrue(engine.search(query: "pilot", scope: disabled).hits.isEmpty, "a source that is off is never searched")
     }
 
     // MARK: - Answers
@@ -137,20 +289,87 @@ final class MemoryEngineTests: XCTestCase {
     func test_answerSearchUsesOnlyAnswerSourcesAndTheCurrentConversationAndNeverTheQuestion() throws {
         let engine = try makeEngine(sources: ["outlook", "whatsapp", "teams"])
         try engine.ingest(source: "outlook", records: [
-            record("thy", "The THY POC passed all detection tests", sender: "Irem", title: "THY - Imperum"),
+            record("pilot", "The Acme pilot passed all acceptance tests", sender: "Sam", title: "Pilot - Acme"),
         ], cursor: nil)
         try engine.ingest(source: "whatsapp", records: [
-            record("family", "THY flight to Izmir is at 9", title: "Family"),
+            record("family", "The Acme pilot of our flight to Izmir is late", title: "Family"),
         ], cursor: nil)
-        let question = record("ali", "How did the THY POC go?", sender: "Ali", title: "Ali Pakkan")
+        let question = record("dana", "How did the Acme pilot go?", sender: "Dana Miles", title: "Dana Miles")
         try engine.ingest(source: "teams", records: [question], cursor: nil)
-        let questionID = MemoryStore.recordID(source: "teams", sourceMessageID: question.sourceMessageID)
+        let questionID = try XCTUnwrap(engine.latestMessages(source: "teams", conversationID: "dana", limit: 1).first?.recordID)
 
-        let result = engine.answerSearch(question: "How did the THY POC go?", sources: ["outlook"],
-                                         currentConversation: ("teams", "ali"), excludingRecordIDs: [questionID])
+        let result = engine.answerSearch(question: "How did the Acme pilot go?", sources: ["outlook"],
+                                         currentConversation: ("teams", "dana"), excludingRecordIDs: [questionID])
         XCTAssertEqual(result.scope, "answer")
-        XCTAssertEqual(result.hits.map(\.text), ["The THY POC passed all detection tests"],
+        XCTAssertEqual(result.hits.map(\.text), ["The Acme pilot passed all acceptance tests"],
                        "WhatsApp is not an answer source here, and the question is not its own answer")
+    }
+
+    /// Other conversations are opt-in: with no answer source turned on, only the conversation being
+    /// answered can supply facts, and with none identified, nothing can.
+    func test_answerSourcesAreOffByDefaultAndOnlyTheCurrentConversationIsSearched() throws {
+        XCTAssertFalse(MemorySourceCatalog.all.contains { MemorySourceCatalog.isAnswerSource($0.id, settings: nil) })
+        XCTAssertFalse(MemorySourceCatalog.isAnswerSource("outlook", settings: MemorySourceSettings(enabled: true)))
+        XCTAssertTrue(MemorySourceCatalog.isAnswerSource("outlook", settings: MemorySourceSettings(enabled: true, answerSource: true)))
+
+        let engine = try makeEngine(sources: ["outlook"])
+        try engine.ingest(source: "outlook", records: [
+            record("pilot", "The Acme pilot passed all acceptance tests", sender: "Sam", title: "Pilot - Acme"),
+            record("board", "The Acme pilot budget is confidential", sender: "Priya", title: "Board"),
+        ], cursor: nil)
+        let current = engine.answerSearch(question: "How did the Acme pilot go?", sources: [],
+                                          currentConversation: ("outlook", "pilot"), excludingRecordIDs: [])
+        XCTAssertEqual(current.hits.map(\.text), ["The Acme pilot passed all acceptance tests"])
+        XCTAssertTrue(engine.answerSearch(question: "How did the Acme pilot go?", sources: [], currentConversation: nil,
+                                          excludingRecordIDs: []).hits.isEmpty)
+    }
+
+    /// A choice the user made is kept exactly, on or off; one they never made is off, and the
+    /// enabled sources left unset are the ones the controller names once in its log.
+    func test_anExplicitAnswerChoiceIsKeptAndUnsetSourcesAreListed() throws {
+        XCTAssertTrue(MemorySourceCatalog.isAnswerSource("whatsapp", settings: MemorySourceSettings(enabled: true, answerSource: true)))
+        XCTAssertFalse(MemorySourceCatalog.isAnswerSource("outlook", settings: MemorySourceSettings(enabled: true, answerSource: false)))
+
+        let json = """
+        {"sources": {"outlook": {"enabled": true, "answer_source": true}, "teams": {"enabled": true, "answer_source": false},
+                     "documents": {"enabled": true}, "apple_mail": {"enabled": true}, "whatsapp": {"enabled": false},
+                     "calendar": {"enabled": true}}}
+        """
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let configuration = try decoder.decode(MemoryConfiguration.self, from: Data(json.utf8))
+        XCTAssertEqual(configuration.sources["outlook"]?.answerSource, true)
+        XCTAssertEqual(configuration.sources["teams"]?.answerSource, false)
+        XCTAssertNil(configuration.sources["documents"]?.answerSource)
+        // Calendar can never answer, and a source that is off is not memory's at all.
+        XCTAssertEqual(MemorySourceCatalog.sourcesWithUnsetAnswerChoice(in: configuration), ["apple_mail", "documents"])
+    }
+
+    /// Calendar events hold what a meeting is and who is in it; answers say only busy and free, so
+    /// no event ever becomes a fact, even with "Use for answers" switched on for Calendar.
+    func test_calendarEventsAreNeverAnswerFacts() throws {
+        XCTAssertFalse(MemorySourceCatalog.isAnswerSource("calendar", settings: MemorySourceSettings(enabled: true, answerSource: true)))
+        let engine = try makeEngine(sources: ["calendar"])
+        try engine.ingest(source: "calendar", records: [
+            record("event:1", "Meeting: Northwind restructuring review\nWhen: Thu 8 Oct 2026, 10:00–11:00", sender: "Priya",
+                   title: "Northwind restructuring review"),
+        ], cursor: nil)
+        XCTAssertTrue(engine.answerSearch(question: "Are you free Thursday for the Northwind review?", sources: ["calendar"],
+                                          currentConversation: nil, excludingRecordIDs: []).hits.isEmpty)
+    }
+
+    func test_chatsAreFoundByTitleAndReadNewestFirst() throws {
+        let engine = try makeEngine(sources: ["teams"])
+        let start = Date(timeIntervalSince1970: 1_790_000_000)
+        try engine.ingest(source: "teams", records: [
+            record("dana", "Hi!", sender: "Dana Miles", title: "Dana Miles", at: start),
+            record("dana", "Is the report ready?", sender: "Dana Miles", title: "Dana Miles", at: start.addingTimeInterval(60)),
+        ], cursor: nil)
+        let found = engine.findConversations(title: "Dana Miles", sources: ["teams"])
+        XCTAssertEqual(found.map(\.conversationId), ["dana"])
+        XCTAssertTrue(engine.findConversations(title: "Dana Miles", sources: ["outlook"]).isEmpty, "another app's sources")
+        XCTAssertEqual(engine.latestMessages(source: "teams", conversationID: "dana", limit: 5).map(\.text),
+                       ["Is the report ready?", "Hi!"])
     }
 
     // MARK: - Schedule policy

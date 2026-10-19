@@ -2,24 +2,27 @@ import Foundation
 
 /// File overview:
 /// Words the preview's warning when a rewrite contains a number or name that is in neither the
-/// user's text nor memory (`AnswerGroundingPolicy.unsupportedSpecifics`). The user then decides
-/// whether to "Replace anyway", so the warning must say what changed: "1000% eminim" came back as
-/// "%100 eminim" (2026-10-11), and the old wording ("Not in your text or memory: 100") hid that the
-/// rewrite had turned 1000 into 100. A number the user wrote that the rewrite dropped is shown as
-/// what it replaced. Pure, so the wording is pinned by tests.
+/// user's text nor memory (`RewriteSpecificsCheck.unsupportedSpecifics`). The user then decides
+/// whether to "Replace anyway", so the warning must say what changed: when "1000%" comes back as
+/// "100%", a bare list of the new terms ("Not in your text: 100") would hide that the rewrite turned
+/// 1000 into 100. A number the user wrote that the rewrite dropped is shown as what it replaced.
+/// Pure, so the wording is pinned by tests.
 nonisolated enum RewriteChangeWarning {
-    /// The warning for `unsupported` terms, or nil when there are none.
+    /// The warning for `unsupported` terms, or nil when there are none. `usedMemory` names memory as a
+    /// source too, because the check then also accepted what the memory facts say.
     static func message(selection: String, rewrite: String, unsupported: [String], usedMemory: Bool) -> String? {
         guard !unsupported.isEmpty else { return nil }
-        let addedNumbers = unsupported.filter { $0.allSatisfy(\.isNumber) }
-        let addedNames = unsupported.filter { !$0.allSatisfy(\.isNumber) }
+        // Numbers start with a digit ("3.5", "1:30"); names never do.
+        let addedNumbers = unsupported.filter { $0.first?.isNumber == true }
+        let addedNames = unsupported.filter { $0.first?.isNumber != true }
         let source = usedMemory ? "your text or memory" : "your text"
         var sentences: [String] = []
 
         if !addedNumbers.isEmpty {
-            let rewriteNumbers = Set(AnswerGroundingPolicy.numbers(in: rewrite))
+            let rewriteNumbers = Set(RewriteSpecificsCheck.numbers(in: rewrite))
             var seen = Set<String>()
-            let dropped = AnswerGroundingPolicy.numbers(in: selection).filter { !rewriteNumbers.contains($0) && seen.insert($0).inserted }
+            let dropped = RewriteSpecificsCheck.numbers(in: selection)
+                .filter { !rewriteNumbers.contains($0) && seen.insert($0).inserted }
             switch (dropped.count, addedNumbers.count) {
             case (0, 1):
                 sentences.append("The rewrite adds the number \(addedNumbers[0]), which isn't in \(source).")
@@ -28,7 +31,9 @@ nonisolated enum RewriteChangeWarning {
             case (1, 1):
                 sentences.append("The number changed: you wrote \(dropped[0]), the rewrite says \(addedNumbers[0]).")
             default:
-                sentences.append("Numbers changed: you wrote \(dropped.joined(separator: ", ")); the rewrite says \(addedNumbers.joined(separator: ", ")).")
+                let wrote = dropped.joined(separator: ", ")
+                let says = addedNumbers.joined(separator: ", ")
+                sentences.append("Numbers changed: you wrote \(wrote); the rewrite says \(says).")
             }
         }
         if !addedNames.isEmpty {

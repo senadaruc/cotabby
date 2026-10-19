@@ -5,9 +5,8 @@ import Foundation
 ///
 /// Why its own file: Teams writes most messages as HTML (`RichText/Html`): paragraphs and `<div>`s
 /// for lines, `<span itemtype=".../Mention">` around names, and quoted replies as
-/// `<blockquote itemtype=".../Reply">`. The rules here are the ones the Python memory service
-/// applied (`html_to_text` in `connectors/teams.py`, on top of Python's `html.parser` and
-/// `html.unescape`), reproduced exactly so messages read by either produce the same text:
+/// `<blockquote itemtype=".../Reply">`. The rules follow CPython's `html.parser` and
+/// `html.unescape`, which the first prototype used (see `TeamsMessageMapper`):
 /// - block elements (`p`, `div`, `br`, `li`, `tr`, `h1`...`h6`) become line breaks;
 /// - `blockquote`, `script` and `style` are dropped with everything inside them (a quoted reply
 ///   is the other message, already remembered on its own);
@@ -99,7 +98,7 @@ nonisolated enum TeamsMessageHTML {
     /// raw-text elements (`script`, `style`...) reported undecoded up to their end tag. A construct
     /// left open at the end of the message is dropped, as Python does.
     struct Tokenizer {
-        private let s: [Unicode.Scalar]
+        private let scalars: [Unicode.Scalar]
         private var rawTextElement: String?
         private var rawTextDecodes = false
 
@@ -107,13 +106,16 @@ nonisolated enum TeamsMessageHTML {
         static let escapableRawText: Set<String> = ["textarea", "title"]
 
         init(_ scalars: [Unicode.Scalar]) {
-            s = scalars
+            self.scalars = scalars
         }
 
-        private var n: Int { s.count }
+        private var length: Int { scalars.count }
 
         private static func isLetter(_ scalar: Unicode.Scalar) -> Bool {
-            ("a"..."z").contains(scalar) || ("A"..."Z").contains(scalar)
+            switch scalar {
+            case "a"..."z", "A"..."Z": return true
+            default: return false
+            }
         }
 
         /// `[\t\n\r\f ]`
@@ -122,69 +124,73 @@ nonisolated enum TeamsMessageHTML {
         }
 
         private func starts(with prefix: String, at index: Int) -> Bool {
-            let scalars = Array(prefix.unicodeScalars)
-            guard index + scalars.count <= n else { return false }
-            for (offset, scalar) in scalars.enumerated() where s[index + offset] != scalar { return false }
+            let prefixScalars = Array(prefix.unicodeScalars)
+            guard index + prefixScalars.count <= length else { return false }
+            for (offset, scalar) in prefixScalars.enumerated() where scalars[index + offset] != scalar { return false }
             return true
         }
 
         private func find(_ scalar: Unicode.Scalar, from index: Int) -> Int? {
             var position = index
-            while position < n {
-                if s[position] == scalar { return position }
+            while position < length {
+                if scalars[position] == scalar { return position }
                 position += 1
             }
             return nil
         }
 
         private func string(_ start: Int, _ end: Int) -> String {
-            String(String.UnicodeScalarView(s[start..<end]))
+            String(String.UnicodeScalarView(scalars[start..<end]))
         }
 
         mutating func run(into handler: inout Extractor) {
-            var i = 0
-            while i < n {
-                let j: Int
+            var index = 0
+            while index < length {
+                let textEnd: Int
                 if let element = rawTextElement {
-                    guard let end = rawTextEnd(element, from: i) else { break }
-                    j = end
+                    guard let end = rawTextEnd(element, from: index) else { break }
+                    textEnd = end
                 } else {
-                    j = find("<", from: i) ?? n
+                    textEnd = find("<", from: index) ?? length
                 }
-                if i < j {
-                    let text = string(i, j)
+                if index < textEnd {
+                    let text = string(index, textEnd)
                     handler.data(rawTextElement == nil || rawTextDecodes ? HTMLCharacterReferences.decode(text) : text)
                 }
-                i = j
-                if i == n { break }
+                index = textEnd
+                if index == length { break }
 
-                var k: Int
-                if i + 1 < n, Self.isLetter(s[i + 1]) {
-                    k = parseStartTag(i, into: &handler)
-                } else if starts(with: "</", at: i) {
-                    k = parseEndTag(i, into: &handler)
-                } else if starts(with: "<!--", at: i) {
-                    k = parseComment(i)
-                } else if starts(with: "<?", at: i) {
-                    k = find(">", from: i + 2).map { $0 + 1 } ?? -1
-                } else if starts(with: "<!", at: i) {
-                    k = parseDeclaration(i)
-                } else {
-                    handler.data("<")
-                    k = i + 1
-                }
-                if k < 0 {
+                var next = parseMarkup(at: index, into: &handler)
+                if next < 0 {
                     // Unterminated at the end of the message: Python reports a lone "</" as text
                     // and drops everything else that is left.
-                    if starts(with: "</", at: i), i + 2 == n { handler.data("</") }
-                    k = n
+                    if starts(with: "</", at: index), index + 2 == length { handler.data("</") }
+                    next = length
                 }
-                i = k
+                index = next
             }
-            if i < n {
-                let text = string(i, n)
+            if index < length {
+                let text = string(index, length)
                 handler.data(rawTextElement == nil || rawTextDecodes ? HTMLCharacterReferences.decode(text) : text)
             }
+        }
+
+        /// The construct starting with the `<` at `index`: a start or end tag, a comment, a processing
+        /// instruction or a declaration, or a lone `<` reported as text. Returns where it ends, or -1
+        /// when it is unterminated.
+        private mutating func parseMarkup(at index: Int, into handler: inout Extractor) -> Int {
+            if index + 1 < length, Self.isLetter(scalars[index + 1]) { return parseStartTag(index, into: &handler) }
+            if starts(with: "</", at: index) { return parseEndTag(index, into: &handler) }
+            if starts(with: "<!--", at: index) { return parseComment(index) }
+            if starts(with: "<?", at: index) { return find(">", from: index + 2).map { $0 + 1 } ?? -1 }
+            if starts(with: "<!", at: index) { return parseDeclaration(index) }
+            handler.data("<")
+            return index + 1
+        }
+
+        /// Whether the scalar at `position` can continue a tag name (`[^\t\n\r\f />]`).
+        private func continuesTagName(_ position: Int) -> Bool {
+            !Self.isSpace(scalars[position]) && scalars[position] != "/" && scalars[position] != ">"
         }
 
         /// Where `</element` followed by a space, `/` or `>` starts, case-insensitively.
@@ -192,15 +198,15 @@ nonisolated enum TeamsMessageHTML {
             guard element != "plaintext" else { return nil }
             let name = Array(element.unicodeScalars)
             var position = index
-            while position + 2 + name.count < n {
-                if s[position] == "<", s[position + 1] == "/" {
+            while position + 2 + name.count < length {
+                if scalars[position] == "<", scalars[position + 1] == "/" {
                     var matches = true
                     for (offset, scalar) in name.enumerated() {
-                        let candidate = s[position + 2 + offset]
+                        let candidate = scalars[position + 2 + offset]
                         let lowered = ("A"..."Z").contains(candidate) ? Unicode.Scalar(candidate.value + 32)! : candidate
                         if lowered != scalar { matches = false; break }
                     }
-                    let next = s[position + 2 + name.count]
+                    let next = scalars[position + 2 + name.count]
                     if matches, Self.isSpace(next) || next == "/" || next == ">" { return position }
                 }
                 position += 1
@@ -213,53 +219,53 @@ nonisolated enum TeamsMessageHTML {
         /// separated by spaces and slashes, then an optional `>`.
         private func locateTagEnd(_ start: Int) -> Int {
             var position = start + 1
-            while position < n, !Self.isSpace(s[position]), s[position] != "/", s[position] != ">" { position += 1 }
-            while position < n, Self.isSpace(s[position]) || s[position] == "/" { position += 1 }
+            while position < length, continuesTagName(position) { position += 1 }
+            while position < length, Self.isSpace(scalars[position]) || scalars[position] == "/" { position += 1 }
             while let end = attributeEnd(position) {
                 position = end
-                while position < n, Self.isSpace(s[position]) || s[position] == "/" { position += 1 }
+                while position < length, Self.isSpace(scalars[position]) || scalars[position] == "/" { position += 1 }
             }
-            if position < n, s[position] == ">" { position += 1 }
+            if position < length, scalars[position] == ">" { position += 1 }
             return position
         }
 
         /// One attribute (name and optional value) starting at `position`, or nil when none can
         /// start there (`(?<=['"\t\n\r\f /])[^\t\n\r\f />][^\t\n\r\f /=>]*` and the value group).
         private func attributeEnd(_ position: Int) -> Int? {
-            guard position < n, position > 0 else { return nil }
-            let before = s[position - 1]
+            guard position < length, position > 0 else { return nil }
+            let before = scalars[position - 1]
             guard before == "'" || before == "\"" || before == "/" || Self.isSpace(before) else { return nil }
-            guard !Self.isSpace(s[position]), s[position] != "/", s[position] != ">" else { return nil }
+            guard !Self.isSpace(scalars[position]), scalars[position] != "/", scalars[position] != ">" else { return nil }
             var end = position + 1
-            while end < n, !Self.isSpace(s[end]), s[end] != "/", s[end] != "=", s[end] != ">" { end += 1 }
+            while end < length, continuesTagName(end), scalars[end] != "=" { end += 1 }
             // Optional `[\t\n\r\f ]*=[\t\n\r\f ]*value`.
             var value = end
-            while value < n, Self.isSpace(s[value]) { value += 1 }
-            guard value < n, s[value] == "=" else { return end }
+            while value < length, Self.isSpace(scalars[value]) { value += 1 }
+            guard value < length, scalars[value] == "=" else { return end }
             value += 1
-            while value < n, Self.isSpace(s[value]) { value += 1 }
-            if value < n, s[value] == "'" || s[value] == "\"" {
-                guard let close = find(s[value], from: value + 1) else { return end }
+            while value < length, Self.isSpace(scalars[value]) { value += 1 }
+            if value < length, scalars[value] == "'" || scalars[value] == "\"" {
+                guard let close = find(scalars[value], from: value + 1) else { return end }
                 return close + 1
             }
-            while value < n, s[value] != ">", !Self.isSpace(s[value]) { value += 1 }
+            while value < length, scalars[value] != ">", !Self.isSpace(scalars[value]) { value += 1 }
             return value
         }
 
-        private mutating func parseStartTag(_ i: Int, into handler: inout Extractor) -> Int {
-            let endpos = locateTagEnd(i + 1)
-            guard endpos > 0, s[endpos - 1] == ">" else { return -1 }
+        private mutating func parseStartTag(_ start: Int, into handler: inout Extractor) -> Int {
+            let endpos = locateTagEnd(start + 1)
+            guard endpos > 0, scalars[endpos - 1] == ">" else { return -1 }
             // Name: `[a-zA-Z][^\t\n\r\f />]*`, then `(?:[\t\n\r\f ]|/(?!>))*`.
-            var k = i + 2
-            while k < n, !Self.isSpace(s[k]), s[k] != "/", s[k] != ">" { k += 1 }
-            let tag = string(i + 1, k).lowercased()
-            k = skipSpacesAndLoneSlashes(k)
-            while k < endpos, let end = attributeEnd(k) {
-                k = skipSpacesAndLoneSlashes(end)
+            var cursor = start + 2
+            while cursor < length, continuesTagName(cursor) { cursor += 1 }
+            let tag = string(start + 1, cursor).lowercased()
+            cursor = skipSpacesAndLoneSlashes(cursor)
+            while cursor < endpos, let end = attributeEnd(cursor) {
+                cursor = skipSpacesAndLoneSlashes(end)
             }
-            let rest = PythonText.strip(string(k, endpos))
+            let rest = PythonText.strip(string(cursor, endpos))
             guard rest == ">" || rest == "/>" else {
-                handler.data(string(i, endpos))
+                handler.data(string(start, endpos))
                 return endpos
             }
             if rest == "/>" {
@@ -279,57 +285,60 @@ nonisolated enum TeamsMessageHTML {
         }
 
         private func skipSpacesAndLoneSlashes(_ index: Int) -> Int {
-            var k = index
-            while k < n, Self.isSpace(s[k]) || (s[k] == "/" && !(k + 1 < n && s[k + 1] == ">")) { k += 1 }
-            return k
+            var cursor = index
+            while cursor < length,
+                  Self.isSpace(scalars[cursor]) || (scalars[cursor] == "/" && !(cursor + 1 < length && scalars[cursor + 1] == ">")) {
+                cursor += 1
+            }
+            return cursor
         }
 
-        private mutating func parseEndTag(_ i: Int, into handler: inout Extractor) -> Int {
-            guard find(">", from: i + 2) != nil else { return -1 }
-            guard i + 2 < n, Self.isLetter(s[i + 2]) else {
-                if i + 2 < n, s[i + 2] == ">" { return i + 3 } // `</>` is ignored
-                return parseBogusComment(i)
+        private mutating func parseEndTag(_ start: Int, into handler: inout Extractor) -> Int {
+            guard find(">", from: start + 2) != nil else { return -1 }
+            guard start + 2 < length, Self.isLetter(scalars[start + 2]) else {
+                if start + 2 < length, scalars[start + 2] == ">" { return start + 3 } // `</>` is ignored
+                return parseBogusComment(start)
             }
-            let endpos = locateTagEnd(i + 2)
-            guard s[endpos - 1] == ">" else { return -1 }
-            var k = i + 3
-            while k < n, !Self.isSpace(s[k]), s[k] != "/", s[k] != ">" { k += 1 }
-            handler.endTag(string(i + 2, k).lowercased())
+            let endpos = locateTagEnd(start + 2)
+            guard scalars[endpos - 1] == ">" else { return -1 }
+            var cursor = start + 3
+            while cursor < length, continuesTagName(cursor) { cursor += 1 }
+            handler.endTag(string(start + 2, cursor).lowercased())
             rawTextElement = nil
             rawTextDecodes = false
             return endpos
         }
 
         /// `<!--` up to `-->` or `--!>`; `<!-->` and `<!--->` close at once.
-        private func parseComment(_ i: Int) -> Int {
-            var position = i + 4
-            while position < n {
+        private func parseComment(_ start: Int) -> Int {
+            var position = start + 4
+            while position < length {
                 if starts(with: "-->", at: position) { return position + 3 }
                 if starts(with: "--!>", at: position) { return position + 4 }
                 position += 1
             }
-            if starts(with: ">", at: i + 4) { return i + 5 }
-            if starts(with: "->", at: i + 4) { return i + 6 }
+            if starts(with: ">", at: start + 4) { return start + 5 }
+            if starts(with: "->", at: start + 4) { return start + 6 }
             return -1
         }
 
-        private func parseDeclaration(_ i: Int) -> Int {
-            if starts(with: "<![CDATA[", at: i) {
-                var position = i + 9
-                while position < n {
+        private func parseDeclaration(_ start: Int) -> Int {
+            if starts(with: "<![CDATA[", at: start) {
+                var position = start + 9
+                while position < length {
                     if starts(with: "]]>", at: position) { return position + 3 }
                     position += 1
                 }
                 return -1
             }
-            if string(i, min(i + 9, n)).lowercased() == "<!doctype" {
-                return find(">", from: i + 9).map { $0 + 1 } ?? -1
+            if string(start, min(start + 9, length)).lowercased() == "<!doctype" {
+                return find(">", from: start + 9).map { $0 + 1 } ?? -1
             }
-            return parseBogusComment(i)
+            return parseBogusComment(start)
         }
 
-        private func parseBogusComment(_ i: Int) -> Int {
-            find(">", from: i + 2).map { $0 + 1 } ?? -1
+        private func parseBogusComment(_ start: Int) -> Int {
+            find(">", from: start + 2).map { $0 + 1 } ?? -1
         }
     }
 }
@@ -340,16 +349,16 @@ nonisolated enum TeamsMessageHTML {
 ///
 /// The named table is the HTML 4 set and every legacy name, generated from Python's
 /// `html.entities.html5`; HTML5-only names (`&ZeroWidthSpace;` and similar) are left as written,
-/// which no Teams message in the reference cache uses.
+/// which Teams messages are not expected to use.
 nonisolated enum HTMLCharacterReferences {
     static func decode(_ text: String) -> String {
         guard text.contains("&") else { return text }
-        let s = Array(text.unicodeScalars)
+        let input = Array(text.unicodeScalars)
         var output = String.UnicodeScalarView()
         var index = 0
-        while index < s.count {
-            guard s[index] == "&", let (replacement, end) = reference(in: s, at: index) else {
-                output.append(s[index])
+        while index < input.count {
+            guard input[index] == "&", let (replacement, end) = reference(in: input, at: index) else {
+                output.append(input[index])
                 index += 1
                 continue
             }
@@ -361,30 +370,36 @@ nonisolated enum HTMLCharacterReferences {
 
     /// The replacement for the reference starting at `start` (an `&`) and where it ends, following
     /// `&(#[0-9]+;?|#[xX][0-9a-fA-F]+;?|[^\t\n\f <&#;]{1,32};?)`; nil when nothing matches.
-    private static func reference(in s: [Unicode.Scalar], at start: Int) -> (String, Int)? {
-        var position = start + 1
-        guard position < s.count else { return nil }
-        if s[position] == "#" {
+    private static func reference(in input: [Unicode.Scalar], at start: Int) -> (String, Int)? {
+        guard start + 1 < input.count else { return nil }
+        if input[start + 1] == "#" { return numericReference(in: input, at: start + 2) }
+        return namedReference(in: input, at: start)
+    }
+
+    /// `[xX]?digits;?` after `&#`. `&#` without digits is nil: the named form cannot start with `#`.
+    private static func numericReference(in input: [Unicode.Scalar], at digitsOrX: Int) -> (String, Int)? {
+        var position = digitsOrX
+        var radix = 10
+        if position < input.count, input[position] == "x" || input[position] == "X" {
+            radix = 16
             position += 1
-            var radix = 10
-            if position < s.count, s[position] == "x" || s[position] == "X" {
-                radix = 16
-                position += 1
-            }
-            let digitsStart = position
-            while position < s.count, isDigit(s[position], radix: radix) { position += 1 }
-            if position > digitsStart {
-                let digits = String(String.UnicodeScalarView(s[digitsStart..<position]))
-                if position < s.count, s[position] == ";" { position += 1 }
-                return (numeric(UInt32(digits, radix: radix)), position)
-            }
-            // `&#` without digits: the named form cannot start with `#`.
-            return nil
         }
-        while position < s.count, position - start - 1 < 32, !isNameTerminator(s[position]) { position += 1 }
+        let digitsStart = position
+        while position < input.count, isDigit(input[position], radix: radix) { position += 1 }
+        guard position > digitsStart else { return nil }
+        let digits = String(String.UnicodeScalarView(input[digitsStart..<position]))
+        if position < input.count, input[position] == ";" { position += 1 }
+        return (numeric(UInt32(digits, radix: radix)), position)
+    }
+
+    /// A named reference: the longest known name, which may be a prefix of what follows the `&`
+    /// (`&ampfoo` -> `&foo`); unknown names are left as written.
+    private static func namedReference(in input: [Unicode.Scalar], at start: Int) -> (String, Int)? {
+        var position = start + 1
+        while position < input.count, position - start - 1 < 32, !isNameTerminator(input[position]) { position += 1 }
         guard position > start + 1 else { return nil }
-        if position < s.count, s[position] == ";" { position += 1 }
-        let name = String(String.UnicodeScalarView(s[(start + 1)..<position]))
+        if position < input.count, input[position] == ";" { position += 1 }
+        let name = String(String.UnicodeScalarView(input[(start + 1)..<position]))
         if let value = named[name] { return (value, position) }
         let scalars = Array(name.unicodeScalars)
         var length = scalars.count - 1
@@ -399,8 +414,11 @@ nonisolated enum HTMLCharacterReferences {
     }
 
     private static func isDigit(_ scalar: Unicode.Scalar, radix: Int) -> Bool {
-        if ("0"..."9").contains(scalar) { return true }
-        return radix == 16 && (("a"..."f").contains(scalar) || ("A"..."F").contains(scalar))
+        switch scalar {
+        case "0"..."9": return true
+        case "a"..."f", "A"..."F": return radix == 16
+        default: return false
+        }
     }
 
     private static func isNameTerminator(_ scalar: Unicode.Scalar) -> Bool {
@@ -418,8 +436,10 @@ nonisolated enum HTMLCharacterReferences {
     }
 
     private static func isInvalidCodePoint(_ value: UInt32) -> Bool {
-        (0x1...0x8).contains(value) || value == 0xB || (0xE...0x1F).contains(value) || (0x7F...0x9F).contains(value)
-            || (0xFDD0...0xFDEF).contains(value) || value & 0xFFFE == 0xFFFE
+        switch value {
+        case 0x1...0x8, 0xB, 0xE...0x1F, 0x7F...0x9F, 0xFDD0...0xFDEF: return true
+        default: return value & 0xFFFE == 0xFFFE
+        }
     }
 
     /// Code points HTML5 maps to something else (mostly Windows-1252 in the C1 range).

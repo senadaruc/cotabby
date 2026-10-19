@@ -81,7 +81,7 @@ final class MLXRewriteProvider: RewriteProviding {
         let instruct = Self.isInstruct(modelID: load.modelID)
         let prompt: MLXRuntimeCore.PromptInput
         var options = LlamaGenerationOptions(
-            maxPredictionTokens: RewritePromptBuilder.completionTokenBudget(for: request),
+            maxPredictionTokens: RewritePromptBuilder.tokenBudget(request),
             temperature: 0.3, topK: 40, topP: 0.9, minP: 0.05, repetitionPenalty: 1.05, seed: 42
         )
         // A rewrite can be several sentences; autocomplete's stop at the first sentence end would cut it.

@@ -46,7 +46,8 @@ nonisolated enum RewriteOutputCleaner {
 
     /// "Here is…:", "Here's a friendlier version:", "Sure! …:", "Rewritten text:", "Rewritten:".
     /// Anchored at the start, so only an opening preface matches.
-    private static let prefacePattern = #"^(?:(?:sure|certainly|of course)[!.,]?\s*)?(?:here(?:'s| is)[^:\n]{0,60}:|rewritten(?: text| version)?:)\s*"#
+    private static let prefacePattern = #"^(?:(?:sure|certainly|of course)[!.,]?\s*)?"#
+        + #"(?:here(?:'s| is)[^:\n]{0,60}:|rewritten(?: text| version)?:)\s*"#
 
     private static func stripPreface(_ text: String) -> String {
         guard let regex = try? NSRegularExpression(pattern: prefacePattern, options: [.caseInsensitive]) else { return text }

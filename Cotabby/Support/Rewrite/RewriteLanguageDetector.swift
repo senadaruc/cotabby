@@ -4,13 +4,13 @@ import NaturalLanguage
 /// File overview:
 /// Names the language a selection is written in, so the rewrite prompt can require it. Apple's
 /// on-device model follows "write in the same language as the draft" poorly when the instructions
-/// are English and the draft carries English loanwords: "selam beraber cigar iceriz wihiskey" came
-/// back as "hey let's smoke cigars with whiskey" (2026-10-10), and stating "Turkish" fixed it.
+/// are English and the draft mixes in English words: such a draft can come back in English, and
+/// naming its language in the prompt keeps it in that language.
 ///
 /// Recognition is limited to the languages the user declared in Settings → Writing, because
-/// unconstrained recognition called that same draft Indonesian. A language outside the declared set
-/// is never named (a guess would force a wrong language); with nothing declared, a confident guess
-/// is. Pure apart from `NLLanguageRecognizer`, which is deterministic and on-device.
+/// unconstrained recognition can misname a short draft typed without accents. A language outside
+/// the declared set is never named (a guess would force a wrong language); with nothing declared, a
+/// confident guess is. Pure apart from `NLLanguageRecognizer`, which is deterministic and on-device.
 nonisolated enum RewriteLanguageDetector {
     /// Below this the selection is too short or mixed to say; the prompt then keeps the generic
     /// "same language as the draft" rule.

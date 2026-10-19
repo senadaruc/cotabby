@@ -362,8 +362,11 @@ final class CotabbyAppEnvironment {
 
         // Conversation memory. Constructing the controller loads nothing: it reads paths and the
         // enabled flag. `AppDelegate` starts it after launch.
+        // Indexing waits while a suggestion is generating: both use the GPU, and the suggestion
+        // is what the user is waiting for.
         let memoryController = MemoryEngineController(
-            isOnACPower: { [weak powerSourceMonitor] in powerSourceMonitor?.isPluggedIn ?? false }
+            isOnACPower: { [weak powerSourceMonitor] in powerSourceMonitor?.isPluggedIn ?? false },
+            isGenerating: { [weak router] in (router?.generationsInFlight ?? 0) > 0 }
         )
         let memoryHistorySync = MemoryHistorySync(
             engine: { [weak memoryController] in memoryController?.engine },
@@ -371,6 +374,8 @@ final class CotabbyAppEnvironment {
         )
         let memoryControl = MemoryControlModel(controller: memoryController, historySync: memoryHistorySync)
         let memoryRetriever = MemoryRetriever(engine: { [weak memoryController] in memoryController?.engine })
+        // Answers: drafted on this Mac (Apple Intelligence or the local model, never the endpoint)
+        // from memory, offered on a card at the caret. The shared inserter pastes an accepted draft.
         let answerCoordinator = AnswerCoordinator(
             focusModel: focusModel,
             memory: memoryController,
@@ -381,12 +386,20 @@ final class CotabbyAppEnvironment {
             ),
             draftEngine: AnswerDraftEngine(
                 runtimeManager: runtimeManager,
-                hasLocalModel: { [weak runtimeModel] in runtimeModel?.selectedModelFilename != nil },
+                // The local model drafts only when it is the engine the user chose, so answers never
+                // load a model behind an Apple Intelligence, MLX or endpoint user's back.
+                hasLocalModel: { [weak runtimeModel, weak suggestionSettings] in
+                    suggestionSettings?.selectedEngine == .llamaOpenSource && runtimeModel?.selectedModelFilename != nil
+                },
                 availability: foundationModelAvailabilityService
             ),
             card: AnswerCardController(),
             keyTap: TemporaryKeyTap(suppressionController: suppressionController),
             inserter: suggestionInserter,
+            isAllowed: { [weak suggestionSettings, weak lowPowerModeMonitor, weak permissionManager] snapshot in
+                Self.isCotabbyOn(at: snapshot, settings: suggestionSettings, lowPowerModeMonitor: lowPowerModeMonitor,
+                                 permissionManager: permissionManager)
+            },
             windowOverrides: windowFeatureOverrides
         )
 
@@ -410,10 +423,7 @@ final class CotabbyAppEnvironment {
             ),
             localEndpoint: LocalEndpointRewriteProvider(
                 client: openAICompatibleClient,
-                configuration: { [weak suggestionSettings] in
-                    guard let suggestionSettings else { throw OpenAICompatibleClientError.invalidResponse }
-                    return try suggestionSettings.openAICompatibleConfiguration
-                },
+                configuration: { [weak suggestionSettings] in try Self.endpointConfiguration(of: suggestionSettings) },
                 apiKey: { [weak suggestionSettings] in try suggestionSettings?.openAICompatibleAPIKey() }
             ),
             mlx: MLXRewriteProvider(
@@ -434,10 +444,15 @@ final class CotabbyAppEnvironment {
                 }
             ),
             autocompleteEngine: { [weak suggestionSettings] in suggestionSettings?.selectedEngine ?? .llamaOpenSource },
+            // "Same as autocomplete" stays on this Mac when autocomplete's endpoint is on another host.
+            endpointHostScope: { [weak suggestionSettings] in try? Self.endpointConfiguration(of: suggestionSettings).hostScope },
             preferences: { [weak rewritePreferences] in rewritePreferences?.preferences ?? .defaults }
         )
         let selectionRewriteCoordinator = SelectionRewriteCoordinator(
             snapshots: focusModel.$snapshot.eraseToAnyPublisher(),
+            // `@Published` emits the new value before the store's property changes, so the coordinator
+            // acts on the emitted value; `dropFirst` skips the replayed current one.
+            enabledChanges: rewritePreferences.$preferences.map(\.isEnabled).removeDuplicates().dropFirst().eraseToAnyPublisher(),
             currentSnapshot: { [weak focusModel] in focusModel?.snapshot ?? .inactive },
             refreshFocus: { [weak focusModel] in focusModel?.refreshNow() },
             presenter: SelectionRewritePanelController(indicator: activationIndicatorController),
@@ -455,12 +470,13 @@ final class CotabbyAppEnvironment {
                 }
             ),
             preferences: { [weak rewritePreferences] in rewritePreferences?.preferences ?? .defaults },
-            isAppAllowed: { [weak suggestionSettings, weak lowPowerModeMonitor] bundleIdentifier in
-                guard let suggestionSettings else { return false }
-                let settings = suggestionSettings.snapshot
-                let lowPower = (lowPowerModeMonitor?.isLowPowerModeEnabled ?? false) && settings.isLowPowerModeAutoDisableEnabled
-                return settings.isGloballyEnabled && !settings.isTemporarilyPaused && !lowPower
-                    && !settings.disabledAppBundleIdentifiers.contains(bundleIdentifier)
+            isAppAllowed: { [weak suggestionSettings, weak lowPowerModeMonitor] input in
+                SelectionRewriteEligibility.isAppAllowed(
+                    for: input,
+                    settings: suggestionSettings?.snapshot,
+                    isLowPowerModeEnabled: lowPowerModeMonitor?.isLowPowerModeEnabled ?? false,
+                    disabledDomains: PerDomainDisableSettings.disabledDomains()
+                )
             },
             hotkey: TranslationHotkeyTap(suppressionController: suppressionController),
             keyTap: TemporaryKeyTap(suppressionController: suppressionController),
@@ -604,11 +620,10 @@ final class CotabbyAppEnvironment {
             guard let performanceTuner, let suggestionSettings else { return true }
             return performanceTuner.tuning(for: suggestionSettings.snapshot).allowsMemoryRetrieval
         }
+        // Whether Cotabby is on at all is `isAllowed`'s rule; this is only the tuner's say.
         answerCoordinator.isAllowedByTuning = { [weak performanceTuner, weak suggestionSettings] in
             guard let performanceTuner, let suggestionSettings else { return true }
-            let settings = suggestionSettings.snapshot
-            return performanceTuner.tuning(for: settings).allowsMemoryRetrieval
-                && settings.isGloballyEnabled && !settings.isTemporarilyPaused
+            return performanceTuner.tuning(for: suggestionSettings.snapshot).allowsMemoryRetrieval
         }
         answerCoordinator.isEnabledForApplication = { [weak memoryController] bundleIdentifier in
             !(memoryController?.engine?.configuration.answers.disabledApps.contains(bundleIdentifier) ?? true)
@@ -708,7 +723,7 @@ final class CotabbyAppEnvironment {
             .store(in: &cancellables)
 
         observePowerSourceProfileSwitching()
-        observeMemoryService()
+        observeMemoryEngine()
         observeOpenAICompatibleSelection()
     }
 
@@ -720,7 +735,7 @@ final class CotabbyAppEnvironment {
     /// Extracted from `init` to keep the initializer's complexity bounded.
     /// Memory sources sync once the engine is running and every 15 minutes on AC after that;
     /// nothing runs while memory is off.
-    private func observeMemoryService() {
+    private func observeMemoryEngine() {
         memoryController.$state
             .map { $0 == .running }
             .removeDuplicates()
@@ -777,6 +792,30 @@ final class CotabbyAppEnvironment {
             .store(in: &cancellables)
     }
 
+    /// Whether Cotabby is on where focus is, by exactly the rules suggestions use
+    /// (`SuggestionAvailabilityEvaluator`): globally on, not paused, not turned off by Low Power
+    /// Mode, and not disabled for the app, the site or terminals. Answers follow the same switches.
+    /// The app list is the plain one: a field-icon window choice for autocomplete is autocomplete's;
+    /// answers have their own row (`AnswerCoordinator`).
+    private static func isCotabbyOn(
+        at snapshot: FocusSnapshot, settings model: SuggestionSettingsModel?, lowPowerModeMonitor: LowPowerModeMonitor?,
+        permissionManager: PermissionManager?
+    ) -> Bool {
+        guard let settings = model?.snapshot, let permissionManager else { return false }
+        return SuggestionAvailabilityEvaluator.disabledReason(
+            globallyEnabled: settings.isGloballyEnabled,
+            temporarilyPaused: settings.isTemporarilyPaused,
+            isLowPowerModeActive: lowPowerModeMonitor?.isLowPowerModeEnabled ?? false,
+            isLowPowerModeAutoDisableEnabled: settings.isLowPowerModeAutoDisableEnabled,
+            disabledAppBundleIdentifiers: settings.disabledAppBundleIdentifiers,
+            disabledDomains: PerDomainDisableSettings.disabledDomains(),
+            suggestInIntegratedTerminals: settings.suggestInIntegratedTerminals,
+            inputMonitoringGranted: permissionManager.inputMonitoringGranted,
+            focusSnapshot: snapshot,
+            checkCapability: false
+        ) == nil
+    }
+
     /// Switches the active engine (and, for Open Source, the model) to the profile configured for the
     /// current power source. Does nothing when the feature is off. Apple Intelligence is applied only
     /// when actually available, so a configured-but-unavailable profile never strands the user on a
@@ -823,6 +862,15 @@ final class CotabbyAppEnvironment {
             suggestionSettings.setMLXModelID(modelID)
             suggestionSettings.selectEngine(.mlx)
         }
+    }
+
+    /// Autocomplete's endpoint as the Local Endpoint rewrite provider reads it per rewrite. A torn
+    /// down settings model reads as "not configured" (the provider maps any throw to that).
+    private static func endpointConfiguration(
+        of settings: SuggestionSettingsModel?
+    ) throws -> OpenAICompatibleEndpointConfiguration {
+        guard let settings else { throw OpenAICompatibleEndpointError.emptyModelName }
+        return try settings.openAICompatibleConfiguration
     }
 
     /// Connect once when the endpoint engine becomes active. Only server identity and credentials
