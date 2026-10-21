@@ -14,9 +14,9 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
         var isPopupKey = false
         var buttonPress: (() -> Void)?
         var popupModel: SelectionRewritePopupModel?
-        var buttonFieldFrame: CGRect?
-        func showButton(caretRect: CGRect, fieldFrame: CGRect?, onPress: @escaping () -> Void) {
-            buttonPress = onPress; buttonFieldFrame = fieldFrame
+        var buttonSelectionRect: CGRect?
+        func showButton(caretRect: CGRect, selectionRect: CGRect?, onPress: @escaping () -> Void) {
+            buttonPress = onPress; buttonSelectionRect = selectionRect
         }
         var takesKeyboardCalls: [Bool] = []
         func showPopup(near anchor: CGRect, model: SelectionRewritePopupModel, takesKeyboard: Bool) {
@@ -74,11 +74,13 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
     private var subject = PassthroughSubject<FocusSnapshot, Never>()
     private var current = FocusSnapshot.inactive
 
-    private func snapshot(selected: String, element: String = "composer", preceding: String = "Dear Richard, ") -> FocusSnapshot {
+    private func snapshot(selected: String, element: String = "composer", preceding: String = "Dear Richard, ",
+                          selectionRect: CGRect? = nil) -> FocusSnapshot {
         let input = CotabbyTestFixtures.focusedInputSnapshot(
             bundleIdentifier: "net.whatsapp.WhatsApp", elementIdentifier: element, precedingText: preceding,
             selection: NSRange(location: 14, length: (selected as NSString).length),
-            selectedText: selected, hostSelection: NSRange(location: 14, length: (selected as NSString).length)
+            selectedText: selected, hostSelection: NSRange(location: 14, length: (selected as NSString).length),
+            selectionRect: selectionRect
         )
         return FocusSnapshot(applicationName: "WhatsApp", bundleIdentifier: "net.whatsapp.WhatsApp",
                              capability: selected.isEmpty ? .supported : .blocked("Text is currently selected."), context: input)
@@ -121,10 +123,11 @@ final class SelectionRewriteCoordinatorTests: XCTestCase {
 
     /// The button takes the place of the field-edge Cotabby icon, so it needs the field's own frame;
     /// placed at the caret it covered the selection's first letters (WhatsApp, 2026-10-10).
-    func test_buttonIsPlacedFromTheFieldFrame() async {
+    func test_buttonIsPlacedOverTheSelectedText() async {
         let (_, presenter, _, _, _) = make()
-        await send(snapshot(selected: draft))
-        XCTAssertEqual(presenter.buttonFieldFrame, CGRect(x: 0, y: 0, width: 240, height: 32))
+        let selection = CGRect(x: 60, y: 10, width: 300, height: 19)
+        await send(snapshot(selected: draft, selectionRect: selection))
+        XCTAssertEqual(presenter.buttonSelectionRect, selection)
     }
 
     /// The request names the selection's language among the user's, so the model keeps it.

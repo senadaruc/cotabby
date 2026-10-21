@@ -34,7 +34,8 @@ enum CotabbyTestFixtures {
         fieldPlaceholder: String? = nil,
         hostMarkedTextRange: NSRange? = nil,
         selectedText: String = "",
-        hostSelection: NSRange? = nil
+        hostSelection: NSRange? = nil,
+        selectionRect: CGRect? = nil
     ) -> FocusedInputSnapshot {
         let resolvedSelection = selection
             ?? NSRange(location: (precedingText as NSString).length, length: 0)
@@ -64,7 +65,8 @@ enum CotabbyTestFixtures {
             fieldPlaceholder: fieldPlaceholder,
             hostMarkedTextRange: hostMarkedTextRange,
             selectedText: selectedText,
-            hostSelection: hostSelection
+            hostSelection: hostSelection,
+            selectionRect: selectionRect
         )
     }
 

@@ -367,6 +367,9 @@ nonisolated struct FocusedInputSnapshot: Equatable {
     /// nil when the host only exposes window-relative text markers (Chromium contenteditables), where
     /// the rewrite then copies instead of restoring.
     let hostSelection: NSRange?
+    /// The selected text's box on screen (AppKit coordinates), read only while text is selected;
+    /// the rewrite wand centers on it. Nil for a caret, or when the host answers no bounds.
+    let selectionRect: CGRect?
 
     /// True when the resolved field is an xterm.js integrated-terminal surface (VS Code / Cursor /
     /// Windsurf terminal, or a browser-hosted web terminal). Set by `FocusSnapshotResolver` from the
@@ -477,7 +480,8 @@ nonisolated struct FocusedInputSnapshot: Equatable {
         elementFrameRect: CGRect? = nil,
         hostMarkedTextRange: NSRange? = nil,
         selectedText: String = "",
-        hostSelection: NSRange? = nil
+        hostSelection: NSRange? = nil,
+        selectionRect: CGRect? = nil
     ) {
         self.applicationName = applicationName
         self.bundleIdentifier = bundleIdentifier
@@ -509,6 +513,7 @@ nonisolated struct FocusedInputSnapshot: Equatable {
         self.hostMarkedTextRange = hostMarkedTextRange
         self.selectedText = selectedText
         self.hostSelection = hostSelection
+        self.selectionRect = selectionRect
     }
 
     var identity: FocusedInputIdentity {

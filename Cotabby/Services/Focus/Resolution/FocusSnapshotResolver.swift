@@ -352,7 +352,8 @@ struct FocusSnapshotResolver {
             elementFrameRect: resolvedCandidate.elementFrameRect,
             hostMarkedTextRange: resolvedCandidate.markedTextRange ?? chromiumCompletionRange ?? smartComposeRange,
             selectedText: FocusSelectionText.extract(windowText: contextWindow.text, windowSelection: contextWindow.selection),
-            hostSelection: resolvedCandidate.documentSelection
+            hostSelection: resolvedCandidate.documentSelection,
+            selectionRect: selectionBounds(for: resolvedCandidate, selectionLength: selection.length)
         )
 
         if let reason = Self.blockedReason(
@@ -376,6 +377,29 @@ struct FocusSnapshotResolver {
 
     /// Why a field Cotabby can read is still one it must not complete in, or nil when it may: a
     /// secure field, one of Mail's header rows, a sign-in or search box, or a field with text selected.
+    /// The selected text's box on screen, for centering the rewrite wand over it. One AX round-trip
+    /// per poll, made only while text is selected, so a caret-only poll pays nothing. A marker host
+    /// (WebKit, Chromium) answers for its selected marker range; a native host for the document
+    /// selection range. Converted the same way as a caret rect, so it lands in AppKit coordinates.
+    private func selectionBounds(for candidate: AXFocusCandidate, selectionLength: Int) -> CGRect? {
+        guard selectionLength > 0 else { return nil }
+        let axRect: CGRect?
+        if candidate.usesMarkerSelection {
+            axRect = AXHelper.textMarkerCaretRect(on: candidate.element)
+        } else if let range = candidate.documentSelection ?? candidate.selection {
+            axRect = AXHelper.parameterizedRectValue(
+                for: kAXBoundsForRangeParameterizedAttribute as CFString, range: range, on: candidate.element
+            )
+        } else {
+            axRect = nil
+        }
+        guard let axRect, !axRect.isEmpty else { return nil }
+        let rect = AXHelper.validatedCocoaTextRect(
+            fromAccessibilityRect: axRect, anchorFrame: candidate.elementFrameRect ?? candidate.inputFrameRect
+        )
+        return rect.isEmpty ? nil : rect
+    }
+
     private static func blockedReason(
         for candidate: AXFocusCandidate,
         bundleIdentifier: String,

@@ -2,9 +2,11 @@ import Combine
 import SwiftUI
 
 /// File overview:
-/// The selection-rewrite popup: the five preset actions, the custom instruction box, the memory
-/// toggle with its disclosure, and the preview with Replace / Copy / Retry. Presentation only:
-/// every button calls back into `SelectionRewriteCoordinator` through `SelectionRewritePopupModel`.
+/// The selection-rewrite popup. Its first phase is a one-row strip in the style of a selection
+/// toolbar: the five tones as icon buttons, the Fix and Memory toggles, a pencil that unfolds the
+/// custom-instruction box, and Close. Every later phase (generating, preview with Replace / Copy /
+/// Retry, failure, notice) is the card it always was. Presentation only: every button calls back
+/// into `SelectionRewriteCoordinator` through `SelectionRewritePopupModel`.
 
 /// What the popup shows, owned by the coordinator for one popup's lifetime.
 ///
@@ -48,16 +50,106 @@ final class SelectionRewritePopupModel: ObservableObject {
     var onClose: () -> Void = {}
 }
 
-/// Renders `SelectionRewritePopupModel.phase` as one card. `@ObservedObject` subscribes the view to
-/// the model it is given; the model is owned by the coordinator, so the view must not create it.
+/// Renders `SelectionRewritePopupModel.phase`: the strip for `.actions`, a card for the rest.
+/// `@ObservedObject` subscribes the view to the model it is given; the model is owned by the
+/// coordinator, so the view must not create it.
 struct SelectionRewritePopupView: View {
     @ObservedObject var model: SelectionRewritePopupModel
+    /// The custom-instruction box is folded into a pencil button until it is wanted: the strip
+    /// stays one row wide for the common case of picking a tone.
+    @State private var showsCustom = false
 
     var body: some View {
+        switch model.phase {
+        case .actions: strip
+        default: card
+        }
+    }
+
+    // MARK: - The strip
+
+    /// Dark whatever the system appearance, like a selection toolbar, so it reads as one floating
+    /// control over any host's text rather than as a window.
+    private static let stripColor = Color(red: 0.13, green: 0.13, blue: 0.14)
+
+    private var strip: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 2) {
+                Image(systemName: "wand.and.stars")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .padding(.horizontal, 6)
+                ForEach(RewriteAction.tones, id: \.self) { tone in
+                    StripItem(icon: Self.symbol(for: tone), label: tone.label, help: "Rewrite for \(tone.label.lowercased())") {
+                        model.onAction(tone)
+                    }
+                }
+                stripDivider
+                StripItem(icon: "text.badge.checkmark", isOn: model.fixesMistakes, help: "Fix spelling & grammar") {
+                    model.fixesMistakes.toggle()
+                }
+                StripItem(icon: "brain", isOn: model.usesMemory, disabled: !model.memoryToggleEnabled,
+                          help: model.memoryToggleEnabled ? "Use memory" : (model.memoryNote ?? "Memory is off")) {
+                    model.usesMemory.toggle()
+                }
+                StripItem(icon: "pencil.line", isOn: showsCustom, help: "Custom instruction") {
+                    showsCustom.toggle()
+                }
+                if showsCustom { customBox }
+                stripDivider
+                StripItem(icon: "xmark", help: "Close") { model.onClose() }
+            }
+            .padding(4)
+            .background(Self.stripColor, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            // The off-device disclosure and the memory note have no room in the row, so they hang
+            // under it in the same dark style; both matter before the user picks a tone.
+            ForEach([model.disclosure, model.memoryNote].compactMap { $0 }, id: \.self) { line in
+                Text(line)
+                    .font(.caption)
+                    .foregroundStyle(line == model.disclosure ? Color.orange : Color.white.opacity(0.8))
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(Self.stripColor, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
+        }
+    }
+
+    private var stripDivider: some View {
+        Rectangle().fill(.white.opacity(0.18)).frame(width: 1, height: 18).padding(.horizontal, 3)
+    }
+
+    private var customBox: some View {
+        HStack(spacing: 4) {
+            TextField("Custom instruction (e.g. make it warmer)", text: $model.customInstruction)
+                .textFieldStyle(.plain)
+                .foregroundStyle(.white)
+                .frame(width: 230)
+                .padding(.horizontal, 8).padding(.vertical, 5)
+                .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .onSubmit { submitCustom() }
+            StripItem(icon: "arrow.right.circle.fill", disabled: model.customInstruction.trimmingCharacters(in: .whitespaces).isEmpty,
+                      help: "Go") { submitCustom() }
+        }
+    }
+
+    /// One icon per tone, chosen to read at 13pt: who the message is for.
+    private static func symbol(for tone: RewriteAction) -> String {
+        switch tone {
+        case .family: return "house.fill"
+        case .friendly: return "face.smiling"
+        case .closeFriend: return "heart.fill"
+        case .formal: return "briefcase.fill"
+        case .customer: return "person.crop.circle"
+        default: return "wand.and.stars"
+        }
+    }
+
+    // MARK: - The card
+
+    private var card: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
             switch model.phase {
-            case .actions: actions
+            case .actions: EmptyView()
             case .generating(let partial): preview(partial.isEmpty ? "Rewriting…" : partial, final: false)
             case .preview(let text, let unsupported): previewResult(text, unsupported: unsupported)
             case .failed(let message): failure(message)
@@ -80,25 +172,6 @@ struct SelectionRewritePopupView: View {
             Label("Rewrite with AI", systemImage: "wand.and.stars").font(.headline)
             Spacer()
             Button { model.onClose() } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
-        }
-    }
-
-    private var actions: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Who the text is for; typo fixing is the tick box below.
-            WrapLayout(spacing: 6) {
-                ForEach(RewriteAction.tones, id: \.self) { action in
-                    Button(action.label) { model.onAction(action) }.buttonStyle(.bordered)
-                }
-            }
-            Toggle("Fix spelling & grammar", isOn: $model.fixesMistakes)
-            HStack {
-                TextField("Custom instruction (e.g. make it warmer)", text: $model.customInstruction)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { submitCustom() }
-                Button("Go") { submitCustom() }.disabled(model.customInstruction.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-            Toggle("Use memory", isOn: $model.usesMemory).disabled(!model.memoryToggleEnabled)
         }
     }
 
@@ -159,50 +232,36 @@ struct SelectionRewritePopupView: View {
     }
 }
 
-/// Lays buttons out left to right and wraps onto a new line when the popup's width runs out, so
-/// the nine actions and tones need no fixed row split.
-private struct WrapLayout: Layout {
-    var spacing: CGFloat
+/// One control in the strip: an icon, an optional label, a hover highlight, and a tint while a
+/// toggle is on. A plain `Button` so the first click lands on it (the hosting view accepts the
+/// first mouse) and so VoiceOver reads `help`.
+private struct StripItem: View {
+    let icon: String
+    var label: String?
+    var isOn = false
+    var disabled = false
+    let help: String
+    let action: () -> Void
+    @State private var isHovered = false
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
-        let rows = arrange(subviews, width: proposal.width ?? .greatestFiniteMagnitude)
-        let height = rows.reduce(0) { $0 + $1.height } + spacing * CGFloat(max(rows.count - 1, 0))
-        let width = rows.map(\.width).max() ?? 0
-        return CGSize(width: proposal.width ?? width, height: height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
-        var y = bounds.minY
-        for row in arrange(subviews, width: bounds.width) {
-            var x = bounds.minX
-            for index in row.indices {
-                let size = subviews[index].sizeThatFits(.unspecified)
-                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
-                x += size.width + spacing
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: icon).font(.system(size: 13, weight: .semibold))
+                if let label { Text(label).font(.system(size: 13, weight: .medium)) }
             }
-            y += row.height + spacing
+            .foregroundStyle(.white.opacity(disabled ? 0.35 : 1))
+            .padding(.horizontal, label == nil ? 7 : 8)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isOn ? Color.accentColor.opacity(0.55) : Color.white.opacity(isHovered && !disabled ? 0.16 : 0))
+            )
+            .contentShape(Rectangle())
         }
-    }
-
-    private struct Row {
-        var indices: [Int] = []
-        var width: CGFloat = 0
-        var height: CGFloat = 0
-    }
-
-    private func arrange(_ subviews: Subviews, width: CGFloat) -> [Row] {
-        var rows: [Row] = [Row()]
-        for index in subviews.indices {
-            let size = subviews[index].sizeThatFits(.unspecified)
-            let extra = rows[rows.count - 1].indices.isEmpty ? size.width : size.width + spacing
-            if !rows[rows.count - 1].indices.isEmpty, rows[rows.count - 1].width + extra > width {
-                rows.append(Row())
-            }
-            let gap = rows[rows.count - 1].indices.isEmpty ? 0 : spacing
-            rows[rows.count - 1].indices.append(index)
-            rows[rows.count - 1].width += size.width + gap
-            rows[rows.count - 1].height = max(rows[rows.count - 1].height, size.height)
-        }
-        return rows.filter { !$0.indices.isEmpty }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .onHover { isHovered = $0 }
+        .help(help)
     }
 }

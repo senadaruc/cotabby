@@ -2,10 +2,11 @@ import AppKit
 import SwiftUI
 
 /// File overview:
-/// The two surfaces of selection rewrite: the button, which is the field-edge Cotabby icon turned
-/// into a wand (`ActivationIndicatorController.showRewrite`), and the popup that opens beside it.
-/// Reusing the icon keeps the affordance outside the field: a separate button at the caret covered
-/// the selection's first letters (WhatsApp, 2026-10-10). The popup is a non-activating panel (like
+/// The two surfaces of selection rewrite: the button, which is the Cotabby icon panel turned into a
+/// wand floating just above the selected line (`ActivationIndicatorController.showRewrite`,
+/// `RewriteButtonPlacement`), and the popup that opens beside it. The wand first borrowed the icon's
+/// field-edge spot, but a mail body fills its window, so there it landed outside the window (Mail) or
+/// on the pane splitter (Outlook), where nobody looks (2026-10-21). The popup is a non-activating panel (like
 /// `AnswerCardController`), so the host app stays the active app and keeps its selection; it takes
 /// the keyboard as soon as it opens, so Return and typing go to the popup and never fall through to
 /// the edited app (Return in a chat app would send the message). Owned by
@@ -21,14 +22,16 @@ final class SelectionRewritePanelController {
     /// The caret rect the popup was last opened at. Kept so `refit()` can recompute placement for
     /// the new content size with the same rule `showPopup` used.
     private var popupAnchor: CGRect?
+    /// The model on screen, read at placement time: its phase decides strip or card placement.
+    private weak var popupModel: SelectionRewritePopupModel?
 
     var isPopupVisible: Bool { popupPanel?.isVisible ?? false }
     var isPopupKey: Bool { popupPanel?.isKeyWindow ?? false }
 
-    /// Shows the rewrite button where the Cotabby icon sits, just outside the field's edge.
-    /// `caretRect` and `fieldFrame` are AppKit screen coordinates (bottom-left origin).
-    func showButton(caretRect: CGRect, fieldFrame: CGRect?, onPress: @escaping () -> Void) {
-        indicator.showRewrite(caretRect: caretRect, inputFrameRect: fieldFrame, onPress: onPress)
+    /// Shows the rewrite button just above the selected line, centered over the selected text.
+    /// `caretRect` and `selectionRect` are AppKit screen coordinates (bottom-left origin).
+    func showButton(caretRect: CGRect, selectionRect: CGRect?, onPress: @escaping () -> Void) {
+        indicator.showRewrite(caretRect: caretRect, selectionRect: selectionRect, onPress: onPress)
     }
 
     /// Shows the popup beside the rewrite icon when it is on screen (else at `anchor`). With
@@ -36,6 +39,7 @@ final class SelectionRewritePanelController {
     /// app; a notice passes false and leaves the host's keyboard alone.
     func showPopup(near anchor: CGRect, model: SelectionRewritePopupModel, takesKeyboard: Bool) {
         popupAnchor = indicator.rewriteIconFrame ?? anchor
+        popupModel = model
         let panel = popupPanel ?? Self.makePanel()
         popupPanel = panel
         let hosting = FirstClickHostingView(rootView: SelectionRewritePopupView(model: model))
@@ -73,19 +77,26 @@ final class SelectionRewritePanelController {
         popupPanel?.orderOut(nil)
     }
 
-    /// The one placement rule for the popup, used by both `showPopup` and `refit`: below the caret
-    /// when the popup fits there, otherwise above it, then clamped inside the visible frame of the
-    /// screen that holds the caret's midpoint. The midpoint is used because the caret's origin can sit
-    /// on a screen edge, and the origin can fall outside every screen's frame.
+    /// The one placement rule for the popup, used by both `showPopup` and `refit`. The anchor is
+    /// the wand, centered just above the selected line (or the caret, for a notice with no wand).
+    /// The strip takes the wand's place: centered on it, so it reads as the wand unfolding. A card
+    /// goes above the wand, so the preview never covers the text it rewrites, and drops below the
+    /// line only when the screen has no room above. Both are clamped inside the visible frame of
+    /// the screen that holds the anchor's midpoint. The midpoint is used because the anchor's
+    /// origin can sit on a screen edge, and the origin can fall outside every screen's frame.
     private func place(_ panel: RewritePanel, size: CGSize) {
         guard let anchor = popupAnchor else { return }
         let midpoint = CGPoint(x: anchor.midX, y: anchor.midY)
         let screen = (NSScreen.screens.first { $0.frame.contains(midpoint) } ?? NSScreen.main)?.visibleFrame ?? .zero
-        var origin = CGPoint(x: anchor.minX, y: anchor.minY - size.height - 8)
-        if origin.y < screen.minY { origin.y = anchor.maxY + 8 }
+        var origin = CGPoint(x: anchor.midX - size.width / 2, y: anchor.midY - size.height / 2)
+        if popupModel?.phase != .actions {
+            origin.y = anchor.maxY + 8
+            // Below the selected line: the anchor sits a few points above it, so allow for one line.
+            if origin.y + size.height > screen.maxY - 8 { origin.y = anchor.minY - size.height - 28 }
+        }
         origin.x = min(max(origin.x, screen.minX + 8), screen.maxX - size.width - 8)
         origin.y = min(max(origin.y, screen.minY + 8), screen.maxY - size.height - 8)
-        panel.setFrame(CGRect(origin: origin, size: size), display: true)
+        panel.setFrame(CGRect(origin: origin, size: size).integral, display: true)
     }
 
     /// Built the same way as `AnswerCardController`'s panel: non-activating, floating above normal
