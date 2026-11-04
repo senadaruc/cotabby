@@ -79,10 +79,9 @@ final class RewriteEngine {
             throw RewriteError.noProvider
         }
         var safeRequest = request
-        if !memoryAllowed {
-            safeRequest = RewriteRequest(selection: request.selection, action: request.action, memory: .empty)
-            safeRequest.language = request.language
-        }
+        // Only memory is removed; tone, the tick box and the language stay (rebuilding the request here
+        // once dropped them, so an API Shorter/Longer lost its tone).
+        if !memoryAllowed { safeRequest.memory = .empty }
         let raw = try await provider.rewrite(safeRequest, onPartial: onPartial)
         guard let cleaned = RewriteOutputCleaner.clean(raw, selection: request.selection, action: request.action) else {
             throw RewriteError.unusableOutput

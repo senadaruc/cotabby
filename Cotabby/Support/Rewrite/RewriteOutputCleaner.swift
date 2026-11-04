@@ -28,6 +28,9 @@ nonisolated enum RewriteOutputCleaner {
         case .shorter: limit = core.count
         // Longer expands a short draft into a full message, so a few words may become a paragraph.
         case .longer: limit = core.count * 8 + 400
+        // A 3-character Chinese selection can become a 25-character English sentence, so translations
+        // are not held to the 3x rewrite rule.
+        case .translate: limit = core.count * 4 + 80
         default: limit = core.count * maximumGrowth + 40
         }
         guard text.count <= limit else { return nil }
@@ -44,9 +47,10 @@ nonisolated enum RewriteOutputCleaner {
         return lines.joined(separator: "\n")
     }
 
-    /// "Here is…:", "Here's a friendlier version:", "Sure! …:", "Rewritten text:", "Rewritten:".
+    /// "Here is…:", "Here's a friendlier version:", "Sure! …:", "Rewritten text:", "Rewritten:",
+    /// "Translation:", "Translated text:".
     /// Anchored at the start, so only an opening preface matches.
-    private static let prefacePattern = #"^(?:(?:sure|certainly|of course)[!.,]?\s*)?(?:here(?:'s| is)[^:\n]{0,60}:|rewritten(?: text| version)?:)\s*"#
+    private static let prefacePattern = #"^(?:(?:sure|certainly|of course)[!.,]?\s*)?(?:here(?:'s| is)[^:\n]{0,60}:|rewritten(?: text| version)?:|translation(?: text)?:|translated text:)\s*"#
 
     private static func stripPreface(_ text: String) -> String {
         guard let regex = try? NSRegularExpression(pattern: prefacePattern, options: [.caseInsensitive]) else { return text }
