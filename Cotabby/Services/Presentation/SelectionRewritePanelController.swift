@@ -124,6 +124,6 @@ private final class RewritePanel: NSPanel {
 
 /// A window that is not key would otherwise spend the first click on activation and deliver
 /// nothing; accepting the first mouse makes that one click press the button or preset.
-private final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
+final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }

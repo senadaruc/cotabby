@@ -57,9 +57,3 @@ private final class AnswerPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 }
-
-/// A window that is not key would otherwise spend the first click on activation and deliver
-/// nothing; accepting the first mouse makes that one click insert.
-private final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-}
