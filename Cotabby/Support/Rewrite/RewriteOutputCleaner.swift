@@ -49,11 +49,10 @@ nonisolated enum RewriteOutputCleaner {
     /// and the strip showed a stray "Draft" line. Servers (llama-server, Ollama, MLX) exclude the
     /// stop themselves; running this on their output is a no-op.
     static func cutAtStopSequence(_ text: String, stops: [String]) -> String {
-        var cut = text
-        for stop in stops {
-            if let range = cut.range(of: stop) { cut = String(cut[..<range.lowerBound]) }
-        }
-        return cut
+        // The earliest match of any stop, not each stop in turn: "\n\nDraft:" matches both "\nDraft:"
+        // and "\n\nDraft", and cutting at the first in list order would leave the newline behind.
+        guard let cut = stops.compactMap({ text.range(of: $0)?.lowerBound }).min() else { return text }
+        return String(text[..<cut])
     }
 
     private static func stripCodeFence(_ text: String) -> String {
@@ -67,7 +66,8 @@ nonisolated enum RewriteOutputCleaner {
     /// "Here is…:", "Here's a friendlier version:", "Sure! …:", "Rewritten text:", "Rewritten:",
     /// "Translation:", "Translated text:".
     /// Anchored at the start, so only an opening preface matches.
-    private static let prefacePattern = #"^(?:(?:sure|certainly|of course)[!.,]?\s*)?(?:here(?:'s| is)[^:\n]{0,60}:|rewritten(?: text| version)?:|translation(?: text)?:|translated text:)\s*"#
+    private static let prefacePattern = #"^(?:(?:sure|certainly|of course)[!.,]?\s*)?"#
+        + #"(?:here(?:'s| is)[^:\n]{0,60}:|rewritten(?: text| version)?:|translation(?: text)?:|translated text:)\s*"#
 
     /// The translate-only pattern. Bare labels ("Translation:", "Translated text:") are never part of a
     /// translated sentence, so they go with or without a newline. Sentence-like prefaces ("Here is the

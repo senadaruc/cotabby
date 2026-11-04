@@ -17,17 +17,21 @@ import Foundation
 /// The group container belongs to another app and is protected by macOS (App Data protection, which
 /// Full Disk Access covers). The layout is undocumented, so columns are probed before reading.
 ///
-/// Mapping to memory records, as for Apple Mail: the thread (`Conversation_ConversationID`) titled
-/// with the subject without reply prefixes; from me when Outlook marks the message outgoing; the
-/// participants every other address on it; the cursor the message's record id, which only grows.
+/// Mapping to memory records, as for Apple Mail: the thread (`Conversation_ConversationID`) with the
+/// message's people (`MailAudience`; a message without a thread is its own conversation), titled
+/// with the subject without reply prefixes; from me only when Outlook marks the message outgoing,
+/// never because its From address or name is the user's; the participants every other address on
+/// it (addresses only, never display names or Reply-To); the cursor the message's record id.
 ///
 /// New Outlook: its mail lives in `HxStore.hxd` next to the profile's `Data` folder, an undocumented
-/// store read by `HxStoreFile`. It is read after the classic database, as one source: a thread is
-/// titled with its topic, never from me (the store shows no folder, and a From address can be
-/// spoofed), the user's own addresses (the classic database's outgoing senders and the accounts in
-/// macOS Internet Accounts) left out of the participants, the body is the
-/// message's HTML as text (else its preview). Its part of the cursor is the newest sent time read,
-/// re-read with a two-day look-back so edited and late-synced messages are picked up.
+/// store read by `HxStoreFile`. It is read after the classic database, as one source. Its records
+/// carry no thread id and no recipients, so a conversation is one topic with one sender
+/// (`hxConversation`), never a subject alone, and the user's own mail is a conversation of its own.
+/// Nothing is marked from me (the store shows no folder, and a From address can be spoofed); the
+/// user's own addresses (the classic database's outgoing senders and the accounts in macOS Internet
+/// Accounts) are left out of the participants; the body is the message's HTML as text (else its
+/// preview). Its part of the cursor is the newest sent time read, re-read with a two-day look-back
+/// so edited and late-synced messages are picked up.
 nonisolated struct OutlookHistoryReader: MemoryHistoryReading {
     let sourceID = "outlook"
     let profilesRoot: String
@@ -154,16 +158,17 @@ nonisolated struct OutlookHistoryReader: MemoryHistoryReading {
         guard !text.isEmpty else { return nil }
         let sender = message.senderAddress ?? ""
         // Never marked as the user's: the store does not show which folder a message is in, and a
-        // From address can be spoofed, so a mail "from" the user could put words in their mouth when
-        // answers quote memory. The user's address is still left out of the participants.
+        // From address can be spoofed, so a mail "from" the user could put words in their mouth when a
+        // prompt attributes it to "You". The user's address is still left out of the participants.
         let isOwnAddress = ownAddresses.contains(sender)
         let topic = message.topic.flatMap { $0.isEmpty ? nil : $0 }
+        let conversation = hxConversation(messageID: message.messageID, topic: topic, sender: sender, isOwnAddress: isOwnAddress)
         return MemoryIngestRecord(
             // The sender is part of the identity (see `HxStoreFile`): a record from someone else
             // that reads the same id is another message, never a replacement for this one.
             sourceMessageID: "hx:" + message.messageID + "|" + sender,
-            conversationID: topic.map { "hx-topic:" + $0.lowercased() } ?? "hx:" + message.messageID,
-            conversationTitle: topic ?? "",
+            conversationID: conversation.id,
+            conversationTitle: conversation.title,
             sender: message.senderName ?? sender,
             isFromMe: false,
             timestamp: sent,
@@ -171,6 +176,18 @@ nonisolated struct OutlookHistoryReader: MemoryHistoryReading {
             participants: isOwnAddress || sender.isEmpty ? [] : [sender],
             subject: message.subject ?? topic ?? ""
         )
+    }
+
+    /// The conversation a New Outlook message belongs to. HxStore records carry no thread id and no
+    /// recipients, only the sender, so a subject alone must never make a thread: two threads that
+    /// share "Invoice", or the same subject from two people, would merge their audiences. A
+    /// conversation is one topic with one other person. A message with no sender, or the user's own
+    /// (whose recipients are unknown), is a conversation of its own with no title: no window title
+    /// can select it, and with no participants it never widens into another conversation.
+    static func hxConversation(messageID: String, topic: String?, sender: String, isOwnAddress: Bool)
+        -> (id: String, title: String) {
+        guard let topic, !sender.isEmpty, !isOwnAddress else { return ("hx:" + messageID + "|" + sender, "") }
+        return ("hx-topic:" + topic.lowercased() + "|" + sender, topic)
     }
 
     /// The user's own addresses: the classic database's outgoing senders and the mail accounts in
@@ -222,17 +239,24 @@ nonisolated struct OutlookHistoryReader: MemoryHistoryReading {
             let isFromMe = (row["outgoing"]?.int ?? 0) != 0
             let everyone = [senderAddress] + Self.addresses(row["recipients_to"]?.string) + Self.addresses(row["recipients_cc"]?.string)
             let subject = AppleMailHistoryReader.baseSubject(row["subject"]?.string ?? "")
+            // Addresses only, never display names or Reply-To: a name is the sender's to choose.
+            let people = Set(everyone.filter { !$0.isEmpty && !ownAddresses.contains($0) })
             let senderName = (row["sender_name"]?.string ?? "").split(separator: ";").first
                 .map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
             records.append(MemoryIngestRecord(
                 sourceMessageID: String(id),
-                conversationID: row["thread"]?.int.map { "thread-\($0)" } ?? "message-\(id)",
+                // Outlook's own thread id with the message's people (as for Apple Mail: a thread joined
+                // by headers a sender controls splits by audience); a missing or zero id is never a
+                // shared bucket.
+                conversationID: row["thread"]?.int
+                    .flatMap { $0 > 0 ? MailAudience.conversationID(thread: "thread-\($0)", people: people) : nil }
+                    ?? "message-\(id)",
                 conversationTitle: subject,
                 sender: senderName.isEmpty ? senderAddress : senderName,
                 isFromMe: isFromMe,
                 timestamp: Date(timeIntervalSince1970: row["received"]?.double ?? 0),
                 text: text,
-                participants: Set(everyone.filter { !$0.isEmpty && !ownAddresses.contains($0) }).sorted(),
+                participants: people.sorted(),
                 subject: subject
             ))
         }
@@ -248,7 +272,7 @@ nonisolated struct OutlookHistoryReader: MemoryHistoryReading {
         return Set(rows.flatMap { addresses($0["sender"]?.string) })
     }
 
-    /// Outlook stores address lists as "a@x.com; b@y.com".
+    /// Outlook stores address lists as "a@example.com; b@example.org".
     static func addresses(_ list: String?) -> [String] {
         (list ?? "").split(separator: ";")
             .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
@@ -256,6 +280,6 @@ nonisolated struct OutlookHistoryReader: MemoryHistoryReading {
     }
 }
 
-private extension String {
+nonisolated private extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
 }

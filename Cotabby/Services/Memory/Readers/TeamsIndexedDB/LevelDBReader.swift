@@ -66,10 +66,6 @@ nonisolated struct LevelDBReader {
     static let tableFooterSize = 48
     static let blockTrailerSize = 5
 
-    init(folder: URL) {
-        self.folder = folder
-    }
-
     /// Reads every file of the folder. `keeping` limits the snapshot to the user keys it accepts:
     /// a Teams cache holds a hundred databases and only three matter, so filtering while reading
     /// keeps the snapshot (and the memory it holds) to those. Kept values are then copied out of
@@ -103,9 +99,15 @@ nonisolated struct LevelDBReader {
 
     enum FileKind { case log, table }
 
+    struct DataFile: Equatable {
+        let url: URL
+        let kind: FileKind
+        let number: UInt64
+    }
+
     /// The folder's log and table files, oldest first (LevelDB numbers files in creation order).
     /// `MANIFEST`, `CURRENT`, `LOCK` and `LOG` describe the database but hold no user data.
-    func dataFiles() throws -> [(url: URL, kind: FileKind, number: UInt64)] {
+    func dataFiles() throws -> [DataFile] {
         let names: [String]
         do {
             names = try FileManager.default.contentsOfDirectory(atPath: folder.path)
@@ -113,18 +115,17 @@ nonisolated struct LevelDBReader {
             if Self.isPermissionError(error) { throw ReadError.notPermitted(folder.path) }
             throw error
         }
-        return names.compactMap { name -> (URL, FileKind, UInt64)? in
+        return names.compactMap { name -> DataFile? in
             let parts = name.split(separator: ".", omittingEmptySubsequences: false)
             guard parts.count == 2, !parts[0].isEmpty, parts[0].allSatisfy({ $0.isASCII && $0.isNumber }),
                   let number = UInt64(parts[0]) else { return nil }
             switch parts[1].lowercased() {
-            case "log": return (folder.appendingPathComponent(name), .log, number)
-            case "ldb", "sst": return (folder.appendingPathComponent(name), .table, number)
+            case "log": return DataFile(url: folder.appendingPathComponent(name), kind: .log, number: number)
+            case "ldb", "sst": return DataFile(url: folder.appendingPathComponent(name), kind: .table, number: number)
             default: return nil
             }
         }
-        .sorted { $0.2 < $1.2 }
-        .map { (url: $0.0, kind: $0.1, number: $0.2) }
+        .sorted { $0.number < $1.number }
     }
 
     /// The whole file, or nil when it no longer exists (deleted by a compaction since the listing).
@@ -182,42 +183,52 @@ nonisolated struct LevelDBReader {
     /// stops at the first fragment that does not fit its block or breaks the FIRST/MIDDLE/LAST
     /// chain: in a log being written that is the unfinished tail, and nothing after it is valid.
     static func parseLog(_ bytes: [UInt8], into resolver: inout Resolver) throws {
-        var batch: [UInt8] = []
-        var inRecord = false
+        var assembler = LogBatchAssembler()
         var blockStart = 0
-        fileLoop: while blockStart < bytes.count {
+        while blockStart < bytes.count {
             let blockEnd = min(blockStart + logBlockSize, bytes.count)
             var position = blockStart
             // A block's last 6 or fewer bytes cannot hold a header and are zero padding.
             while blockEnd - position >= 7 {
                 let length = Int(bytes[position + 4]) | Int(bytes[position + 5]) << 8
-                let type = bytes[position + 6]
                 let start = position + 7
-                guard start + length <= blockEnd else { break fileLoop }
-                let fragment = bytes[start..<(start + length)]
+                guard start + length <= blockEnd,
+                      try assembler.accept(type: bytes[position + 6], fragment: bytes[start..<(start + length)],
+                                           into: &resolver) else { return }
                 position = start + length
-                switch type {
-                case 1: // FULL
-                    guard !inRecord else { break fileLoop }
-                    try parseBatch(fragment, into: &resolver)
-                case 2: // FIRST
-                    guard !inRecord else { break fileLoop }
-                    batch = Array(fragment)
-                    inRecord = true
-                case 3: // MIDDLE
-                    guard inRecord else { break fileLoop }
-                    batch.append(contentsOf: fragment)
-                case 4: // LAST
-                    guard inRecord else { break fileLoop }
-                    batch.append(contentsOf: fragment)
-                    inRecord = false
-                    try parseBatch(batch[...], into: &resolver)
-                default:
-                    // Type 0 is preallocated (zeroed) space: the end of what was written.
-                    break fileLoop
-                }
             }
             blockStart += logBlockSize
+        }
+    }
+
+    /// Joins a log's FULL / FIRST / MIDDLE / LAST fragments into whole write batches.
+    private struct LogBatchAssembler {
+        private var batch: [UInt8] = []
+        private var inRecord = false
+
+        /// Takes the next fragment, parsing each batch it completes. False when the fragment breaks
+        /// the chain or is preallocated space (type 0): nothing after it is valid.
+        mutating func accept(type: UInt8, fragment: ArraySlice<UInt8>, into resolver: inout Resolver) throws -> Bool {
+            switch type {
+            case 1: // FULL
+                guard !inRecord else { return false }
+                try parseBatch(fragment, into: &resolver)
+            case 2: // FIRST
+                guard !inRecord else { return false }
+                batch = Array(fragment)
+                inRecord = true
+            case 3: // MIDDLE
+                guard inRecord else { return false }
+                batch.append(contentsOf: fragment)
+            case 4: // LAST
+                guard inRecord else { return false }
+                batch.append(contentsOf: fragment)
+                inRecord = false
+                try parseBatch(batch[...], into: &resolver)
+            default:
+                return false
+            }
+            return true
         }
     }
 
@@ -228,16 +239,17 @@ nonisolated struct LevelDBReader {
     static func parseBatch(_ batch: ArraySlice<UInt8>, into resolver: inout Resolver) throws {
         var reader = ByteReader(batch)
         guard let sequence = reader.readUInt64LE(), let count = reader.readUInt32LE() else { return }
+        // Wrapping: a damaged header's sequence near the top must not trap (`&+` below).
         for index in 0..<UInt64(count) {
             guard let type = reader.readByte(),
                   let keyLength = reader.readVarint32(),
                   let key = reader.read(Int(keyLength)) else { return }
             switch type {
             case 0:
-                resolver.add(key: key, sequence: sequence + index, value: nil)
+                resolver.add(key: key, sequence: sequence &+ index, value: nil)
             case 1:
                 guard let valueLength = reader.readVarint32(), let value = reader.read(Int(valueLength)) else { return }
-                resolver.add(key: key, sequence: sequence + index, value: value)
+                resolver.add(key: key, sequence: sequence &+ index, value: value)
             default:
                 return
             }
@@ -368,22 +380,30 @@ nonisolated struct ByteReader {
 
     mutating func readUInt32LE() -> UInt32? {
         guard let raw = read(4) else { return nil }
-        return raw.reversed().reduce(0) { $0 << 8 | UInt32($1) }
+        var value: UInt32 = 0
+        for byte in raw.reversed() { value = value << 8 | UInt32(byte) }
+        return value
     }
 
     mutating func readUInt64LE() -> UInt64? {
         guard let raw = read(8) else { return nil }
-        return raw.reversed().reduce(0) { $0 << 8 | UInt64($1) }
+        var value: UInt64 = 0
+        for byte in raw.reversed() { value = value << 8 | UInt64(byte) }
+        return value
     }
 
     mutating func readUInt32BE() -> UInt32? {
         guard let raw = read(4) else { return nil }
-        return raw.reduce(0) { $0 << 8 | UInt32($1) }
+        var value: UInt32 = 0
+        for byte in raw { value = value << 8 | UInt32(byte) }
+        return value
     }
 
     mutating func readUInt64BE() -> UInt64? {
         guard let raw = read(8) else { return nil }
-        return raw.reduce(0) { $0 << 8 | UInt64($1) }
+        var value: UInt64 = 0
+        for byte in raw { value = value << 8 | UInt64(byte) }
+        return value
     }
 
     mutating func readDoubleLE() -> Double? {

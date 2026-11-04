@@ -8,10 +8,11 @@ import Foundation
 /// one decides whether the answer lives in the calendar, and for which days, so `AnswerCoordinator`
 /// can read just those days from EventKit (`AvailabilityFacts` then turns them into facts).
 ///
-/// It covers the user's two languages, English and Turkish (with Turkish case endings on day names:
-/// "perşembeye", "cuma günü"). A reference that can mean two days covers both: "next Thursday" said
-/// on a Monday is this week's or next week's Thursday depending on the speaker, so the answer gets
-/// both and can say which it means. With no day named, today and the next four days are used.
+/// It covers English and Turkish (with Turkish case endings on day names: "perşembeye", "cuma
+/// günü"). A reference that can mean two days covers both: "next Thursday" said on a Monday is this
+/// week's or next week's Thursday depending on the speaker, so the answer gets both and can say
+/// which it means. With no day named, today and the next four days are used. Pure; used by
+/// `AnswerCoordinator`.
 nonisolated enum SchedulingQuestion {
     /// The most days one question can cover, so a vague question never reads a whole season.
     static let maximumDays = 14
@@ -23,40 +24,51 @@ nonisolated enum SchedulingQuestion {
         let text = question.lowercased()
         guard isAboutTime(text) else { return nil }
         let today = calendar.startOfDay(for: now)
-        var days = Set<Date>()
-        let add = { (offset: Int) in
-            if let day = calendar.date(byAdding: .day, value: offset, to: today) { days.insert(day) }
+        let weekday = calendar.component(.weekday, from: today)
+        var offsets = namedDayOffsets(text, weekday: weekday)
+        // A whole week only when no single day is named ("next week" vs "Thursday next week").
+        if offsets.isEmpty { offsets = weekOffsets(text, weekday: weekday) }
+        let day: (Int) -> Date? = { offset in calendar.date(byAdding: .day, value: offset, to: today) }
+        var days = Set(offsets.compactMap(day))
+        days.formUnion(explicitDates(in: text, today: today, calendar: calendar))
+        if days.isEmpty {
+            days = Set((0..<defaultDays).compactMap(day))
         }
+        let ordered = days.filter { $0 >= today }.sorted()
+        return Array(ordered.prefix(maximumDays))
+    }
 
-        if contains(text, ["day after tomorrow", "öbür gün", "yarından sonra"]) { add(2) }
-        else if contains(text, ["tomorrow", "yarın"]) { add(1) }
-        if contains(text, ["today", "bugün", "this afternoon", "this evening", "bu akşam", "öğleden sonra"]) { add(0) }
+    /// Days the question names relative to today ("tomorrow", "bugün") or by weekday, as offsets
+    /// from today (`weekday` is today's, Sunday = 1).
+    private static func namedDayOffsets(_ text: String, weekday current: Int) -> Set<Int> {
+        var offsets = Set<Int>()
+        if contains(text, ["day after tomorrow", "öbür gün", "yarından sonra"]) {
+            offsets.insert(2)
+        } else if contains(text, ["tomorrow", "yarın"]) {
+            offsets.insert(1)
+        }
+        if contains(text, ["today", "bugün", "this afternoon", "this evening", "bu akşam", "öğleden sonra"]) { offsets.insert(0) }
 
         let saysNext = contains(text, ["next ", "gelecek ", "haftaya", "önümüzdeki "])
         for (weekday, names) in weekdayNames where names.contains(where: { containsWord(text, startingWith: $0) }) {
             // Days until the next such weekday (today counts: "Thursday" said on a Thursday morning).
-            let current = calendar.component(.weekday, from: today)
             let offset = (weekday - current + 7) % 7
-            add(offset)
-            if saysNext { add(offset + 7) }
+            offsets.insert(offset)
+            if saysNext { offsets.insert(offset + 7) }
         }
+        return offsets
+    }
 
-        if contains(text, ["next week", "gelecek hafta", "haftaya", "önümüzdeki hafta"]), days.isEmpty {
-            let current = calendar.component(.weekday, from: today)
+    /// A week named as a whole: next week's working days, or what is left of this one up to Friday.
+    private static func weekOffsets(_ text: String, weekday current: Int) -> Set<Int> {
+        if contains(text, ["next week", "gelecek hafta", "haftaya", "önümüzdeki hafta"]) {
             let toMonday = (9 - current) % 7 == 0 ? 7 : (9 - current) % 7
-            for offset in toMonday..<(toMonday + 5) { add(offset) }
-        } else if contains(text, ["this week", "bu hafta"]), days.isEmpty {
-            let current = calendar.component(.weekday, from: today)
-            let untilFriday = max(0, 6 - current)
-            for offset in 0...untilFriday { add(offset) }
+            return Set(toMonday..<(toMonday + 5))
         }
-
-        days.formUnion(explicitDates(in: text, today: today, calendar: calendar))
-        if days.isEmpty {
-            for offset in 0..<defaultDays { add(offset) }
+        if contains(text, ["this week", "bu hafta"]) {
+            return Set(0...max(0, 6 - current))
         }
-        let ordered = days.filter { $0 >= today }.sorted()
-        return Array(ordered.prefix(maximumDays))
+        return []
     }
 
     /// Whether the question is about when the user can do something. An availability word is enough;
@@ -79,17 +91,17 @@ nonisolated enum SchedulingQuestion {
         "müsait misin", "müsait misiniz", "müsait mi", "müsaitsen", "müsaitseniz", "müsaitlik", "uygun musun",
         "uygun musunuz", "uygun mu", "uygunsan", "uygunsanız", "boş musun", "boş musunuz", "vaktin var", "vaktiniz var",
         "zamanın var", "zamanınız var", "ne zaman müsait", "ne zaman uygun", "görüşebilir miyiz", "görüşelim mi",
-        "konuşabilir miyiz", "toplanabilir miyiz",
+        "konuşabilir miyiz", "toplanabilir miyiz"
     ]
 
     private static let meetingWords = [
         "meet", "meeting", "call", "sync", "catch up", "demo", "review", "workshop", "session", "appointment",
-        "toplantı", "görüşme", "görüşelim", "konuşalım", "randevu", "sunum", "demo",
+        "toplantı", "görüşme", "görüşelim", "konuşalım", "randevu", "sunum", "demo"
     ]
 
     private static let timeWords = [
         "when", "what time", "which day", "today", "tomorrow", "this week", "next week", "o'clock", " am", " pm",
-        "ne zaman", "saat kaç", "saat kaçta", "hangi gün", "bugün", "yarın", "bu hafta", "gelecek hafta", "haftaya",
+        "ne zaman", "saat kaç", "saat kaçta", "hangi gün", "bugün", "yarın", "bu hafta", "gelecek hafta", "haftaya"
     ]
 
     /// Calendar weekday numbers (Sunday = 1) with their English and Turkish names. Longer names come
@@ -97,7 +109,7 @@ nonisolated enum SchedulingQuestion {
     static let weekdayNames: [(weekday: Int, names: [String])] = [
         (2, ["monday", "pazartesi"]), (3, ["tuesday", "salı"]), (4, ["wednesday", "çarşamba"]),
         (5, ["thursday", "perşembe"]), (6, ["friday", "cuma"]), (7, ["saturday", "cumartesi"]),
-        (1, ["sunday", "pazar"]),
+        (1, ["sunday", "pazar"])
     ]
 
     private static func contains(_ text: String, _ phrases: [String]) -> Bool {
@@ -130,9 +142,9 @@ nonisolated enum SchedulingQuestion {
 
     /// "9.10", "09/10" (day first, as both languages write it), "9 oct" / "9 ekim", and "oct 9". Each
     /// form is its own scan: in one alternation, "free 3" (word, number) would use up the "3" of "3.11".
-    private static let numericDate = try! NSRegularExpression(pattern: #"\b(\d{1,2})[./](\d{1,2})\b"#)
-    private static let dayThenMonth = try! NSRegularExpression(pattern: #"\b(\d{1,2})\s+([a-zşğüöçı]{3,})"#)
-    private static let monthThenDay = try! NSRegularExpression(pattern: #"\b([a-z]{3,})\s+(\d{1,2})\b"#)
+    private static let numericDate = try? NSRegularExpression(pattern: #"\b(\d{1,2})[./](\d{1,2})\b"#)
+    private static let dayThenMonth = try? NSRegularExpression(pattern: #"\b(\d{1,2})\s+([a-zşğüöçı]{3,})"#)
+    private static let monthThenDay = try? NSRegularExpression(pattern: #"\b([a-z]{3,})\s+(\d{1,2})\b"#)
 
     static func explicitDates(in text: String, today: Date, calendar: Calendar) -> [Date] {
         let range = NSRange(text.startIndex..., in: text)
@@ -141,13 +153,13 @@ nonisolated enum SchedulingQuestion {
             return (String(text[first]), String(text[second]))
         }
         var pairs: [(day: Int?, month: Int?)] = []
-        for match in numericDate.matches(in: text, range: range) {
+        for match in numericDate?.matches(in: text, range: range) ?? [] {
             if let (day, month) = groups(match) { pairs.append((Int(day), Int(month))) }
         }
-        for match in dayThenMonth.matches(in: text, range: range) {
+        for match in dayThenMonth?.matches(in: text, range: range) ?? [] {
             if let (day, name) = groups(match) { pairs.append((Int(day), month(named: name))) }
         }
-        for match in monthThenDay.matches(in: text, range: range) {
+        for match in monthThenDay?.matches(in: text, range: range) ?? [] {
             if let (name, day) = groups(match) { pairs.append((Int(day), month(named: name))) }
         }
         let year = calendar.component(.year, from: today)

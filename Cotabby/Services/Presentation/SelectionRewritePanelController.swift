@@ -25,7 +25,6 @@ final class SelectionRewritePanelController {
     /// The model on screen, read at placement time: its phase decides strip or card placement.
     private weak var popupModel: SelectionRewritePopupModel?
 
-    var isPopupVisible: Bool { popupPanel?.isVisible ?? false }
     var isPopupKey: Bool { popupPanel?.isKeyWindow ?? false }
 
     /// Shows the rewrite button just above the selected line, centered over the selected text.
@@ -58,16 +57,6 @@ final class SelectionRewritePanelController {
         guard let panel = popupPanel, let view = panel.contentView else { return }
         place(panel, size: view.fittingSize)
     }
-
-    /// Lets the popup take the keyboard for the instruction box. `showPopup` already does this, so
-    /// this is only a second request if the popup lost key status while open.
-    func allowKeyboard() {
-        guard let panel = popupPanel else { return }
-        panel.allowsKey = true
-        panel.makeKey()
-    }
-
-    func hideButton() { indicator.endRewrite() }
 
     /// Closes both panels. Takes the keyboard back first (`allowsKey = false`) so that no later
     /// `makeKey` call can pull focus into a panel that is already gone.

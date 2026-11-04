@@ -87,4 +87,38 @@ final class EmailBodyExtractorTests: XCTestCase {
         XCTAssertNil(EmailBodyExtractor.body(fromMessage: Data(raw.utf8)))
         XCTAssertLessThan(Date().timeIntervalSince(started), 5)
     }
+
+    /// Crafted HTML that made the old regular expressions rescan the input from every position
+    /// (unclosed tags and style blocks, runs of blank lines, endless entity digits) converts in
+    /// linear time.
+    func test_adversarialHTMLConvertsInLinearTime() {
+        let pieces: [String] = [
+            String(repeating: "<style>", count: 40_000),
+            String(repeating: "<div", count: 40_000),
+            String(repeating: "\n \n \t", count: 100_000),
+            "&#" + String(repeating: "1", count: 200_000),
+            String(repeating: "<blockquote>", count: 20_000)
+        ]
+        for html in pieces {
+            let started = Date()
+            _ = EmailBodyExtractor.htmlToText(html)
+            XCTAssertLessThan(Date().timeIntervalSince(started), 2, "\(html.prefix(12))…")
+        }
+        XCTAssertEqual(EmailBodyExtractor.htmlToText("a <b>bold</b> b<br>c<STYLE>x</style>d<p>e</P>f"), "a bold b\nc de\nf")
+        XCTAssertEqual(EmailBodyExtractor.htmlToText("1 < 2 and no tag closes"), "1 < 2 and no tag closes")
+    }
+
+    /// A huge message with pathological MIME (a header block with no end, folded a hundred
+    /// thousand times, an absurd boundary) is bounded, not parsed whole.
+    func test_pathologicalMIMEIsBoundedAndFast() {
+        let foldedHeader = "Content-Type: text/plain\n" + String(repeating: "X-Junk: a\n b\n", count: 200_000)
+        let hugeBoundary = "Content-Type: multipart/mixed; boundary=\(String(repeating: "q", count: 500_000))\n\nbody"
+        let longLines = "Content-Type: text/plain\n\n" + String(repeating: "word ", count: 1_000_000)
+        for raw in [foldedHeader, hugeBoundary, longLines] {
+            let started = Date()
+            let text = EmailBodyExtractor.body(fromMessage: Data(raw.utf8))
+            XCTAssertLessThan(Date().timeIntervalSince(started), 3)
+            XCTAssertLessThanOrEqual(text?.count ?? 0, EmailBodyExtractor.maximumCharacters)
+        }
+    }
 }

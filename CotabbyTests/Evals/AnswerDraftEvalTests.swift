@@ -37,14 +37,14 @@ struct AnswerEvalCase: Decodable {
         return try JSONDecoder().decode([AnswerEvalCase].self, from: Data(contentsOf: url))
     }
 
-    /// Scores a draft the way the app decides what to show: nil (no card) passes an abstain case;
-    /// a draft passes an answer case only if it is grounded and says what it must, not what it must not.
     /// The pre-draft gate the app applies after retrieval (the similarity gate is not modelled:
     /// eval facts are given, not retrieved). False means the app would not ask the model at all.
     var passesPreDraftGate: Bool {
         AnswerGroundingPolicy.factsMentionWhatTheQuestionNames(question: question, facts: AnswerPromptRenderer.factLines(renderedFacts))
     }
 
+    /// Scores a draft the way the app decides what to show: nil (no card) passes an abstain case;
+    /// a draft passes an answer case only if it is grounded and says what it must, not what it must not.
     func passes(_ draft: String?) -> Bool {
         let draft = passesPreDraftGate ? draft : nil
         let shownFacts = AnswerPromptRenderer.factLines(renderedFacts)
@@ -63,10 +63,12 @@ struct AnswerEvalCase: Decodable {
 /// The answer eval: real models draft each case's answer and the drafts are scored as the app would
 /// show them. Local-only, like the other model evals (compile flag `RUN_LLAMA_EVAL`):
 ///
-///   xcodebuild test -workspace build/cotabby-dependencies/Cotabby.xcworkspace -scheme Cotabby \
-///     -destination 'platform=macOS' -only-testing:CotabbyTests/AnswerDraftEvalTests \
+///   xcodebuild test -project Cotabby.xcodeproj -scheme Cotabby -destination 'platform=macOS' \
+///     -only-testing:CotabbyTests/AnswerDraftEvalTests \
 ///     SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) RUN_LLAMA_EVAL' CODE_SIGNING_ALLOWED=NO \
-///     -derivedDataPath build/DerivedData
+///     -configuration Release ENABLE_TESTABILITY=YES -derivedDataPath build/DerivedData
+///
+/// The local model comes from `LlamaEvalRuntime` (the selected model, or `COTABBY_EVAL_MODEL_PATH`).
 ///
 /// `test_answerCasesAreConsistent` always runs: it keeps the dataset honest (every required fact is
 /// in the case's facts, so a failure is never a demand to hallucinate).

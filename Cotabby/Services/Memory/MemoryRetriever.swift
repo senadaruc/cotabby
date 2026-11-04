@@ -6,18 +6,21 @@ import Logging
 /// the local memory engine, without ever making a suggestion wait for them.
 ///
 /// How a request gets memory:
-/// 1. `ConversationScopeResolver` turns the focused app and window into a scope (the chat name or
-///    mail subject, within the app's enabled memory sources), and builds a stable query.
-/// 2. If the cache already holds the answer for that scope and query, it is returned. Otherwise the
-///    cached answer for the same conversation (an earlier query) is returned, or nothing, and a
+/// 1. `ConversationScopeResolver` turns the focused app and window into a scope (the chat name,
+///    within the app's enabled memory sources; mail gets none), and builds a stable query. The
+///    window's name is the one per-window feature choices use (`featureScopeWindowTitle`): in
+///    WhatsApp, whose window is always titled "WhatsApp", it is the open chat's name read from its
+///    header.
+/// 2. If the cache already holds the lines for that scope and query, they are returned. Otherwise
+///    the cached lines for the same conversation (an earlier query) are returned, or nothing, and a
 ///    lookup starts in the background.
 /// 3. When the lookup lands for the conversation still in focus, `onMemoryReady` lets the
 ///    coordinator offer a suggestion that uses it.
 ///
 /// Gates, all checked here so the coordinator stays unaware of them: memory switched on and its
-/// engine running, a suggestion engine other than the endpoint, a non-secure field, the window not switched
-/// off for memory in the field icon's popup, and the performance tuner allowing it. Built once by
-/// `CotabbyAppEnvironment`.
+/// engine running, an on-device suggestion engine (never the endpoint), a non-secure field, the
+/// window not switched off for memory in the field icon's popup, and the performance tuner allowing
+/// it. Built once by `CotabbyAppEnvironment`.
 @MainActor
 final class MemoryRetriever: SuggestionMemoryProviding {
     var onMemoryReady: (@MainActor () -> Void)?
@@ -37,16 +40,36 @@ final class MemoryRetriever: SuggestionMemoryProviding {
     }
 
     private var cache: [CacheKey: [String]] = [:]
-    /// The newest answer per conversation, served while a lookup for a newer query is in flight.
+    /// The newest lines per conversation, served while a lookup for a newer query is in flight.
     private var latestByScope: [ConversationScope: [String]] = [:]
     private var inFlight: CacheKey?
     private var lastRequested: CacheKey?
+    /// The engine (`MemoryEngine.instanceID`) and its `dataGeneration` the caches were filled
+    /// under. When either changes (something was deleted, excluded or switched off, or memory
+    /// restarted), the caches go, and a lookup started before lands nowhere: a deleted message is
+    /// never kept or served from here. Both the check and every cache write happen inside the
+    /// engine's `withDataGeneration`, so a removal cannot begin between them.
+    private var cachedEngine: UUID?
+    private var cachedGeneration: UInt64 = 0
 
     static let maximumCacheEntries = 64
 
-    init(engine: @escaping @MainActor () -> MemoryEngine?) {
+    /// The search a lookup runs, off the main actor (the engine's own; tests hold it back).
+    typealias Search = @Sendable (MemoryEngine, String, MemoryEngine.Scope) -> MemorySearchResult?
+    private let search: Search
+
+    init(
+        engine: @escaping @MainActor () -> MemoryEngine?,
+        search: @escaping Search = { engine, query, scope in engine.search(query: query, scope: scope) }
+    ) {
         self.engine = engine
+        self.search = search
     }
+
+    // All stored state is safe to release from any thread (Combine publishers, closures, task
+    // handles, values). A nonisolated deinit keeps teardown off the back-deployment main-actor
+    // executor shim, which over-releases on macOS 26 (same as `SuggestionSettingsModel`).
+    nonisolated deinit {}
 
     /// Replaces the app -> sources map: only enabled sources serve memory.
     func updateSources(_ sources: [MemorySource]) {
@@ -67,6 +90,7 @@ final class MemoryRetriever: SuggestionMemoryProviding {
     /// after source changes.
     func reloadSources() async {
         guard let engine = engine() else {
+            dropCaches()
             updateSources([])
             return
         }
@@ -81,11 +105,17 @@ final class MemoryRetriever: SuggestionMemoryProviding {
     // MARK: - SuggestionMemoryProviding
 
     func memorySnippets(for context: FocusedInputContext, engine: SuggestionEngineKind) -> [String] {
-        guard engine.isOnDevice, !context.isSecure, self.engine() != nil, isAllowedByTuning(),
-              let scope = ConversationScopeResolver.scope(
+        // Memory is private history from this Mac: never part of a request the endpoint could send
+        // (MLX runs on this Mac, so it counts as on-device).
+        guard engine.isOnDevice, !context.isSecure, isAllowedByTuning() else { return [] }
+        guard let memory = self.engine() else {
+            // Memory off: what it found while on is not kept for when it comes back.
+            dropCaches()
+            return []
+        }
+        guard let scope = ConversationScopeResolver.scope(
                   bundleIdentifier: context.bundleIdentifier,
                   conversationTitle: context.featureScopeWindowTitle,
-                  trailingText: context.trailingText,
                   sourcesByBundle: sourcesByBundle
               ) else { return [] }
         let windowKey = WindowFeatureScope.windowKey(
@@ -95,21 +125,45 @@ final class MemoryRetriever: SuggestionMemoryProviding {
 
         let key = CacheKey(scope: scope, query: ConversationScopeResolver.query(precedingText: context.precedingText, scope: scope))
         lastRequested = key
-        if let cached = cache[key] { return cached }
-        startLookup(key)
-        return latestByScope[scope] ?? []
+        let (cached, latest): ([String]?, [String]?) = memory.withDataGeneration { generation in
+            dropCachesIfStale(memory, generation: generation)
+            return (cache[key], latestByScope[scope])
+        }
+        if let cached { return cached }
+        startLookup(key, engine: memory)
+        return latest ?? []
     }
 
-    private func startLookup(_ key: CacheKey) {
-        guard inFlight != key, let engine = engine() else { return }
+    /// Empties the caches when the engine was replaced or its stored data changed since they were
+    /// filled. Called inside the engine's `withDataGeneration`.
+    private func dropCachesIfStale(_ engine: MemoryEngine, generation: UInt64) {
+        guard engine.instanceID != cachedEngine || generation != cachedGeneration else { return }
+        dropCaches()
+        cachedEngine = engine.instanceID
+        cachedGeneration = generation
+    }
+
+    private func dropCaches() {
+        cache.removeAll()
+        latestByScope.removeAll()
+        inFlight = nil
+        cachedEngine = nil
+    }
+
+    private func startLookup(_ key: CacheKey, engine: MemoryEngine) {
+        guard inFlight != key else { return }
         inFlight = key
+        // Read before the search starts: a removal that begins after this moves it, and the
+        // search's result is then dropped when it lands.
+        let generation = engine.dataGeneration
+        let search = search
         let started = Date()
         var scope = MemoryEngine.Scope()
         scope.title = key.scope.title
         scope.sources = key.scope.sources
         Task { [weak self] in
             let result: MemorySearchResult? = await Task.detached(priority: .userInitiated) {
-                engine.search(query: key.query, scope: scope)
+                search(engine, key.query, scope)
             }.value
             guard let self else { return }
             if self.inFlight == key { self.inFlight = nil }
@@ -129,12 +183,20 @@ final class MemoryRetriever: SuggestionMemoryProviding {
                 "memory_scope": .string(result?.scope ?? "failed")
             ])
             guard result != nil else { return }
-            if self.cache.count >= Self.maximumCacheEntries { self.cache.removeAll() }
-            self.cache[key] = lines
-            let changed = self.latestByScope[key.scope] != lines
-            self.latestByScope[key.scope] = lines
+            // Kept only if nothing was removed since the search started, under this engine, and
+            // with the caches still the ones filled under that generation; checked and written
+            // while no removal can begin.
+            let changed: Bool? = engine.withDataGeneration { current in
+                guard current == generation, self.cachedEngine == engine.instanceID,
+                      self.cachedGeneration == generation else { return nil }
+                if self.cache.count >= Self.maximumCacheEntries { self.cache.removeAll() }
+                self.cache[key] = lines
+                let changed = self.latestByScope[key.scope] != lines
+                self.latestByScope[key.scope] = lines
+                return changed
+            }
             // Offer a suggestion that uses it only if it is new for the conversation still in focus.
-            if changed, !lines.isEmpty, self.lastRequested?.scope == key.scope {
+            if changed == true, !lines.isEmpty, self.lastRequested?.scope == key.scope {
                 self.onMemoryReady?()
             }
         }

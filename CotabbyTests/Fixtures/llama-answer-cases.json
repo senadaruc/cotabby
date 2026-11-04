@@ -1,24 +1,24 @@
 [
   {
-    "id": "answer-poc-status-en",
-    "question": "How did the THY POC go?",
-    "asker": "Ali Pakkan",
+    "id": "answer-pilot-status-en",
+    "question": "How did the Acme pilot go?",
+    "asker": "Dana Miles",
     "facts": [
-      {"sender": "Irem Dogru", "title": "THY - Imperum", "date": "2026-09-10", "text": "The THY POC passed all 14 detection tests; they want the production quote by Friday."}
+      {"sender": "Sam Rivera", "title": "Pilot - Acme", "date": "2026-09-10", "text": "The Acme pilot passed all 14 acceptance tests; they want the production quote by Friday."}
     ],
     "mustContain": ["14"],
     "tags": ["answer", "en"]
   },
   {
     "id": "answer-price-en",
-    "question": "What is the monthly price for the SOC platform?",
-    "asker": "Dominique Meurisse",
+    "question": "What is the monthly price for the starter plan?",
+    "asker": "Priya Shah",
     "facts": [
-      {"sender": "You", "fromMe": true, "title": "Pricing", "date": "2026-08-20", "text": "The SOC platform is 4,000 EUR per month for up to 500 endpoints."},
-      {"sender": "Altay Seyfula", "title": "Marketing Planning", "date": "2026-08-02", "text": "Booth at the security conference costs 2,500 EUR."}
+      {"sender": "You", "fromMe": true, "title": "Pricing", "date": "2026-08-20", "text": "The starter plan is 3,200 EUR per month for up to 400 seats."},
+      {"sender": "Jordan Lee", "title": "Planning", "date": "2026-08-02", "text": "Booth at the trade fair costs 1,800 EUR."}
     ],
-    "mustContain": ["4000"],
-    "mustNotContain": ["2500"],
+    "mustContain": ["3200"],
+    "mustNotContain": ["1800"],
     "tags": ["answer", "distractor", "en"]
   },
   {
@@ -33,52 +33,52 @@
   },
   {
     "id": "answer-ticket-en",
-    "question": "What's the ticket number for the SIEM integration issue?",
-    "asker": "Valon Dauti",
+    "question": "What's the ticket number for the billing integration issue?",
+    "asker": "Vic Dalton",
     "facts": [
-      {"sender": "Furkan Gergin", "title": "Bug Reporting", "date": "2026-09-28", "text": "Opened ticket 6542 for the SIEM integration timeout."},
-      {"sender": "Furkan Gergin", "title": "Bug Reporting", "date": "2026-09-21", "text": "Ticket 6311 for the dashboard export is closed."}
+      {"sender": "Can Demir", "title": "Bugs", "date": "2026-09-28", "text": "Opened ticket 4817 for the billing integration timeout."},
+      {"sender": "Can Demir", "title": "Bugs", "date": "2026-09-21", "text": "Ticket 4290 for the dashboard export is closed."}
     ],
-    "mustContain": ["6542"],
-    "mustNotContain": ["6311"],
+    "mustContain": ["4817"],
+    "mustNotContain": ["4290"],
     "tags": ["answer", "distractor", "en"]
   },
   {
     "id": "answer-license-count-tr",
     "question": "Kaç kullanıcı için lisans almıştık?",
-    "asker": "Cansu Colak",
+    "asker": "Selin Aydın",
     "facts": [
-      {"sender": "You", "fromMe": true, "title": "Lisans", "date": "2026-07-14", "text": "Lisansı 250 kullanıcı için aldık, yenileme Ocak'ta."}
+      {"sender": "You", "fromMe": true, "title": "Lisans", "date": "2026-07-14", "text": "Lisansı 180 kullanıcı için aldık, yenileme Mart'ta."}
     ],
-    "mustContain": ["250"],
+    "mustContain": ["180"],
     "tags": ["answer", "tr"]
   },
   {
     "id": "answer-delivery-date-en",
-    "question": "When will the playbooks be delivered?",
-    "asker": "Charles Ibrahim",
+    "question": "When will the onboarding guides be delivered?",
+    "asker": "Riley Chen",
     "facts": [
-      {"sender": "Malaya Panda", "title": "Playbooks", "date": "2026-09-30", "text": "The phishing and ransomware playbooks will be delivered on October 15."}
+      {"sender": "Sam Rivera", "title": "Guides", "date": "2026-09-30", "text": "The onboarding and offboarding guides will be delivered on October 15."}
     ],
     "mustContain": ["15"],
     "tags": ["answer", "en"]
   },
   {
     "id": "answer-contact-person-en",
-    "question": "Who is our contact at Sify?",
-    "asker": "Altay Seyfula",
+    "question": "Who is our contact at Contoso?",
+    "asker": "Jordan Lee",
     "facts": [
-      {"sender": "Jayesh Kammili", "title": "Sify Meeting", "date": "2026-09-05", "text": "I'll be your point of contact at Sify for the managed SOC rollout."}
+      {"sender": "Morgan Patel", "title": "Contoso Meeting", "date": "2026-09-05", "text": "I'll be your point of contact at Contoso for the support rollout."}
     ],
-    "mustContain": ["Jayesh"],
+    "mustContain": ["Morgan"],
     "tags": ["answer", "en"]
   },
   {
     "id": "answer-pilot-length-tr",
     "question": "Pilot ne kadar sürecek?",
-    "asker": "Kaan Yeniyol",
+    "asker": "Emre Demir",
     "facts": [
-      {"sender": "You", "fromMe": true, "title": "AFAD POC", "date": "2026-09-12", "text": "Pilot altı hafta sürecek, iki playbook ile başlıyoruz."}
+      {"sender": "You", "fromMe": true, "title": "Pilot", "date": "2026-09-12", "text": "Pilot altı hafta sürecek, iki ekip ile başlıyoruz."}
     ],
     "mustContain": ["altı"],
     "tags": ["answer", "tr"]
@@ -86,20 +86,20 @@
   {
     "id": "answer-wifi-en",
     "question": "What's the guest wifi network at the office?",
-    "asker": "Robert Schwarz",
+    "asker": "Riley Chen",
     "facts": [
-      {"sender": "Office", "title": "Office info", "date": "2026-06-01", "text": "Guest wifi network is Imperum-Guest, ask reception for the code."}
+      {"sender": "Office", "title": "Office info", "date": "2026-06-01", "text": "Guest wifi network is Acme-Guest, ask reception for the code."}
     ],
-    "mustContain": ["Imperum-Guest"],
+    "mustContain": ["Acme-Guest"],
     "tags": ["answer", "en"]
   },
   {
     "id": "answer-budget-distractor-en",
     "question": "What budget did the client approve for Q4?",
-    "asker": "Dominique Meurisse",
+    "asker": "Priya Shah",
     "facts": [
-      {"sender": "Simeon Stojkovski", "title": "Client and POC Status", "date": "2026-09-25", "text": "The client approved a Q4 budget of 120,000 EUR."},
-      {"sender": "Simeon Stojkovski", "title": "Client and POC Status", "date": "2026-06-25", "text": "Q3 budget was 80,000 EUR."}
+      {"sender": "Vic Dalton", "title": "Client Status", "date": "2026-09-25", "text": "The client approved a Q4 budget of 120,000 EUR."},
+      {"sender": "Vic Dalton", "title": "Client Status", "date": "2026-06-25", "text": "Q3 budget was 80,000 EUR."}
     ],
     "mustContain": ["120"],
     "mustNotContain": ["80"],
@@ -107,10 +107,10 @@
   },
   {
     "id": "answer-integration-tr",
-    "question": "Splunk entegrasyonu tamamlandı mı?",
-    "asker": "Ali Pakkan",
+    "question": "Fatura entegrasyonu tamamlandı mı?",
+    "asker": "Deniz Kaya",
     "facts": [
-      {"sender": "Furkan Gergin", "title": "Integrate and Tune", "date": "2026-09-29", "text": "Splunk entegrasyonu tamamlandı, QRadar için test devam ediyor."}
+      {"sender": "Can Demir", "title": "Integration", "date": "2026-09-29", "text": "Fatura entegrasyonu tamamlandı, ödeme sistemi için test devam ediyor."}
     ],
     "mustContain": ["tamamlandı"],
     "tags": ["answer", "tr"]
@@ -120,47 +120,47 @@
     "question": "Which flight are you taking to Izmir?",
     "asker": "Ayşe",
     "facts": [
-      {"sender": "You", "fromMe": true, "title": "Family", "date": "2026-10-01", "text": "I'm on TK2312 to Izmir, landing at 9:40."}
+      {"sender": "You", "fromMe": true, "title": "Family", "date": "2026-10-01", "text": "I'm on XY2312 to Izmir, landing at 9:40."}
     ],
     "mustContain": ["2312"],
     "tags": ["answer", "en"]
   },
   {
     "id": "abstain-unrelated-en",
-    "question": "Did you send the signed NDA to Garanti?",
-    "asker": "Dominique Meurisse",
+    "question": "Did you send the signed NDA to Northwind?",
+    "asker": "Priya Shah",
     "facts": [
-      {"sender": "Malaya Panda", "title": "Playbooks", "date": "2026-09-30", "text": "The phishing playbook is ready for review."}
+      {"sender": "Sam Rivera", "title": "Guides", "date": "2026-09-30", "text": "The onboarding guide is ready for review."}
     ],
     "abstain": true,
     "tags": ["abstain", "en"]
   },
   {
     "id": "abstain-unrelated-tr",
-    "question": "Akbank toplantısı ne zaman?",
-    "asker": "Cansu Colak",
+    "question": "Northwind toplantısı ne zaman?",
+    "asker": "Selin Aydın",
     "facts": [
-      {"sender": "You", "fromMe": true, "title": "Lisans", "date": "2026-07-14", "text": "Lisansı 250 kullanıcı için aldık."}
+      {"sender": "You", "fromMe": true, "title": "Lisans", "date": "2026-07-14", "text": "Lisansı 180 kullanıcı için aldık."}
     ],
     "abstain": true,
     "tags": ["abstain", "tr"]
   },
   {
     "id": "abstain-price-unknown-en",
-    "question": "How much does the MDR add-on cost?",
-    "asker": "Altay Seyfula",
+    "question": "How much does the SSO add-on cost?",
+    "asker": "Jordan Lee",
     "facts": [
-      {"sender": "You", "fromMe": true, "title": "Pricing", "date": "2026-08-20", "text": "The SOC platform is 4,000 EUR per month for up to 500 endpoints."}
+      {"sender": "You", "fromMe": true, "title": "Pricing", "date": "2026-08-20", "text": "The starter plan is 3,200 EUR per month for up to 400 seats."}
     ],
     "abstain": true,
     "tags": ["abstain", "distractor", "en"]
   },
   {
     "id": "abstain-person-unknown-en",
-    "question": "Who is leading the Garanti project?",
-    "asker": "Robert Schwarz",
+    "question": "Who is leading the Northwind project?",
+    "asker": "Riley Chen",
     "facts": [
-      {"sender": "Jayesh Kammili", "title": "Sify Meeting", "date": "2026-09-05", "text": "I'll be your point of contact at Sify."}
+      {"sender": "Morgan Patel", "title": "Contoso Meeting", "date": "2026-09-05", "text": "I'll be your point of contact at Contoso."}
     ],
     "abstain": true,
     "tags": ["abstain", "en"]
@@ -168,9 +168,9 @@
   {
     "id": "abstain-date-unknown-tr",
     "question": "Teklifi ne zaman göndereceksin?",
-    "asker": "Kaan Yeniyol",
+    "asker": "Emre Demir",
     "facts": [
-      {"sender": "You", "fromMe": true, "title": "AFAD POC", "date": "2026-09-12", "text": "Pilot altı hafta sürecek."}
+      {"sender": "You", "fromMe": true, "title": "Pilot", "date": "2026-09-12", "text": "Pilot altı hafta sürecek."}
     ],
     "abstain": true,
     "tags": ["abstain", "tr"]

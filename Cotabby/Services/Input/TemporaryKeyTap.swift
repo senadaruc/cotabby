@@ -3,8 +3,9 @@ import Foundation
 import Logging
 
 /// File overview:
-/// A keyboard tap that exists only while an offer is on screen (an answer card), deciding per key
-/// whether to take it.
+/// A keyboard tap that exists only while a transient surface needs a few keys, deciding per key
+/// whether to take it: an answer card (Tab inserts, Esc dismisses, any other key withdraws it), and
+/// selection rewrite's popup (Esc and Return).
 ///
 /// Why its own tap rather than `InputMonitor`'s: that monitor's consuming tap is installed only while
 /// a suggestion is visible and its single capture slot belongs to inline commands; an answer card is
@@ -35,6 +36,8 @@ final class TemporaryKeyTap {
         self.suppressionController = suppressionController
     }
 
+    nonisolated deinit {}
+
     var isInstalled: Bool { tap != nil }
 
     /// Installs the tap (or replaces its decision when installed). `decide` runs on the main thread
@@ -42,6 +45,11 @@ final class TemporaryKeyTap {
     func install(_ decide: @escaping (_ keyCode: CGKeyCode, _ flags: CGEventFlags) -> Decision) {
         self.decide = decide
         guard tap == nil else { return }
+        // The C callback cannot capture Swift context, so `self` travels as the tap's `userInfo`
+        // pointer. `passUnretained` adds no retain: the owner (built once by the environment) outlives
+        // the tap, and `remove()` invalidates the tap before anything could release it. The run loop
+        // source is added to the main run loop, so the callback runs on the main thread and
+        // `MainActor.assumeIsolated` holds.
         let callback: CGEventTapCallBack = { _, type, event, userInfo in
             guard let userInfo else { return Unmanaged.passUnretained(event) }
             let owner = Unmanaged<TemporaryKeyTap>.fromOpaque(userInfo).takeUnretainedValue()

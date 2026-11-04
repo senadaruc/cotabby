@@ -15,9 +15,9 @@ import Foundation
 /// The prompt follows the model: an instruct or chat model (`MLXModelCompatibility.isInstructName`)
 /// gets the instruct prompt through `streamChat`; a base model gets the base prompt with the example
 /// through the completions route, with the rewrite stop sequences and a budget from the selection.
-/// Weaker on base models, which the Settings pane says. The text never leaves the Mac, so
-/// `sendsOffDevice` is false and memory is allowed as for the other local providers. Follow-up E's
-/// broken-generator report goes to whichever server served the request. Owned by `RewriteEngine`.
+/// Weaker on base models, which the Settings pane says. The server listens on 127.0.0.1 only, so
+/// `sendsOffDevice` is false. A 404 that `/health` confirms as a dead generator is reported, like
+/// the MLX engine does, to whichever server served the request. Owned by `RewriteEngine`.
 @MainActor
 final class MLXRewriteProvider: RewriteProviding {
     static let timeout: TimeInterval = 60
@@ -41,13 +41,13 @@ final class MLXRewriteProvider: RewriteProviding {
         healthCheck: @escaping MLXHealthCheck = MLXHealthProbe.check(port:),
         sleep: @escaping MLXRewriteServerController.Sleep = { try await Task.sleep(for: $0) }
     ) {
-        self.sleep = sleep
         self.controller = controller
         self.autocompleteServer = autocompleteServer
         self.autocompleteEngine = autocompleteEngine
         self.modelID = modelID
         self.client = client
         self.healthCheck = healthCheck
+        self.sleep = sleep
     }
 
     nonisolated deinit {}
@@ -120,18 +120,13 @@ final class MLXRewriteProvider: RewriteProviding {
                     onPartialRawText: onPartial
                 )
             }
-            return try await client.generate(
-                configuration: configuration,
-                apiKey: nil,
-                prompt: RewritePromptBuilder.basePrompt(request),
-                options: LocalEndpointRewriteProvider.completionOptions(for: request),
-                onPartialRawText: onPartial
-            )
+            return try await LocalEndpointRewriteProvider.generateBase(
+                client: client, configuration: configuration, apiKey: nil, request: request, onPartial: onPartial)
         } catch let error as OpenAICompatibleClientError {
             // A 404 may mean the generator died or just that this request failed; `/health` decides.
             if let reason = MLXGeneratorFailure.reason(for: error), let port = configuration.baseURL.port {
                 let health = await healthCheck(port)
-                // A cancelled rewrite says nothing about the server (see the engine's same guard).
+                // A cancelled rewrite says nothing about the server (the MLX engine has the same guard).
                 if Task.isCancelled || health == .cancelled { throw CancellationError() }
                 guard health != .healthy else { throw error }
                 server.reportBroken(port: port, reason: reason)

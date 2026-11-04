@@ -543,6 +543,10 @@ final class SelectionTranslationCoordinator {
 }
 
 extension RewriteEngine: SelectionTranslationRunning {
+    /// Read from the destination the engine would use now, the same answer the Rewrite popup discloses.
+    var activeProviderSendsOffDevice: Bool { destination().sendsOffDevice }
+    var activeHostName: String? { destination().hostName }
+
     /// A translation is a rewrite with the translate action and no memory: memory is other people's
     /// messages and has no place in a translation, so it is never gathered and never sent.
     func translate(_ text: String, sourceLanguage: String?, into target: String,

@@ -106,14 +106,7 @@ nonisolated final class ReadOnlySQLiteDatabase {
         }
         defer { sqlite3_finalize(statement) }
         for (offset, parameter) in parameters.enumerated() {
-            let index = Int32(offset + 1)
-            switch parameter {
-            case .integer(let value): sqlite3_bind_int64(statement, index, value)
-            case .real(let value): sqlite3_bind_double(statement, index, value)
-            // SQLITE_TRANSIENT (-1): SQLite copies the string, since Swift's buffer is temporary.
-            case .text(let value): sqlite3_bind_text(statement, index, value, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
-            case .null: sqlite3_bind_null(statement, index)
-            }
+            Self.bind(parameter, at: Int32(offset + 1), in: statement)
         }
         var result: [[String: Value]] = []
         while true {
@@ -122,16 +115,29 @@ nonisolated final class ReadOnlySQLiteDatabase {
             guard step == SQLITE_ROW else { throw DatabaseError.sqlite(String(cString: sqlite3_errmsg(handle))) }
             var row: [String: Value] = [:]
             for column in 0..<sqlite3_column_count(statement) {
-                let name = String(cString: sqlite3_column_name(statement, column))
-                switch sqlite3_column_type(statement, column) {
-                case SQLITE_INTEGER: row[name] = .integer(sqlite3_column_int64(statement, column))
-                case SQLITE_FLOAT: row[name] = .real(sqlite3_column_double(statement, column))
-                case SQLITE_TEXT: row[name] = .text(String(cString: sqlite3_column_text(statement, column)))
-                default: row[name] = .null
-                }
+                row[String(cString: sqlite3_column_name(statement, column))] = Self.value(at: column, in: statement)
             }
             result.append(row)
         }
         return result
+    }
+
+    private static func bind(_ parameter: Value, at index: Int32, in statement: OpaquePointer?) {
+        switch parameter {
+        case .integer(let value): sqlite3_bind_int64(statement, index, value)
+        case .real(let value): sqlite3_bind_double(statement, index, value)
+        // SQLITE_TRANSIENT (-1): SQLite copies the string, since Swift's buffer is temporary.
+        case .text(let value): sqlite3_bind_text(statement, index, value, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        case .null: sqlite3_bind_null(statement, index)
+        }
+    }
+
+    private static func value(at column: Int32, in statement: OpaquePointer?) -> Value {
+        switch sqlite3_column_type(statement, column) {
+        case SQLITE_INTEGER: return .integer(sqlite3_column_int64(statement, column))
+        case SQLITE_FLOAT: return .real(sqlite3_column_double(statement, column))
+        case SQLITE_TEXT: return .text(String(cString: sqlite3_column_text(statement, column)))
+        default: return .null
+        }
     }
 }

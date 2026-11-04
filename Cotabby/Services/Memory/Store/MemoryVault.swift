@@ -9,11 +9,10 @@ import Foundation
 /// (WhatsApp's and Mail's stores need Full Disk Access). Encrypting at rest keeps the copy as private
 /// as the original.
 ///
-/// How (byte-compatible with the earlier Python service's `vault.py`, so the existing store opens
-/// without re-syncing):
-/// - One 256-bit master key in the Keychain (`KeychainTypingHistoryKeyStore`, service
+/// How:
+/// - One 256-bit root key in the Keychain (`KeychainTypingHistoryKeyStore`, service
 ///   `<bundle id>.memory`).
-/// - Two subkeys, `HMAC-SHA256(master, label || 0x01)`: a single HKDF-Expand block, since the master
+/// - Two subkeys, `HMAC-SHA256(root, label || 0x01)`: a single HKDF-Expand block, since the root
 ///   key is already uniformly random and the extract step adds nothing.
 /// - `seal`/`open`: AES-256-GCM with a random 96-bit nonce, stored as `nonce || ciphertext || tag`
 ///   (`AES.GCM.SealedBox.combined`), for values that must be read back.
@@ -37,15 +36,15 @@ nonisolated struct MemoryVault: Sendable {
     private let encryptionKey: SymmetricKey
     private let macKey: SymmetricKey
 
-    init(masterKey: SymmetricKey) {
-        encryptionKey = Self.expand(masterKey, label: "cotabby-memory enc")
-        macKey = Self.expand(masterKey, label: "cotabby-memory mac")
+    init(rootKey: SymmetricKey) {
+        encryptionKey = Self.expand(rootKey, label: "cotabby-memory enc")
+        macKey = Self.expand(rootKey, label: "cotabby-memory mac")
     }
 
-    private static func expand(_ master: SymmetricKey, label: String) -> SymmetricKey {
+    private static func expand(_ root: SymmetricKey, label: String) -> SymmetricKey {
         var info = Data(label.utf8)
         info.append(0x01)
-        return SymmetricKey(data: Data(HMAC<SHA256>.authenticationCode(for: info, using: master)))
+        return SymmetricKey(data: Data(HMAC<SHA256>.authenticationCode(for: info, using: root)))
     }
 
     func sealData(_ data: Data) throws -> Data {

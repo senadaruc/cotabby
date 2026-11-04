@@ -5,45 +5,39 @@ import Foundation
 /// belongs to, what to search memory for, and how retrieved messages read in a prompt.
 ///
 /// Why pure and separate: these decide what private history may reach a prompt, so each rule is
-/// stated once here, without AppKit, the socket or the service, and pinned by tests. The retriever
+/// stated once here, without AppKit or the engine, and pinned by tests. The retriever
 /// (`MemoryRetriever`) only applies them.
 
 /// The conversation a field belongs to: what memory's search is scoped to.
 nonisolated struct ConversationScope: Equatable, Hashable, Sendable {
-    /// The chat name or mail subject as the app shows it; memory matches it within `sources`.
+    /// The chat name as the app shows it; memory matches it within `sources`.
     let title: String
-    /// The memory sources that serve the focused app (`whatsapp` for WhatsApp, `apple_mail` for
-    /// Mail). Title matching never crosses into other apps' history.
+    /// The memory sources that serve the focused app (`whatsapp` for WhatsApp, `teams` for Teams).
+    /// Title matching never crosses into other apps' history.
     let sources: [String]
-
 }
 
 nonisolated enum ConversationScopeResolver {
     /// The scope for a focused field, or nil when memory has nothing to say about it: the app has no
-    /// enabled memory source, or the window does not name a conversation.
+    /// enabled memory source, the window does not name a conversation, or the app is a mail client.
     ///
-    /// The title is the one per-window feature choices already use (`featureScopeWindowTitle`): the
-    /// open chat's name in WhatsApp (read from its header), the window title elsewhere. In Mail a
-    /// compose window's title is the message subject ("Re: POC results"), which memory matches
-    /// to the thread with reply prefixes removed.
+    /// The title is the focused field's window title (`FocusedInputContext.windowTitle`); Teams'
+    /// title is parsed for the open chat.
     ///
-    /// A mail reply names its thread in the quoted header after the caret (`trailingText`), and
-    /// that wins over the window title: Outlook's inline reply sits in the main window, whose
-    /// title names a mailbox ("Inbox • All Accounts"), and such a title is never a conversation.
+    /// Mail gets no conversation scope. A compose window's title is only the subject, which does
+    /// not say who the mail is for ("Invoice" to one customer must not draw on the "Invoice" thread
+    /// with another), and everything in the body, the quoted original's header included, can be
+    /// shaped by the other person (their display name, their text), so no audience read from it can
+    /// be trusted. A mail scope needs a source the sender cannot write: the compose window's own
+    /// To and Cc fields, read through Accessibility, which is a follow-up. Mail is still synced, and
+    /// the Playground can search it.
     static func scope(
         bundleIdentifier: String,
         conversationTitle: String?,
-        trailingText: String = "",
         sourcesByBundle: [String: [String]]
     ) -> ConversationScope? {
-        var raw = conversationTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if MailReplyContext.isMail(bundleIdentifier: bundleIdentifier) {
-            if let subject = MailReplyContext.quotedSubject(in: trailingText) {
-                raw = subject
-            } else if MailReplyContext.isMailboxWindowTitle(raw, bundleIdentifier: bundleIdentifier) {
-                return nil
-            }
-        }
+        guard !mailBundleIdentifiers.contains(bundleIdentifier) else { return nil }
+        let raw = conversationTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let named = teamsBundleIdentifiers.contains(bundleIdentifier) ? teamsConversationTitle(raw) : raw
         guard let sources = sourcesByBundle[bundleIdentifier], !sources.isEmpty,
               let title = named, !title.isEmpty,
@@ -51,11 +45,13 @@ nonisolated enum ConversationScopeResolver {
         return ConversationScope(title: title, sources: sources)
     }
 
+    static let mailBundleIdentifiers: Set<String> = ["com.apple.mail", "com.microsoft.Outlook"]
+
     static let teamsBundleIdentifiers: Set<String> = ["com.microsoft.teams2", "com.microsoft.teams"]
 
     /// The chat or meeting name in a Teams window title. Teams titles its window
     /// "<view> | <conversation> | <organization> | <account> | Microsoft Teams"
-    /// ("Chat | Ali Pakkan | imperum.io | senad@imperum.io | Microsoft Teams"); the conversation is
+    /// ("Chat | Sam Rivera | example.com | alex@example.com | Microsoft Teams"); the conversation is
     /// the first part that is not the view, the app, or the signed-in account. Nil when the window
     /// shows no conversation (only a view such as "Activity").
     static func teamsConversationTitle(_ windowTitle: String) -> String? {
@@ -118,12 +114,22 @@ nonisolated enum MemorySnippetFormatter {
                 .trimmingCharacters(in: .whitespaces)
             guard !text.isEmpty else { continue }
             let clipped = text.count > maximumLineCharacters ? String(text.prefix(maximumLineCharacters)) + "…" : text
-            let speaker = message.isFromMe ? "You" : message.sender
+            let speaker = message.isFromMe ? "You" : speakerName(message.sender)
             let line = "\(formatter.string(from: message.timestamp)) · \(speaker): \(clipped)"
             guard total + line.count <= maximumTotalCharacters else { continue }
             total += line.count + 1
             lines.append(line)
         }
         return lines
+    }
+
+    static let maximumSenderCharacters = 40
+
+    /// Someone else's name as a line's speaker. Names come from other people's apps, so one can
+    /// never start a new line, run long, or pass for the user ("You").
+    static func speakerName(_ sender: String) -> String {
+        let collapsed = sender.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
+        let name = collapsed.isEmpty ? "Someone" : String(collapsed.prefix(maximumSenderCharacters))
+        return name.lowercased() == "you" ? "\(name) (contact)" : name
     }
 }

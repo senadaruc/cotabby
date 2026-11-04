@@ -2,12 +2,12 @@ import XCTest
 @testable import Cotabby
 
 /// The preview's warning says exactly what the rewrite changed, so the user can decide whether to
-/// "Replace anyway". The case that prompted it: "1000% eminim" came back as "%100 eminim", and the
-/// old message ("Not in your text or memory: 100") did not say that the number had changed.
+/// "Replace anyway": when "1000%" comes back as "100%", a bare list of new terms ("Not in your text:
+/// 100") would not say that the number had changed.
 final class RewriteChangeWarningTests: XCTestCase {
     func test_changedNumberNamesBothValues() {
         XCTAssertEqual(
-            RewriteChangeWarning.message(selection: "AMA ben sana söyleyeyim 1000% eminim", rewrite: "AMA sana söyleyeyim, %100 eminim",
+            RewriteChangeWarning.message(selection: "trust me, I am 1000% sure", rewrite: "Trust me, I'm 100% sure.",
                                          unsupported: ["100"], usedMemory: false),
             "The number changed: you wrote 1000, the rewrite says 100."
         )
@@ -30,27 +30,35 @@ final class RewriteChangeWarningTests: XCTestCase {
 
     func test_addedName() {
         XCTAssertEqual(
-            RewriteChangeWarning.message(selection: "let me know", rewrite: "Let me know, Arnaud.", unsupported: ["Arnaud"], usedMemory: false),
-            "The rewrite adds “Arnaud”, which isn't in your text."
+            RewriteChangeWarning.message(selection: "let me know", rewrite: "Let me know, Sam.", unsupported: ["Sam"], usedMemory: false),
+            "The rewrite adds “Sam”, which isn't in your text."
         )
     }
 
     func test_addedNamesWithMemoryInPlay() {
         XCTAssertEqual(
-            RewriteChangeWarning.message(selection: "let me know", rewrite: "Let me know, Arnaud and Bea.",
-                                         unsupported: ["Arnaud", "Bea"], usedMemory: true),
-            "The rewrite adds “Arnaud”, “Bea”, which aren't in your text or memory."
+            RewriteChangeWarning.message(selection: "let me know", rewrite: "Let me know, Sam and Jo.",
+                                         unsupported: ["Sam", "Jo"], usedMemory: true),
+            "The rewrite adds “Sam”, “Jo”, which aren't in your text or memory."
         )
     }
 
     func test_numberAndNameTogether() {
         XCTAssertEqual(
-            RewriteChangeWarning.message(selection: "meet at 10", rewrite: "Meet Arnaud at 11.", unsupported: ["11", "Arnaud"], usedMemory: false),
-            "The number changed: you wrote 10, the rewrite says 11. The rewrite adds “Arnaud”, which isn't in your text."
+            RewriteChangeWarning.message(selection: "meet at 10", rewrite: "Meet Sam at 11.", unsupported: ["11", "Sam"], usedMemory: false),
+            "The number changed: you wrote 10, the rewrite says 11. The rewrite adds “Sam”, which isn't in your text."
         )
     }
 
     func test_nothingUnsupportedIsNoWarning() {
         XCTAssertNil(RewriteChangeWarning.message(selection: "a", rewrite: "b", unsupported: [], usedMemory: false))
+    }
+
+    func test_changedDecimalIsNamedAsANumber() {
+        XCTAssertEqual(
+            RewriteChangeWarning.message(selection: "it takes 3.5 hours", rewrite: "It takes 35 hours.", unsupported: ["35"],
+                                         usedMemory: false),
+            "The number changed: you wrote 3.5, the rewrite says 35."
+        )
     }
 }

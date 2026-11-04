@@ -11,7 +11,7 @@ import Foundation
 /// is unit-tested without Mail.
 nonisolated enum EmailBodyExtractor {
     /// The maximum characters of body kept. Memory only needs the gist of a message, and quoted
-    /// history (stripped by the service) makes long tails mostly repetition.
+    /// history (stripped by the engine) makes long tails mostly repetition.
     static let maximumCharacters = 6000
     /// Email is attacker-controlled input parsed inside Cotabby, so the structure it may describe
     /// is bounded: nesting deeper than this, or more parts than this, is not read (no legitimate
@@ -26,7 +26,7 @@ nonisolated enum EmailBodyExtractor {
     /// raw message and an XML property list. Returns the body text, or nil when there is none.
     static func bodyFromEmlx(_ data: Data) -> String? {
         guard let newline = data.firstIndex(of: 0x0A),
-              let length = Int(String(decoding: data[data.startIndex..<newline], as: UTF8.self)
+              let length = Int(String(lossyUTF8: data[data.startIndex..<newline])
                 .trimmingCharacters(in: .whitespaces)) else {
             return body(fromMessage: data)
         }
@@ -76,23 +76,85 @@ nonisolated enum EmailBodyExtractor {
 
     // MARK: - HTML
 
+    /// HTML longer than this is cut before conversion: the kept text is a few thousand characters,
+    /// and a crafted message must not make conversion cost grow with its size.
+    static let maximumHTMLCharacters = 1_000_000
+
+    /// HTML to plain text in one linear pass over the scalars. Not regular expressions: patterns
+    /// such as `<style>.*?</style>` or `<[^>]+>` rescan the rest of the input from every unclosed
+    /// `<`, so a crafted mail made of them would take quadratic time and stall a sync.
+    ///
+    /// Block ends (`br`, `p`, `div`, `tr`, `li`, `h1`…`h6`) become line breaks, `style`, `script` and
+    /// `head` are dropped with their content, and a `blockquote` opens a "> " quoted line so the
+    /// engine's quote stripping removes it like plain-text quoting.
     static func htmlToText(_ html: String) -> String {
-        var text = html
-        for block in ["style", "script", "head"] {
-            text = text.replacingOccurrences(
-                of: "<\(block)[^>]*>.*?</\(block)>", with: " ", options: [.regularExpression, .caseInsensitive]
-            )
+        let scalars = Array(html.unicodeScalars.prefix(maximumHTMLCharacters))
+        var output = String.UnicodeScalarView()
+        var index = 0
+        while index < scalars.count {
+            guard scalars[index] == "<" else {
+                output.append(scalars[index])
+                index += 1
+                continue
+            }
+            // No ">" after an unclosed "<" means no later tag closes either: the rest is text.
+            guard let close = scalars[(index + 1)...].firstIndex(of: ">") else {
+                output.append(contentsOf: scalars[index...])
+                break
+            }
+            let tag = HTMLTag(scalars[(index + 1)..<close])
+            index = close + 1
+            if !tag.isClosing, ["style", "script", "head"].contains(tag.name) {
+                index = endOfElement(tag.name, in: scalars, from: index) ?? scalars.count
+                output.append(" ")
+            } else if tag.name == "br" || (tag.isClosing && HTMLTag.blockEnds.contains(tag.name)) {
+                output.append("\n")
+            } else if tag.name == "blockquote", !tag.isClosing {
+                output.append(contentsOf: "\n> ".unicodeScalars)
+            }
         }
-        text = text.replacingOccurrences(of: "<br\\s*/?>", with: "\n", options: [.regularExpression, .caseInsensitive])
-        text = text.replacingOccurrences(of: "</(p|div|tr|li|h[1-6])>", with: "\n", options: [.regularExpression, .caseInsensitive])
-        // A quoted reply in HTML mail is a blockquote; mark its lines like plain-text quoting so the
-        // service's quote stripping removes them too.
-        text = text.replacingOccurrences(of: "<blockquote[^>]*>", with: "\n> ", options: [.regularExpression, .caseInsensitive])
-        text = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-        text = decodeEntities(text)
-        text = text.replacingOccurrences(of: "[ \t]+", with: " ", options: .regularExpression)
-        text = text.replacingOccurrences(of: "\n\\s*\n\\s*\n+", with: "\n\n", options: .regularExpression)
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return collapseBlankLines(collapseSpaces(decodeEntities(String(output))))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Just past the end tag of `name` (case-insensitive) at or after `start`, or nil when there is
+    /// none. One forward scan.
+    private static func endOfElement(_ name: String, in scalars: [Unicode.Scalar], from start: Int) -> Int? {
+        let name = Array(name.unicodeScalars)
+        var index = start
+        while index + 1 + name.count < scalars.count {
+            if scalars[index] == "<", scalars[index + 1] == "/",
+               zip(name, scalars[(index + 2)...]).allSatisfy({ $0 == HTMLTag.lowercased($1) }) {
+                return scalars[(index + 2)...].firstIndex(of: ">").map { $0 + 1 }
+            }
+            index += 1
+        }
+        return nil
+    }
+
+    /// Runs of spaces and tabs become one space.
+    private static func collapseSpaces(_ text: String) -> String {
+        var output = String.UnicodeScalarView()
+        var previousWasSpace = false
+        for scalar in text.unicodeScalars {
+            let isSpace = scalar == " " || scalar == "\t"
+            if !(isSpace && previousWasSpace) { output.append(isSpace ? " " : scalar) }
+            previousWasSpace = isSpace
+        }
+        return String(output)
+    }
+
+    /// Two or more blank (or whitespace-only) lines in a row become one blank line.
+    private static func collapseBlankLines(_ text: String) -> String {
+        var lines: [Substring] = []
+        var previousWasBlank = false
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let isBlank = line.allSatisfy(\.isWhitespace)
+            if isBlank, previousWasBlank { continue }
+            lines.append(isBlank ? "" : line)
+            previousWasBlank = isBlank
+        }
+        return lines.joined(separator: "\n")
     }
 
     static func decodeEntities(_ text: String) -> String {
@@ -101,8 +163,9 @@ nonisolated enum EmailBodyExtractor {
         for (entity, value) in named {
             result = result.replacingOccurrences(of: entity, with: value)
         }
-        // Numeric entities: &#246; and &#xF6;
-        guard let regex = try? NSRegularExpression(pattern: "&#(x?)([0-9a-fA-F]+);") else { return result }
+        // Numeric entities: &#246; and &#xF6;. The digits are bounded, so a long run of them is
+        // tried once, not once per length.
+        guard let regex = try? NSRegularExpression(pattern: "&#(x?)([0-9a-fA-F]{1,8});") else { return result }
         let source = result as NSString
         var output = ""
         var last = 0
@@ -120,6 +183,31 @@ nonisolated enum EmailBodyExtractor {
     }
 }
 
+/// The name of an HTML tag (between its `<` and `>`), lowercased, and whether it is an end tag.
+private nonisolated struct HTMLTag {
+    static let blockEnds: Set<String> = ["p", "div", "tr", "li", "h1", "h2", "h3", "h4", "h5", "h6"]
+
+    let name: String
+    let isClosing: Bool
+
+    init(_ inner: ArraySlice<Unicode.Scalar>) {
+        var scalars = inner.drop(while: { $0 == " " })
+        isClosing = scalars.first == "/"
+        if isClosing { scalars = scalars.dropFirst() }
+        let letters = scalars.prefix { (scalar: Unicode.Scalar) -> Bool in
+            switch Self.lowercased(scalar) {
+            case "a"..."z", "0"..."9": return true
+            default: return false
+            }
+        }
+        name = String(String.UnicodeScalarView(letters.prefix(16).map(Self.lowercased)))
+    }
+
+    static func lowercased(_ scalar: Unicode.Scalar) -> Unicode.Scalar {
+        ("A"..."Z").contains(scalar) ? Unicode.Scalar(scalar.value + 32)! : scalar
+    }
+}
+
 /// One MIME entity: its headers and its raw body bytes.
 private nonisolated struct MIMEPart {
     let headers: [String: String]
@@ -131,17 +219,17 @@ private nonisolated struct MIMEPart {
         body = bodyData
     }
 
-    /// Splits at the first blank line (CRLF or LF).
+    /// Splits at the first blank line (CRLF or LF). Slices, not copies: a nested part would
+    /// otherwise copy its bytes once per level.
     private static func split(_ data: Data) -> (Data, Data) {
-        let bytes = [UInt8](data)
-        var index = 0
-        while index < bytes.count {
-            if bytes[index] == 0x0A {
-                if index + 1 < bytes.count, bytes[index + 1] == 0x0A {
-                    return (Data(bytes[0..<index]), Data(bytes[(index + 2)...]))
+        var index = data.startIndex
+        while index < data.endIndex {
+            if data[index] == 0x0A {
+                if index + 1 < data.endIndex, data[index + 1] == 0x0A {
+                    return (data[data.startIndex..<index], data[(index + 2)...])
                 }
-                if index + 2 < bytes.count, bytes[index + 1] == 0x0D, bytes[index + 2] == 0x0A {
-                    return (Data(bytes[0..<index]), Data(bytes[(index + 3)...]))
+                if index + 2 < data.endIndex, data[index + 1] == 0x0D, data[index + 2] == 0x0A {
+                    return (data[data.startIndex..<index], data[(index + 3)...])
                 }
             }
             index += 1
@@ -149,12 +237,18 @@ private nonisolated struct MIMEPart {
         return (data, Data())
     }
 
+    /// Headers beyond this many bytes are not read (real header blocks are a few kilobytes); a
+    /// message with no blank line would otherwise be parsed whole as headers.
+    static let maximumHeaderBytes = 64 * 1024
+    /// RFC 2046 limits a boundary to 70 characters; a longer one is not searched for.
+    static let maximumBoundaryLength = 70
+
     private static func parseHeaders(_ data: Data) -> [String: String] {
         // Headers are ASCII (RFC 2047 encoded words aside, which memory does not need here).
         // Carriage returns are dropped entirely: with CRLF line endings a header value would
         // otherwise keep a trailing "\r" (not in `.whitespaces`), and "base64\r" or "text/plain\r"
         // would match nothing.
-        let text = String(decoding: data, as: UTF8.self).replacingOccurrences(of: "\r", with: "")
+        let text = String(lossyUTF8: data.prefix(maximumHeaderBytes)).replacingOccurrences(of: "\r", with: "")
         var headers: [String: String] = [:]
         var currentName: String?
         for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
@@ -194,7 +288,8 @@ private nonisolated struct MIMEPart {
     /// instead would mangle a part in a legacy charset (Windows-1254, ISO-8859-9) before its own
     /// charset is applied.
     func children(limit: Int) -> [MIMEPart] {
-        guard let boundary = parameter("boundary", of: "content-type"), !boundary.isEmpty else { return [] }
+        guard let boundary = parameter("boundary", of: "content-type"), !boundary.isEmpty,
+              boundary.count <= Self.maximumBoundaryLength else { return [] }
         let delimiter = Data(("--" + boundary).utf8)
         var parts: [MIMEPart] = []
         var searchStart = body.startIndex
@@ -223,7 +318,7 @@ private nonisolated struct MIMEPart {
         let raw: Data
         switch encoding {
         case "base64":
-            let compact = String(decoding: body, as: UTF8.self).filter { !$0.isWhitespace }
+            let compact = String(lossyUTF8: body).filter { !$0.isWhitespace }
             guard let decoded = Data(base64Encoded: compact, options: .ignoreUnknownCharacters) else { return nil }
             raw = decoded
         case "quoted-printable":

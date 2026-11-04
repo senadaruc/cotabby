@@ -15,6 +15,7 @@ final class RewritePreferencesStore: ObservableObject {
     private let userDefaults: UserDefaults
 
     private enum Key {
+        static let isEnabled = "cotabbyRewriteEnabled"
         static let provider = "cotabbyRewriteProvider"
         static let apiBaseURL = "cotabbyRewriteAPIBaseURL"
         /// Before services existed: the one model name, which now belongs to `custom`.
@@ -30,6 +31,14 @@ final class RewritePreferencesStore: ObservableObject {
         static let fixesMistakes = "cotabbyRewriteFixesMistakes"
     }
 
+    // Everything stored here (a published value and UserDefaults) is safe to release off the main
+    // actor. Without this, the target's default MainActor isolation makes the deinitializer
+    // isolated, and on a macOS 26 runtime (Xcode 26.x toolchains) releasing the store routes
+    // through the back-deployment main-actor executor shim, which double-frees in its
+    // StopLookupScope ("pointer being freed was not allocated"; see SuggestionSettingsModel).
+    // The app keeps one store for its lifetime, but tests create and release many.
+    nonisolated deinit {}
+
     /// `appleIntelligence` is the availability the app knows at launch (nil: not known yet). It only
     /// matters for a stored `local` (the old "Apple Intelligence else Cotabby's model" choice),
     /// which becomes whichever of the two it was running, but only on a DEFINITIVE answer:
@@ -44,6 +53,7 @@ final class RewritePreferencesStore: ObservableObject {
         self.userDefaults = userDefaults
         let defaults = RewritePreferences.defaults
         var loaded = defaults
+        loaded.isEnabled = userDefaults.object(forKey: Key.isEnabled) as? Bool ?? defaults.isEnabled
         let stored = userDefaults.string(forKey: Key.provider)
         if stored == Self.legacyLocal {
             if let migrated = Self.definitiveMigration(appleIntelligence) {
@@ -93,6 +103,11 @@ final class RewritePreferencesStore: ObservableObject {
         guard userDefaults.string(forKey: Key.provider) == Self.legacyLocal,
               let migrated = Self.definitiveMigration(state) else { return }
         setProvider(migrated)
+    }
+
+    func setEnabled(_ value: Bool) {
+        preferences.isEnabled = value
+        userDefaults.set(value, forKey: Key.isEnabled)
     }
 
     func setProvider(_ provider: RewriteProviderKind) {

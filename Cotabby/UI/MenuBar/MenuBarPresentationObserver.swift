@@ -24,24 +24,6 @@ struct MenuBarPresentationObserver: NSViewRepresentable {
     }
 }
 
-/// Pure mapping from a window notification to "the panel is now shown / hidden / no change", so the
-/// start/stop decision is testable without an `NSWindow`.
-enum MenuBarWindowSignal: Equatable {
-    case becameKey
-    case resignedKey
-    case willClose
-    case occlusionChanged(isVisible: Bool)
-
-    /// `true` = presented, `false` = dismissed.
-    var presentation: Bool {
-        switch self {
-        case .becameKey: return true
-        case .resignedKey, .willClose: return false
-        case .occlusionChanged(let isVisible): return isVisible
-        }
-    }
-}
-
 /// Invisible AppKit view that attaches window notifications to a SwiftUI menu-bar panel.
 ///
 /// The view deliberately reports only visibility/key-window transitions. The permission manager
@@ -99,10 +81,10 @@ final class MenuBarPresentationTrackingView: NSView {
                 queue: .main
             ) { [weak self] _ in
                 guard let self, let window = self.observedWindow else { return }
-                // Existing behavior: re-present when visible; additionally report the hide edge.
+                // Visible again re-presents; fully hidden is a dismissal.
                 if window.occlusionState.contains(.visible) {
                     self.refreshIfVisible()
-                } else if MenuBarWindowSignal.occlusionChanged(isVisible: false).presentation == false {
+                } else {
                     self.onDismiss?()
                 }
             },
@@ -111,14 +93,14 @@ final class MenuBarPresentationTrackingView: NSView {
                 object: window,
                 queue: .main
             ) { [weak self] _ in
-                if MenuBarWindowSignal.resignedKey.presentation == false { self?.onDismiss?() }
+                self?.onDismiss?()
             },
             center.addObserver(
                 forName: NSWindow.willCloseNotification,
                 object: window,
                 queue: .main
             ) { [weak self] _ in
-                if MenuBarWindowSignal.willClose.presentation == false { self?.onDismiss?() }
+                self?.onDismiss?()
             }
         ]
     }

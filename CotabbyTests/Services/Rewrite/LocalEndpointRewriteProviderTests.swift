@@ -64,6 +64,8 @@ final class LocalEndpointRewriteProviderTests: XCTestCase {
         XCTAssertTrue(makeProvider(baseURL: "http://192.168.1.50:8000/v1", mode: .chatCompletions).sendsOffDevice)
         XCTAssertTrue(makeProvider(baseURL: "https://api.example.com/v1", mode: .chatCompletions).sendsOffDevice)
         XCTAssertEqual(makeProvider(baseURL: "http://192.168.1.50:8000/v1", mode: .chatCompletions).hostName, "192.168.1.50")
+        XCTAssertEqual(makeProvider(baseURL: "http://192.168.1.50:8000/v1", mode: .chatCompletions).endpointURL,
+                       "http://192.168.1.50:8000/v1")
     }
 
     func test_chatModeSendsTheInstructPromptToTheChatRoute() async throws {
@@ -77,20 +79,20 @@ final class LocalEndpointRewriteProviderTests: XCTestCase {
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer sk-test")
             return Self.sse("Fixed text.")
         }
-        let text = try await provider.rewrite(RewriteRequest(selection: "fixd text", action: .fixOnly, memory: .empty), onPartial: { _ in })
+        let text = try await provider.rewrite(RewriteRequest(selection: "fixd text", action: .fixOnly), onPartial: { _ in })
         XCTAssertEqual(text, "Fixed text.")
         XCTAssertEqual(LocalEndpointStubURLProtocol.requested, ["http://127.0.0.1:11434/v1/chat/completions"])
     }
 
     func test_completionsModeSendsTheBasePromptWithStopSequencesAndABudget() async throws {
         let provider = makeProvider(mode: .completions)
-        let request = RewriteRequest(selection: "fixd text", action: .fixOnly, memory: .empty)
+        let request = RewriteRequest(selection: "fixd text", action: .fixOnly)
         LocalEndpointStubURLProtocol.handler = { httpRequest in
             let body = Self.json(httpRequest)
             XCTAssertEqual(body["prompt"] as? String, RewritePromptBuilder.basePrompt(request))
             XCTAssertNil(body["messages"])
             XCTAssertEqual(body["stop"] as? [String], RewritePromptBuilder.baseStopSequences)
-            XCTAssertEqual(body["max_tokens"] as? Int, RewritePromptBuilder.completionTokenBudget(for: request))
+            XCTAssertEqual(body["max_tokens"] as? Int, RewritePromptBuilder.tokenBudget(request))
             XCTAssertNil(body["top_k"], "no MLX-only fields for a generic endpoint")
             return Self.sse("Fixed text.")
         }
@@ -99,10 +101,22 @@ final class LocalEndpointRewriteProviderTests: XCTestCase {
         XCTAssertEqual(LocalEndpointStubURLProtocol.requested, ["http://127.0.0.1:11434/v1/completions"])
     }
 
+    /// A server that ignores `stop` (or streams part of one) must not put the next example's label
+    /// in the preview or the field: partials and the result are cut at the first stop sequence.
+    func test_completionsModeCutsTheStopTextAServerLeftIn() async throws {
+        let provider = makeProvider(mode: .completions)
+        LocalEndpointStubURLProtocol.handler = { _ in Self.sse("Fixed text.\\n\\nDraft: next one") }
+        var partials: [String] = []
+        let text = try await provider.rewrite(RewriteRequest(selection: "fixd text", action: .fixOnly),
+                                              onPartial: { partials.append($0) })
+        XCTAssertEqual(text, "Fixed text.")
+        XCTAssertFalse(partials.contains { $0.contains("Draft") }, "\(partials)")
+    }
+
     func test_anUnusableConfigurationThrowsWithoutTraffic() async {
         let provider = makeProvider(model: "", mode: .chatCompletions)
         do {
-            _ = try await provider.rewrite(RewriteRequest(selection: "x", action: .fixOnly, memory: .empty), onPartial: { _ in })
+            _ = try await provider.rewrite(RewriteRequest(selection: "x", action: .fixOnly), onPartial: { _ in })
             XCTFail("expected an error")
         } catch {
             XCTAssertEqual(error as? RewriteError, .noProvider)

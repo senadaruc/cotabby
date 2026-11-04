@@ -3,8 +3,8 @@ import Foundation
 import XCTest
 @testable import Cotabby
 
-/// Pins conversation memory's encrypted store: byte compatibility with what the Python service
-/// wrote (so the existing store opens without re-syncing), the scope keys, idempotent upserts,
+/// Pins conversation memory's encrypted store: the on-disk format (fixed known-answer values, so a
+/// change that would make existing stores unreadable fails here), the scope keys, idempotent upserts,
 /// filter-first keyword search, purging, and that nothing personal is readable on disk.
 final class MemoryStoreTests: XCTestCase {
     private var directory: URL!
@@ -20,7 +20,7 @@ final class MemoryStoreTests: XCTestCase {
     }
 
     private func makeStore(key: SymmetricKey? = nil) throws -> MemoryStore {
-        try MemoryStore(path: directory.appendingPathComponent("messages.sqlite"), vault: MemoryVault(masterKey: key ?? self.key))
+        try MemoryStore(path: directory.appendingPathComponent("messages.sqlite"), vault: MemoryVault(rootKey: key ?? self.key))
     }
 
     private func record(
@@ -34,16 +34,18 @@ final class MemoryStoreTests: XCTestCase {
         )
     }
 
-    // MARK: - Compatibility with the Python service
+    // MARK: - On-disk format
 
-    /// Values produced by the Python service's `vault.py` with the key bytes 0..<32.
-    func test_valuesSealedByThePythonServiceOpenAndTagsMatch() throws {
-        let vault = MemoryVault(masterKey: key)
+    /// Known-answer values sealed and tagged with the key bytes 0..<32 (AES-256-GCM and HMAC-SHA256
+    /// with the documented subkeys); they must keep opening and matching.
+    func test_knownSealedValuesOpenAndTagsMatch() throws {
+        let vault = MemoryVault(rootKey: key)
         let sealed = Data(hex: "80dc6f628849e8ace07efe9369c8e34f23f979564036f325faf642dc36bbb6592fe4d24d53979801bab69c57554a160d9b1ab425a2231180a2c83528bd0863")
         XCTAssertEqual(try vault.open(sealed), "Merhaba dünya, the invoice is paid")
         XCTAssertEqual(vault.tag("title\u{1f}poc results"), "195de12496601a745ae14d3ec29655f9")
         XCTAssertNoThrow(try vault.verify(Data(hex: "2c78aafa8701d9ffeda9a7904a36fd8a5b37052a99a8a60919c1e5328d796ffe3087a9a9223a0f8fbb11a80365aa0b78a4257a33f941e1")))
-        XCTAssertEqual(MemoryStore.recordID(source: "whatsapp", sourceMessageID: "A1"), "whatsapp:86da5e534dac21b0e09b")
+        let store = try makeStore()
+        XCTAssertEqual(store.recordID(source: "whatsapp", sourceMessageID: "A1"), "whatsapp:3b81395c7d56517ad8b31f11f3eaf0ae")
         XCTAssertEqual(try vault.open(try vault.seal("round trip")), "round trip")
     }
 
@@ -63,6 +65,18 @@ final class MemoryStoreTests: XCTestCase {
         XCTAssertEqual(try store.conversation(source: "chat", conversationID: "c1")?.participants, ["ayşe"])
     }
 
+    /// A mail's people are its addresses: a display name is the sender's to choose and never an
+    /// identity that could match someone else's conversations.
+    func test_aMailSendersDisplayNameIsNeverAParticipant() throws {
+        let store = try makeStore()
+        try store.upsert(source: "apple_mail", records: [
+            MemoryIngestRecord(sourceMessageID: "m1", conversationID: "t1", conversationTitle: "Budget", sender: "Ayşe",
+                               isFromMe: false, timestamp: Date(), text: "send the numbers",
+                               participants: ["mallory@example.org"], subject: "Budget")
+        ])
+        XCTAssertEqual(try store.conversation(source: "apple_mail", conversationID: "t1")?.participants, ["mallory@example.org"])
+    }
+
     func test_upsertIsIdempotentAndEditsNeedIndexingAgain() throws {
         let store = try makeStore()
         XCTAssertEqual(try store.upsert(source: "chat", records: [record("c1", "original text here", id: "m1")]).changed, 1)
@@ -73,6 +87,59 @@ final class MemoryStoreTests: XCTestCase {
         XCTAssertEqual(try store.upsert(source: "chat", records: [record("c1", "edited text here", id: "m1")]).replacedRecordIDs.count, 1)
         XCTAssertEqual(try store.unindexedMessages(sources: ["chat"], limit: 10).map(\.text), ["edited text here"])
         XCTAssertTrue(try store.vectors(model: "m").isEmpty, "an edited message loses its old vector")
+    }
+
+    /// A message edited, moved or deleted while it was being embedded keeps its new state: the old
+    /// snapshot's vectors are not saved, and it stays pending.
+    func test_indexingNeverSavesAMessageThatChangedWhileItWasEmbedded() throws {
+        let store = try makeStore()
+        try store.upsert(source: "chat", records: [record("c1", "original text here", id: "m1"), record("c1", "second message", id: "m2")])
+        let snapshot = try store.unindexedMessages(sources: ["chat"], limit: 10)
+        try store.upsert(source: "chat", records: [record("c1", "edited text here", id: "m1")])
+        let vector = HalfPrecision.encode([0.5, 0.5, 0.5, 0.5])
+        let saved = try store.saveIndexEntries(snapshot.map { ($0, [("p-" + $0.recordID, vector)]) }, model: "m")
+        let edited = store.recordID(source: "chat", sourceMessageID: "m1")
+        XCTAssertFalse(saved.contains(edited))
+        XCTAssertEqual(saved, [store.recordID(source: "chat", sourceMessageID: "m2")])
+        XCTAssertEqual(try store.unindexedMessages(sources: ["chat"], limit: 10).map(\.text), ["edited text here"])
+        XCTAssertEqual(try store.keywordSearch(query: "edited", conversations: [
+            (source: "chat", conversationKey: store.conversationKey(source: "chat", conversationID: "c1"))
+        ], limit: 5).map(\.recordID), [edited], "the edit's terms survive")
+        try store.deleteSource("chat")
+        XCTAssertTrue(try store.saveIndexEntries(snapshot.map { ($0, [("p-" + $0.recordID, vector)]) }, model: "m").isEmpty,
+                      "a deleted message gets no vectors back")
+        XCTAssertTrue(try store.vectors(model: "m").isEmpty)
+    }
+
+    /// A later read can move a message to another conversation (a corrected mail audience) or
+    /// correct who wrote it; the stored message follows, and an emptied conversation goes.
+    func test_aMessageMovedOrReattributedIsUpdated() throws {
+        let store = try makeStore()
+        try store.upsert(source: "chat", records: [record("A", "the invoice is paid", title: "Alpha", id: "m1")])
+        try store.upsert(source: "chat", records: [record("B", "the invoice is paid", me: true, title: "Beta", id: "m1")])
+        XCTAssertTrue(try store.findConversations(title: "Alpha", sources: ["chat"]).isEmpty, "the emptied conversation is gone")
+        let beta = try XCTUnwrap(try store.findConversations(title: "Beta", sources: ["chat"]).first)
+        XCTAssertEqual(beta.conversationId, "B")
+        let message = try XCTUnwrap(try store.unindexedMessages(sources: ["chat"], limit: 5).first)
+        XCTAssertEqual(message.conversationKey, store.conversationKey(source: "chat", conversationID: "B"))
+        XCTAssertTrue(message.isFromMe)
+    }
+
+    /// Purging an excluded person or conversation leaves no conversation row (sealed title, title
+    /// tag) or participant row behind, only the conversations that still hold messages.
+    func test_purgeRemovesTheConversationsItEmpties() throws {
+        let store = try makeStore()
+        try store.upsert(source: "chat", records: [
+            record("c1", "from the boss", sender: "Boss", title: "Boss", participants: ["Boss"]),
+            record("c2", "lunch at noon", sender: "Can", title: "Can", participants: ["Can"])
+        ])
+        XCTAssertEqual(try store.purge(excludedConversations: [], excludedParticipants: ["Boss"], olderThan: nil), 1)
+        XCTAssertTrue(try store.findConversations(title: "Boss", sources: ["chat"]).isEmpty)
+        XCTAssertNil(try store.conversation(source: "chat", conversationID: "c1"))
+        XCTAssertTrue(try store.conversationsSeenBy(audience: ["boss"], excluding: ("chat", "")).isEmpty)
+        XCTAssertEqual(try store.findConversations(title: "Can", sources: ["chat"]).count, 1)
+        XCTAssertEqual(try store.purge(excludedConversations: ["c2"], excludedParticipants: [], olderThan: nil), 1)
+        XCTAssertNil(try store.conversation(source: "chat", conversationID: "c2"))
     }
 
     func test_vectorsRoundTripAndAnotherModelsVectorsAreDropped() throws {
@@ -120,10 +187,10 @@ final class MemoryStoreTests: XCTestCase {
 
     func test_sameAudienceNeedsExactlyTheSamePeople() throws {
         let store = try makeStore()
-        try store.upsert(source: "chat", records: [record("dm", "private note", me: true, participants: ["Ali"])])
-        try store.upsert(source: "chat", records: [record("group", "group note", me: true, participants: ["Ali", "Valon"])])
-        try store.upsert(source: "mail", records: [record("thread", "mail to ali", me: true, participants: ["ali"])])
-        let seen = try store.conversationsSeenBy(audience: ["Ali"], excluding: nil)
+        try store.upsert(source: "chat", records: [record("dm", "private note", me: true, participants: ["Avery"])])
+        try store.upsert(source: "chat", records: [record("group", "group note", me: true, participants: ["Avery", "Vic"])])
+        try store.upsert(source: "mail", records: [record("thread", "mail to avery", me: true, participants: ["avery"])])
+        let seen = try store.conversationsSeenBy(audience: ["Avery"], excluding: nil)
         XCTAssertEqual(Set(seen.map(\.source)), ["chat", "mail"])
         XCTAssertFalse(seen.contains { $0.conversationKey == store.conversationKey(source: "chat", conversationID: "group") })
     }
@@ -131,13 +198,13 @@ final class MemoryStoreTests: XCTestCase {
     func test_taggedKeywordSearchFindsWholeWordsAcrossConversations() throws {
         let store = try makeStore()
         try store.upsert(source: "outlook", records: [
-            record("t1", "THY POC passed all detection tests"), record("t2", "lunch on friday"),
+            record("t1", "Acme POC passed all acceptance tests"), record("t2", "lunch on friday"),
         ])
         let messages = try store.unindexedMessages(sources: ["outlook"], limit: 10)
         try store.saveIndexEntries(messages.map { ($0, []) }, model: "m")
-        let hits = try store.taggedKeywordSearch(query: "how did the THY POC go?", sources: ["outlook"], limit: 5)
-        XCTAssertEqual(try hits.compactMap { try store.message(recordID: $0)?.text }, ["THY POC passed all detection tests"])
-        XCTAssertTrue(try store.taggedKeywordSearch(query: "THY", sources: ["whatsapp"], limit: 5).isEmpty)
+        let hits = try store.taggedKeywordSearch(query: "how did the Acme POC go?", sources: ["outlook"], limit: 5)
+        XCTAssertEqual(try hits.compactMap { try store.message(recordID: $0)?.text }, ["Acme POC passed all acceptance tests"])
+        XCTAssertTrue(try store.taggedKeywordSearch(query: "Acme", sources: ["whatsapp"], limit: 5).isEmpty)
     }
 
     func test_nothingPersonalIsReadableOnDisk() throws {

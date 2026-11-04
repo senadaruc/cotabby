@@ -124,7 +124,7 @@ protocol SuggestionHistoryProviding: AnyObject {
 }
 
 /// Read-only access to conversation memory (earlier messages of the conversation being written in,
-/// from the local LEANN memory service) for the suggestion pipeline.
+/// from the on-device memory engine) for the suggestion pipeline.
 ///
 /// Never waits: it answers from what is already cached for the field's conversation and query, and
 /// starts a lookup for the next request when that is stale, so memory can never delay a

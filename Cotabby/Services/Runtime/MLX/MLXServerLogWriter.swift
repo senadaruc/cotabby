@@ -7,6 +7,10 @@ import Foundation
 /// buffer in the app. Both MLX servers (autocomplete and rewrite) write to the one file, each start
 /// opening with a header line that says which server, pid, model and port the lines below belong to.
 ///
+/// Debug-only, like the JSONL sinks: `MLXLiveProcessLauncher` uses the shared writer only when the
+/// app runs with `-cotabby-debug` (`CotabbyDebugOptions.isEnabled`). In a normal run the server's
+/// stderr stays in memory and nothing is written here.
+///
 /// Owned by `MLXLiveProcessLauncher` (a single shared writer). `write` is called from the pipe's
 /// readability handler on a background thread, so the handle is guarded by a lock and nothing here
 /// touches the main actor. Rotation is the same one-step scheme as `LLMIOFileWriter`.

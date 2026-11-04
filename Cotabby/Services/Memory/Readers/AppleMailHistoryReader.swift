@@ -9,12 +9,15 @@ import Foundation
 /// by Full Disk Access. The layout is undocumented, so columns are probed before reading.
 ///
 /// Mapping to memory records:
-/// - Conversation: Mail's own thread (`conversation_id`), titled with the thread's subject without
-///   its "Re:"/"Fwd:" prefix; the compose window's title is that subject, which is how Cotabby finds
-///   the thread for the message being written.
+/// - Conversation: Mail's own thread (`conversation_id`) with the message's people, titled with the
+///   thread's subject without its "Re:"/"Fwd:" prefix (what the Playground lists; suggestions do
+///   not look mail threads up by subject, see `ConversationScopeResolver`). Mail joins a thread by
+///   References/In-Reply-To headers and subjects, which any sender controls, so a thread id alone
+///   could fold an outsider's mail (and later replies to them) into a thread they never saw; each
+///   audience within a thread is therefore its own conversation (`conversationID`).
 /// - From me: the message is filed in a Sent mailbox or carries a Sent label (Gmail). The From
 ///   address alone is not enough: anyone can write the user's address there, and a spoofed mail
-///   marked as the user's own would put words in the user's mouth when answers quote memory.
+///   marked as the user's own would put words in the user's mouth when a prompt attributes it to "You".
 ///   Another copy of a sent message (the inbox copy of mail sent to a list the user is on) is
 ///   skipped as a duplicate rather than trusted by its Message-ID, which a sender can reuse.
 /// - Mailbox roles come from the mailbox path, never the account or host part of the URL, where a
@@ -25,13 +28,13 @@ import Foundation
 ///   user's own addresses are the senders of Sent mail.
 /// - Junk and spam mailboxes are skipped.
 /// - Body: Mail's stored summary when present, else the `.emlx` file parsed by
-///   `EmailBodyExtractor`. Quoted history is stripped by the service.
+///   `EmailBodyExtractor`. Quoted history is stripped by the engine.
 /// - Cursor: the message's ROWID, which only grows.
 nonisolated struct AppleMailHistoryReader: MemoryHistoryReading {
     let sourceID = "apple_mail"
     let mailRoot: String
-    /// The ROWID -> `.emlx` map, built once per reader (one sync run) instead of once per page:
-    /// walking a large mail folder takes seconds.
+    /// The ROWID -> `.emlx` map, built once and reused across pages and syncs (walking a large mail
+    /// folder takes seconds), rebuilt when mail newer than the map needs its file.
     private let fileIndex = EmlxFileIndex()
 
     init(mailRoot: String = NSHomeDirectory() + "/Library/Mail/V10") {
@@ -92,8 +95,8 @@ nonisolated struct AppleMailHistoryReader: MemoryHistoryReading {
 
         let ownAddresses = try Self.ownAddresses(database, sent: sent)
         let recipients = try Self.recipients(of: rows.compactMap { $0["rowid"]?.int }, database: database)
-        let needFiles = rows.contains { ($0["summary"]?.string?.count ?? 0) < 40 }
-        let files = needFiles ? fileIndex.files(under: mailRoot, build: emlxFiles) : [:]
+        let needed = rows.filter { ($0["summary"]?.string?.count ?? 0) < 40 }.compactMap { $0["rowid"]?.int }
+        let files = needed.isEmpty ? [:] : fileIndex.files(needing: needed, build: emlxFiles)
 
         var records: [MemoryIngestRecord] = []
         for row in rows {
@@ -112,7 +115,7 @@ nonisolated struct AppleMailHistoryReader: MemoryHistoryReading {
             guard let text = body, !text.isEmpty else { continue }
             let subject = Self.baseSubject(row["subject"]?.string ?? "")
             let others = Set(([senderAddress] + (recipients[rowid] ?? [])).filter { !$0.isEmpty && !ownAddresses.contains($0) })
-            let thread = row["thread"]?.int.map(String.init) ?? "message-\(rowid)"
+            let thread = Self.conversationID(thread: row["thread"]?.int, rowID: rowid, people: others)
             records.append(MemoryIngestRecord(
                 sourceMessageID: String(rowid),
                 conversationID: thread,
@@ -150,13 +153,23 @@ nonisolated struct AppleMailHistoryReader: MemoryHistoryReading {
         case other
     }
 
+    /// Mail's own thread id plus the message's people (everyone but the user). A missing or zero id
+    /// (no thread) gives the message a conversation of its own, never a bucket shared with every
+    /// other unthreaded message. The people are part of the id because Mail threads by headers a
+    /// sender controls: a stranger who joins a thread, or a reply with someone new on it, becomes
+    /// another conversation instead of gaining the thread's history.
+    static func conversationID(thread: Int64?, rowID: Int64, people: Set<String>) -> String {
+        guard let thread, thread > 0 else { return "message-\(rowID)" }
+        return MailAudience.conversationID(thread: String(thread), people: people)
+    }
+
     /// Sent and junk folder names across providers and the user's languages, compared without case
     /// or accents ("Gönderilmiş Öğeler" matches "gonderilmis ogeler").
     static let sentNames: Set<String> = [
         "sent", "sent messages", "sent mail", "sent items", "gonderilmis ogeler", "gonderilmis postalar",
         "gonderilenler", "gonderilen", "gesendet", "gesendete elemente", "gesendete objekte", "elements envoyes",
         "envoyes", "messages envoyes", "enviados", "elementos enviados", "itens enviados", "posta inviata",
-        "verzonden items", "verzonden",
+        "verzonden items", "verzonden"
     ]
     static let junkWords = ["junk", "spam", "bulk", "gereksiz", "istenmeyen", "indesirable", "no deseado"]
 
@@ -250,7 +263,9 @@ nonisolated struct AppleMailHistoryReader: MemoryHistoryReading {
     /// compose window's title) agree on one title.
     static func baseSubject(_ subject: String) -> String {
         var result = subject.trimmingCharacters(in: .whitespaces)
-        let prefix = try? NSRegularExpression(pattern: "^(re|fw|fwd|aw|wg|sv|ynt|ilt|tr)\\s*(\\[\\d+\\])?\\s*:\\s*", options: .caseInsensitive)
+        let prefix = try? NSRegularExpression(
+            pattern: "^(re|fw|fwd|aw|wg|sv|ynt|ilt|tr)\\s*(\\[\\d+\\])?\\s*:\\s*", options: .caseInsensitive
+        )
         while let prefix, let match = prefix.firstMatch(in: result, range: NSRange(result.startIndex..., in: result)),
               let range = Range(match.range, in: result) {
             result.removeSubrange(range)
@@ -270,16 +285,23 @@ nonisolated struct AppleMailHistoryReader: MemoryHistoryReading {
 
 /// Caches the `.emlx` file map for one reader. A class (with a lock) so the reader struct can stay
 /// a Sendable value while the map is built lazily on first need.
-nonisolated private final class EmlxFileIndex: @unchecked Sendable {
+///
+/// The reader lives as long as the app, so the map is rebuilt when a page needs the file of mail
+/// newer than anything in it (it arrived after the map was built); otherwise that mail's body
+/// would be missing and the cursor would move past it for good. A needed message older than the
+/// map's newest simply has no file (Mail has not downloaded it), and does not trigger a rebuild.
+nonisolated final class EmlxFileIndex: @unchecked Sendable {
     private let lock = NSLock()
     private var cached: [Int64: String]?
+    private var newest: Int64 = .min
 
-    func files(under root: String, build: () -> [Int64: String]) -> [Int64: String] {
+    func files(needing rowIDs: [Int64], build: () -> [Int64: String]) -> [Int64: String] {
         lock.lock()
         defer { lock.unlock() }
-        if let cached { return cached }
+        if let cached, !rowIDs.contains(where: { cached[$0] == nil && $0 > newest }) { return cached }
         let built = build()
         cached = built
+        newest = built.keys.max() ?? .min
         return built
     }
 }

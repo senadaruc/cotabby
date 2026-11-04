@@ -6,8 +6,8 @@ import XCTest
 final class FocusSelectionTextTests: XCTestCase {
     func test_extractsTheSelectedRange() {
         XCTAssertEqual(
-            FocusSelectionText.extract(windowText: "Dear Richard, I brought you", windowSelection: NSRange(location: 5, length: 7)),
-            "Richard"
+            FocusSelectionText.extract(windowText: "Dear Charlie, I brought you", windowSelection: NSRange(location: 5, length: 7)),
+            "Charlie"
         )
     }
 

@@ -67,13 +67,3 @@ final class MenuResourceMonitorTests: XCTestCase {
         XCTAssertEqual(monitor.summary?.includesMLXServer, true)
     }
 }
-
-final class MenuBarWindowSignalTests: XCTestCase {
-    func testSignalsMapToPresentation() {
-        XCTAssertTrue(MenuBarWindowSignal.becameKey.presentation)
-        XCTAssertFalse(MenuBarWindowSignal.resignedKey.presentation)
-        XCTAssertFalse(MenuBarWindowSignal.willClose.presentation)
-        XCTAssertTrue(MenuBarWindowSignal.occlusionChanged(isVisible: true).presentation)
-        XCTAssertFalse(MenuBarWindowSignal.occlusionChanged(isVisible: false).presentation)
-    }
-}

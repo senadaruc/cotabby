@@ -9,9 +9,11 @@ import FoundationModels
 /// (the Foundation Models path, which follows instructions) and `OpenSourceRewriteProvider` (the
 /// local llama model with the base-model example prompt: weaker, which the Settings pane labels
 /// "basic quality"). Neither has a rewrite-only model: both use what autocomplete uses. The llama
-/// provider shares the runtime with autocomplete like `AnswerDraftEngine`: a rewrite waits for an
-/// in-flight suggestion and resets the prompt cache once. Owned by `RewriteEngine`. The file keeps
-/// its old name because `PartialRelay`, which the llama path needs, lives here too.
+/// provider shares the runtime with autocomplete like `AnswerDraftEngine`: `LlamaRuntimeCore`
+/// serializes generations, so a rewrite waits for an in-flight suggestion, and the next suggestion
+/// re-decodes its own prompt because the core reuses a cached prefix only when its tokens still
+/// match. Owned by `RewriteEngine`. The file keeps its old name because `PartialRelay`, which the
+/// llama path needs, lives here too.
 
 /// Rewrites with Apple Intelligence (instruct prompt, fresh session per rewrite).
 @MainActor

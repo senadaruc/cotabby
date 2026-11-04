@@ -35,23 +35,25 @@ nonisolated enum RewritePromptBuilder {
         return baseStopSequences
     }
 
-    /// The in-process (Apple Intelligence and llama) output budget: for a rewrite about 1.5x the
-    /// selection's tokens (about 4 characters per token) plus a margin, for a translation about
-    /// 2.5x, both capped.
+    /// The output budget for every provider that has one (Apple Intelligence, llama, an endpoint's or
+    /// MLX's completions route): about 1.5× the selection's tokens (≈4 characters per token) plus a
+    /// margin, capped. Longer gets room for what `RewriteOutputCleaner` lets it grow to (8× plus 400
+    /// characters), so a fuller message is not cut off mid-sentence and previewed as if it were
+    /// complete. A translation can be longer than its source (CJK or Turkish into English), so it
+    /// gets roughly 5/8 of the selection's characters plus a margin instead of 3/8. On a completions
+    /// route this number is the only length limit.
     static func tokenBudget(_ request: RewriteRequest) -> Int {
-        // Translation output can be longer than its source (CJK or Turkish into English), so it
-        // gets roughly 5/8 of the selection's characters plus a margin instead of 3/8.
-        if case .translate = request.action { return min(800, request.selection.count * 5 / 8 + 64) }
-        return min(800, request.selection.count * 3 / 8 + 48)
+        let count = request.selection.count
+        if case .translate = request.action { return min(800, count * 5 / 8 + 64) }
+        return min(800, request.action == .longer ? count * 2 + 100 : count * 3 / 8 + 48)
     }
 
-    /// The output budget for a base-model (completions) rewrite on an endpoint or MLX server, whose
-    /// only length limit is this number. It matches the in-process budget (`tokenBudget`, capped at
-    /// 800 so a long selection is not cut); Longer adds room to expand, at twice the selection's
-    /// estimated tokens (about 4 characters each), clamped to 64...800.
-    static func completionTokenBudget(for request: RewriteRequest) -> Int {
-        guard request.action == .longer else { return tokenBudget(request) }
-        return min(800, max(64, request.selection.count / 4 * 2))
+    /// The base model's output up to the earliest stop sequence. Decoding stops once the text
+    /// contains one, so the text still ends with it ("Fine.\n\nDraft:"); left in, the next example's
+    /// label would be previewed and pasted.
+    static func cutAtBaseStop(_ text: String) -> String {
+        let cut = baseStopSequences.compactMap { text.range(of: $0)?.lowerBound }.min()
+        return cut.map { String(text[..<$0]) } ?? text
     }
 
     // The switch lists every action on purpose, so the compiler forces a new case to get a line here.
@@ -176,22 +178,31 @@ nonisolated enum RewritePromptBuilder {
     /// kept 15 of 15; a draft whose language is unknown keeps the unlabelled pattern.
     static func basePrompt(_ request: RewriteRequest) -> String {
         if case .translate(let target) = request.action { return translateBasePrompt(request, target: target) }
+        let example = baseExample(request.action)
+        var header = request.language == nil
+            ? "Each draft below is rewritten. \(actionLine(request.action))"
+            : "Each draft below is rewritten in its own language. \(actionLine(request.action))"
+        // A refinement keeps the tone that produced its draft, as in the instruct prompt.
+        if let tone = request.tone, let description = toneDescription(tone) {
+            header += " Keep the same tone: \(description)."
+        }
+        // The examples already fix typos, so only the opposite choice needs a line of its own.
+        if !request.fixesMistakes, let fixLine = fixLine(request) {
+            header += " \(fixLine)"
+        }
         guard let language = request.language else {
-            let example = baseExample(request.action)
-            var prompt = "Each draft below is rewritten. \(actionLine(request.action)) Same language, same meaning.\n\n"
+            var prompt = "\(header) Same language, same meaning.\n\n"
             prompt += factsLine(request)
             prompt += "Draft: \(example.draft)\nRewritten: \(example.rewritten)\n\n"
             prompt += "Draft: \(request.selection)\nRewritten:"
             return prompt
         }
-        var prompt = "Each draft below is rewritten in its own language. \(actionLine(request.action)) "
-            + "Written in \(language), same meaning.\n\n"
+        var prompt = "\(header) Written in \(language), same meaning.\n\n"
         prompt += factsLine(request)
-        let english = baseExample(request.action)
         if language == "English" {
-            prompt += labelledPair(english, language: "English")
+            prompt += labelledPair(example, language: "English")
         } else if let native = nativeExample(request.action, language: language) {
-            prompt += labelledPair(english, language: "English") + labelledPair(native, language: language)
+            prompt += labelledPair(example, language: "English") + labelledPair(native, language: language)
         }
         prompt += "Draft (\(language)): \(request.selection)\nRewritten (\(language)):"
         return prompt
@@ -285,13 +296,26 @@ nonisolated enum RewritePromptBuilder {
         case .closeFriend:
             return ("Are you available to meet this evening?", "you free tonight? let's grab something")
         case .customer:
-            return ("we got your problem, will fix soon", "Thank you for letting us know. We are looking into the issue and will update you shortly.")
+            return (
+                "we got your problem, will fix soon",
+                "Thank you for letting us know. We are looking into the issue and will update you shortly."
+            )
         case .shorter:
-            return ("I just wanted to let you know that I will not be able to make it to the meeting tomorrow.", "I can't make it to tomorrow's meeting.")
+            return (
+                "I just wanted to let you know that I will not be able to make it to the meeting tomorrow.",
+                "I can't make it to tomorrow's meeting."
+            )
         case .longer:
-            return ("can we meet tomorrow", "Could we meet tomorrow? I'd like to go over where things stand and agree on the next steps. Let me know what time works for you.")
+            return (
+                "can we meet tomorrow",
+                "Could we meet tomorrow? I'd like to go over where things stand and agree on the next steps. "
+                    + "Let me know what time works for you."
+            )
         case .rewrite, .custom, .translate:
-            return ("i will send u the file tomorow, sory for the delay its been busy", "I'll send you the file tomorrow. Sorry for the delay, it's been busy.")
+            return (
+                "i will send u the file tomorow, sory for the delay its been busy",
+                "I'll send you the file tomorrow. Sorry for the delay, it's been busy."
+            )
         }
     }
 

@@ -197,6 +197,73 @@ final class MLXRewriteServerControllerTests: XCTestCase {
         XCTAssertEqual(launcher.launches[0].process.terminateCount, 1)
     }
 
+    /// A Settings change (provider, engine, model) asks for a stop; a rewrite still streaming on the
+    /// server finishes first instead of failing with a dropped connection.
+    func test_stopWaitsForARewriteInFlight() async throws {
+        let controller = makeController()
+        async let configuration = controller.readyConfiguration(modelID: modelA)
+        await becomeReady()
+        _ = try await configuration
+        controller.beginUse()
+        let stopReturned = StopFlag()
+        Task {
+            await controller.stop()
+            stopReturned.isSet = true
+        }
+        for _ in 0..<5 { await Task.yield() }
+        if case .ready = manager.state {} else { XCTFail("stopped under a running rewrite: \(manager.state)") }
+        XCTAssertEqual(launcher.launches[0].process.terminateCount, 0)
+        XCTAssertFalse(stopReturned.isSet, "a deferred stop returns only once the server is down")
+        controller.endUse()
+        await waitUntil { stopReturned.isSet }
+        XCTAssertEqual(manager.state, .idle, "the caller may start another server on the same model now")
+        XCTAssertEqual(launcher.launches[0].process.terminateCount, 1)
+    }
+
+    /// A Settings change that was undone while a rewrite was still running: the next rewrite wants the
+    /// server, so the deferred stop is dropped and the server keeps running for it.
+    func test_aLaterStartCancelsADeferredStop() async throws {
+        // The idle timer waits on a gate, so only a deferred stop could stop the server here.
+        let gate = SleepGate()
+        let controller = makeController(sleep: { duration in
+            if duration >= .seconds(60) { await gate.pause() } else { await Task.yield() }
+        })
+        async let first = controller.readyConfiguration(modelID: modelA)
+        await becomeReady()
+        _ = try await first
+        controller.beginUse()
+        let stopReturned = StopFlag()
+        Task {
+            await controller.stop()
+            stopReturned.isSet = true
+        }
+        for _ in 0..<5 { await Task.yield() }
+        controller.beginUse()
+        _ = try await controller.readyConfiguration(modelID: modelA)
+        await waitUntil { stopReturned.isSet }
+        controller.endUse()
+        controller.endUse()
+        for _ in 0..<5 { await Task.yield() }
+        if case .ready = manager.state {} else { XCTFail("a dropped stop still ran: \(manager.state)") }
+        XCTAssertEqual(launcher.launches[0].process.terminateCount, 0)
+    }
+
+    func test_quittingReleasesAWaitOnADeferredStop() async throws {
+        let controller = makeController()
+        async let configuration = controller.readyConfiguration(modelID: modelA)
+        await becomeReady()
+        _ = try await configuration
+        controller.beginUse()
+        let stopReturned = StopFlag()
+        Task {
+            await controller.stop()
+            stopReturned.isSet = true
+        }
+        for _ in 0..<5 { await Task.yield() }
+        controller.prepareForShutdown()
+        await waitUntil { stopReturned.isSet }
+    }
+
     func test_canRunMatchesTheResolver() {
         XCTAssertTrue(makeController().canRun(modelID: modelA))
         XCTAssertFalse(makeController(toolchain: .notInstalled).canRun(modelID: modelA))
@@ -279,4 +346,14 @@ final class MLXRewriteServerControllerTests: XCTestCase {
         XCTAssertEqual(makeController(toolchain: .notInstalled).unavailableReason(modelID: modelA),
                        MLXUnavailableReason.notInstalled.message)
     }
+}
+
+/// Set when a `stop()` call returns, read from the test on the main actor.
+@MainActor
+private final class StopFlag {
+    var isSet = false
+
+    // Released at the end of each test; a MainActor deinit would go through the back-deployment
+    // executor shim that double-frees on a macOS 26 runtime.
+    nonisolated deinit {}
 }

@@ -193,8 +193,9 @@ final class OpenAICompatibleAPIClient {
                 accumulated += text
                 onPartialRawText?(accumulated)
                 // Returning leaves the `for await`, which cancels the URLSession task and closes the
-                // socket. mlx_lm.server notices on its next token write and stops decoding, so an
-                // early stop here saves server time as well as the wait.
+                // socket. mlx_lm.server's handler fails on its next write and marks the request
+                // stopped, and its generation thread drops it at the next token, so an early stop
+                // here saves server time as well as the wait.
                 if let stopWhen, stopWhen(accumulated, textEvents) {
                     return accumulated
                 }

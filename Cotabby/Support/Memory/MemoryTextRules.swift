@@ -6,13 +6,12 @@ import Foundation
 ///
 /// Why pure and in one place: these decide what is stored (secrets removed, quoted mail dropped)
 /// and which conversation a window belongs to, so they are deterministic functions pinned by
-/// tests. They were first written for the Python memory service (`scrub.py`, `store.py`,
-/// `records.py`); the patterns here are the same, so messages stored by either agree on their
-/// keys and on what was redacted.
+/// tests. The keys are part of the stored data (HMAC tags of these normalized forms), so changing a
+/// rule means re-syncing what is already stored.
 
 /// How a conversation title is matched: case- and space-insensitively, without bidi marks, a
-/// leading unread badge ("(3) ") or mail reply prefixes, so the compose window "Re: POC results"
-/// finds the thread stored as "POC results".
+/// leading unread badge ("(3) ") or mail reply prefixes, so "Re: POC results" and "POC results" are
+/// one thread's title.
 nonisolated enum ConversationTitleKey {
     static func key(_ title: String) -> String {
         var cleaned = title.replacingOccurrences(
@@ -34,7 +33,7 @@ nonisolated enum ConversationTitleKey {
 }
 
 /// People are compared case-insensitively with surrounding space and mail brackets dropped, so
-/// "Ayşe Yılmaz <ayse@x.com>" in one source and "ayse@x.com" in another are the same person.
+/// "Ayşe Yılmaz <ayse@example.com>" in one source and "ayse@example.com" in another are the same person.
 nonisolated enum ParticipantNormalizer {
     static func normalize(_ name: String) -> String {
         var cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -42,6 +41,17 @@ nonisolated enum ParticipantNormalizer {
             cleaned = String(cleaned[open.upperBound..<cleaned.index(before: cleaned.endIndex)])
         }
         return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+/// A mail conversation: one thread with one audience. Mail clients join threads by References,
+/// In-Reply-To and subject, which any sender controls, so the thread id alone could put a stranger,
+/// or a reply with someone new on it, into a conversation whose history they never saw. Each set of
+/// people (the user left out) within a thread is a conversation of its own, and memory's "exactly
+/// the same people" rules then hold by construction.
+nonisolated enum MailAudience {
+    static func conversationID(thread: String, people: Set<String>) -> String {
+        thread + "|" + people.map(ParticipantNormalizer.normalize).sorted().joined(separator: ",")
     }
 }
 
@@ -60,7 +70,7 @@ nonisolated enum MemoryTextScrubber {
         #"\b(?:sk|pk|rk|ghp|gho|xox[abpr]|AKIA|AIza)[-_A-Za-z0-9]{12,}\b"#,
         #"\b[A-Za-z0-9_\-]{32,}\b"#,
         // "password: x", "şifre: x", "pin 1234": the value after the label goes.
-        #"(?i)\b(password|passwd|pwd|parola|şifre|sifre|pin|passcode|token|secret)\b\s*[:=]?\s*\S+"#,
+        #"(?i)\b(password|passwd|pwd|parola|şifre|sifre|pin|passcode|token|secret)\b\s*[:=]?\s*\S+"#
     ].compactMap { try? NSRegularExpression(pattern: $0) }
 
     /// A message that is mainly a one-time code ("Your code is 482913", "Doğrulama kodu: 4829").
@@ -191,7 +201,7 @@ nonisolated enum KeywordScorer {
                 let frequency = Double(matches(term, tokens))
                 guard frequency > 0 else { continue }
                 let df = Double(documentFrequency[term] ?? 0)
-                let idf = log(1 + (count - df + 0.5) / (df + 0.5))
+                let idf: Double = Foundation.log(1 + (count - df + 0.5) / (df + 0.5))
                 score += idf * frequency * 2.2 / (frequency + 1.2 * (0.25 + 0.75 * Double(tokens.count) / averageLength))
             }
             if score > 0 { scored.append((score, index)) }
@@ -202,12 +212,23 @@ nonisolated enum KeywordScorer {
 }
 
 /// Weighted reciprocal rank fusion of a vector ranking and a keyword ranking: robust to their
-/// incomparable score scales. `vectorWeight` 1 is pure vector, 0 pure keyword.
+/// incomparable score scales. `vectorWeight` 1 is pure vector, 0 pure keyword. `rankOffset` is
+/// RRF's usual k = 60, which damps the gap between the top few ranks.
 nonisolated enum ReciprocalRankFusion {
-    static func fuse(vector: [String], keyword: [String], vectorWeight: Double, k: Double = 60) -> [(id: String, score: Double)] {
+    static func fuse(vector: [String], keyword: [String], vectorWeight: Double, rankOffset: Double = 60)
+        -> [(id: String, score: Double)] {
         var scores: [String: Double] = [:]
-        for (rank, id) in vector.enumerated() { scores[id, default: 0] += vectorWeight / (k + Double(rank) + 1) }
-        for (rank, id) in keyword.enumerated() { scores[id, default: 0] += (1 - vectorWeight) / (k + Double(rank) + 1) }
+        for (rank, id) in vector.enumerated() { scores[id, default: 0] += vectorWeight / (rankOffset + Double(rank) + 1) }
+        for (rank, id) in keyword.enumerated() { scores[id, default: 0] += (1 - vectorWeight) / (rankOffset + Double(rank) + 1) }
         return scores.map { (id: $0.key, score: $0.value) }.sorted { $0.score != $1.score ? $0.score > $1.score : $0.id < $1.id }
+    }
+}
+
+nonisolated extension String {
+    /// Text from bytes that should be UTF-8, with any invalid sequence replaced by U+FFFD rather
+    /// than failing: the readers decode other apps' stores, and one stray byte in a message must
+    /// cost a character, not the whole message (the failable `String(bytes:encoding:)` would).
+    init<Bytes: Collection>(lossyUTF8 bytes: Bytes) where Bytes.Element == UInt8 {
+        self.init(decoding: bytes, as: UTF8.self)
     }
 }

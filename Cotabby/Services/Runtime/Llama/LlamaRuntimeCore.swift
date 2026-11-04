@@ -420,13 +420,10 @@ nonisolated final class LlamaRuntimeCore: @unchecked Sendable {
                 accumulated: generatedText,
                 tokensGenerated: tokensGenerated,
                 minimumTokens: options.sentenceStopMinimumTokens,
-                minimumWords: options.sentenceStopMinimumWords
+                minimumWords: options.sentenceStopMinimumWords,
+                stopSequences: options.stopSequences
             ) {
                 stopReason = earlyStop.rawValue
-                break
-            }
-            if !options.stopSequences.isEmpty, options.stopSequences.contains(where: { generatedText.contains($0) }) {
-                stopReason = "stop_sequence"
                 break
             }
             if tokensGenerated >= options.maxPredictionTokens { break }

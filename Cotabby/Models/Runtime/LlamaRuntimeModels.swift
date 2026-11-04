@@ -213,8 +213,9 @@ struct LlamaGenerationOptions: Equatable, Sendable {
 
     /// Decoding stops as soon as the generated text contains any of these strings; the text keeps
     /// the match, which the caller trims. Used where a base model writes a turn of a transcript
-    /// (answer drafting) and must stop where the next speaker's label would begin. Empty for
-    /// autocomplete.
+    /// (answer drafting) or continues a document of examples (selection rewrite's "Draft: …
+    /// Rewritten: …" pairs) and must stop where the next speaker's label or example would begin.
+    /// Empty for autocomplete.
     var stopSequences: [String] = []
 }
 

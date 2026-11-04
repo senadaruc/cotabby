@@ -13,9 +13,9 @@ import FoundationModels
 /// whatever engine autocomplete uses: an answer's facts come from memory, which never leaves the Mac.
 ///
 /// The local model is shared with autocomplete (same runtime and lock), so a draft waits for an
-/// in-flight suggestion and vice versa, and drafting resets the runtime's prompt cache: the next
-/// suggestion decodes its prompt from scratch once. Drafts are rare (one per question), so this is
-/// the accepted cost. Owned by `AnswerCoordinator`.
+/// in-flight suggestion and vice versa, and the next suggestion decodes its own prompt again,
+/// because the runtime reuses a cached prefix only while its tokens still match. Drafts are rare
+/// (one per question), so this is the accepted cost. Owned by `AnswerCoordinator`.
 @MainActor
 final class AnswerDraftEngine {
     struct Draft: Equatable, Sendable {
@@ -35,6 +35,10 @@ final class AnswerDraftEngine {
         self.availability = availability
     }
 
+    /// See `SuggestionQualityMetricsStore`: a stored-property main-actor class releases through a
+    /// nonisolated deinit, avoiding the isolated-deinit runtime path.
+    nonisolated deinit {}
+
     /// Whether any on-device model can draft right now.
     var canDraft: Bool { isAppleAvailable || hasLocalModel() }
 
@@ -47,14 +51,31 @@ final class AnswerDraftEngine {
         return false
     }
 
+    /// Which model drafts.
+    nonisolated enum Drafter: Equatable, Sendable {
+        case apple
+        case local
+    }
+
+    /// Apple Intelligence whenever it is available, and then only it: when it abstains ("the facts
+    /// do not answer this"), that is the answer, and the weaker local model never drafts anyway. The
+    /// local model drafts only when Apple Intelligence is not available.
+    nonisolated static func drafter(appleAvailable: Bool, hasLocalModel: Bool) -> Drafter? {
+        if appleAvailable { return .apple }
+        return hasLocalModel ? .local : nil
+    }
+
     /// The draft, or nil when the model abstained or produced nothing usable.
     func draft(question: String, asker: String?, facts: [AnswerPromptRenderer.Fact]) async throws -> Draft? {
-        if isAppleAvailable, let text = try await draftWithApple(question: question, asker: asker, facts: facts) {
-            return Draft(text: text, engine: "apple")
+        switch Self.drafter(appleAvailable: isAppleAvailable, hasLocalModel: hasLocalModel()) {
+        case .apple:
+            return try await draftWithApple(question: question, asker: asker, facts: facts).map { Draft(text: $0, engine: "apple") }
+        case .local:
+            return try await Self.draftLocally(runtimeManager: runtimeManager, question: question, asker: asker, facts: facts)
+                .map { Draft(text: $0, engine: "llama") }
+        case nil:
+            return nil
         }
-        guard hasLocalModel() else { return nil }
-        return try await Self.draftLocally(runtimeManager: runtimeManager, question: question, asker: asker, facts: facts)
-            .map { Draft(text: $0, engine: "llama") }
     }
 
     /// The local model's draft: the base-model transcript prompt with answer-sized options. Static
@@ -85,7 +106,7 @@ final class AnswerDraftEngine {
             let response = try await session.respond(
                 to: prompt, options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 200)
             )
-            return AnswerPromptRenderer.cleanedAnswer(response.content, asker: asker)
+            return AnswerPromptRenderer.cleanedAnswer(response.content, asker: asker, cutsAtStopSequences: false)
         }
         #endif
         return nil

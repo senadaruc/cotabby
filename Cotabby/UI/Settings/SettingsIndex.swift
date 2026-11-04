@@ -69,6 +69,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
     case translationOnSelectShortcut
     case contextLivePreview
     // Rewrite
+    case rewriteEnabled
     case rewriteProvider
     case rewriteMemory
     case rewriteButton
@@ -183,6 +184,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .translationLanguages: return "Translation Languages"
         case .translationOnSelect: return "Translate Selected Text"
         case .translationOnSelectShortcut: return "Translate Selection Shortcut"
+        case .rewriteEnabled: return "Rewrite Selected Text"
         case .rewriteProvider: return "Rewrite Model"
         case .rewriteMemory: return "Rewrite with Memory"
         case .rewriteButton: return "Rewrite Button"
@@ -291,6 +293,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .translationLanguages: return "globe"
         case .translationOnSelect: return "text.magnifyingglass"
         case .translationOnSelectShortcut: return "keyboard"
+        case .rewriteEnabled: return "wand.and.stars"
         case .rewriteProvider: return "cpu"
         case .rewriteMemory: return "brain"
         case .rewriteButton: return "wand.and.stars"
@@ -372,7 +375,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .translationEnabled, .translationApps, .translationLanguages, .translationOnSelect,
              .translationOnSelectShortcut:
             return .translation
-        case .rewriteProvider, .rewriteMemory, .rewriteButton:
+        case .rewriteEnabled, .rewriteProvider, .rewriteMemory, .rewriteButton:
             return .rewrite
         case .engine, .appleIntelligenceAvailability, .appleLanguageFallback, .appleLanguageFallbackModel, .modelStatus, .selectedModel,
              .lowPowerModeAutoDisable, .powerBasedModelSwitching, .batteryModel, .pluggedInModel,
@@ -450,6 +453,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .translationLanguages: return "Which languages translate on this Mac, and how."
         case .translationOnSelect: return "Show the translation of any text you select, with a Copy button."
         case .translationOnSelectShortcut: return "The key that shows the translation of the selected text."
+        case .rewriteEnabled: return "Turn selection rewrite on or off."
         case .rewriteProvider: return "Rewrite with the engine autocomplete uses, another local engine, or your API model."
         case .rewriteMemory: return "Let rewrites use facts and your style from memory."
         case .rewriteButton: return "Show a button when you select text, or use ⌃⌥R."
@@ -650,6 +654,8 @@ enum SettingsItem: String, CaseIterable, Identifiable {
                     "copy translation", "hover translation", "popup translation", "mail", "web page", "chrome"]
         case .translationOnSelectShortcut:
             return ["translate shortcut", "translation shortcut", "⌃⌥L", "control option l", "selection shortcut"]
+        case .rewriteEnabled:
+            return ["rewrite", "selection", "turn off", "disable", "enable", "rephrase"]
         case .rewriteProvider:
             return ["rewrite", "rephrase", "api", "openai", "cloud", "model", "polish", "mlx", "apple intelligence", "endpoint", "ollama", "open source"]
         case .rewriteMemory:
@@ -667,7 +673,7 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .memoryPlayground:
             return ["playground", "search memory", "test retrieval", "rag"]
         case .memoryAnswers:
-            return ["answer", "answers", "question", "reply", "draft", "smart reply", "respond"]
+            return ["answer", "answers", "question", "reply", "draft", "smart reply", "respond", "availability"]
         case .extendedContext:
             return ["context", "glossary", "reference", "notes", "jargon", "instructions",
                     "memory", "background", "system prompt", "vocabulary"]

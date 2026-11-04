@@ -5,7 +5,7 @@ import SwiftUI
 /// The Memory pane's playground: pick one of your real conversations, type what you might write
 /// there, and see exactly what memory would hand a suggestion (and how widely it had to look).
 ///
-/// Conversations are picked from the service's list of recently active ones rather than typed, so
+/// Conversations are picked from the engine's list of recently active ones rather than typed, so
 /// there is nothing to spell exactly, and the search names the conversation by id (the scope a
 /// suggestion gets after the app's window title is matched). "All of memory" is for exploring and
 /// is never used by suggestions.
@@ -49,6 +49,14 @@ struct MemoryPlaygroundSection: View {
                         ForEach(filteredConversations.prefix(200), id: \.self) { conversation in
                             Text(Self.label(conversation)).tag(Self.key(conversation))
                         }
+                    }
+                    if let conversation = selectedConversation {
+                        Button("Never Remember This Conversation") {
+                            control.neverRemember(conversation)
+                            conversationKey = ""
+                        }
+                        .controlSize(.small)
+                        .help("Forgets it and skips it in later syncs (Privacy lists it).")
                     }
                 }
             }

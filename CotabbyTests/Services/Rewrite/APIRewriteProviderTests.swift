@@ -111,6 +111,40 @@ final class APIRewriteProviderTests: XCTestCase {
         XCTAssertEqual(text, "Selam!")
     }
 
+    /// A named service with no key fails with a clear message before any request goes out.
+    func test_namedServiceWithoutAKeyFailsBeforeTheRequest() async {
+        RewriteStubURLProtocol.handler = { request in
+            XCTFail("No request may be sent without a key")
+            return try Self.reply(request, "")
+        }
+        defer { RewriteStubURLProtocol.handler = nil }
+        var prefs = RewritePreferences.defaults
+        prefs.cloudProvider = .openAI
+        prefs.apiModelName = "some-openai-model"
+        let provider = makeProvider({ prefs }, keys: [.anthropic: "claude-key"])
+        do {
+            _ = try await provider.rewrite(RewriteRequest(selection: "a draft", action: .formal), onPartial: { _ in })
+            XCTFail("Expected missingAPIKey")
+        } catch {
+            XCTAssertEqual(error as? RewriteError, .missingAPIKey("OpenAI (GPT)"))
+        }
+    }
+
+    /// A custom URL may need no key (a local Ollama): the request goes out without Authorization.
+    func test_customEndpointMayGoWithoutAKey() async throws {
+        RewriteStubURLProtocol.handler = { request in
+            XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+            return try Self.reply(request, "data: {\"choices\":[{\"delta\":{\"content\":\"Fixed.\"}}]}\n\ndata: [DONE]\n\n")
+        }
+        defer { RewriteStubURLProtocol.handler = nil }
+        var prefs = RewritePreferences.defaults
+        prefs.cloudProvider = .custom
+        prefs.apiBaseURL = "http://127.0.0.1:11434/v1"
+        prefs.apiModelName = "llama3"
+        let text = try await makeProvider({ prefs }).rewrite(RewriteRequest(selection: "Fxed draft.", action: .fixOnly), onPartial: { _ in })
+        XCTAssertEqual(text, "Fixed.")
+    }
+
     private static func jsonBody(_ request: URLRequest) throws -> [String: Any] {
         let data = try XCTUnwrap(request.httpBody ?? readBodyStream(request.httpBodyStream))
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -207,8 +241,8 @@ final class AnthropicMessagesClientTests: XCTestCase {
         defer { RewriteStubURLProtocol.handler = nil }
         var partials: [String] = []
         let text = try await makeClient().streamMessage(
-            baseURL: "https://api.anthropic.com/v1", apiKey: "k", model: "claude-opus-5-5",
-            system: "rules", user: "draft", timeout: 20, onPartial: { partials.append($0) }
+            AnthropicMessage(model: "claude-opus-5-5", system: "rules", user: "draft"),
+            baseURL: "https://api.anthropic.com/v1", apiKey: "k", timeout: 20, onPartial: { partials.append($0) }
         )
         XCTAssertEqual(text, "Hello there")
         XCTAssertEqual(partials, ["Hello", "Hello there"])
@@ -225,8 +259,8 @@ final class AnthropicMessagesClientTests: XCTestCase {
         }
         defer { RewriteStubURLProtocol.handler = nil }
         _ = try await makeClient().streamMessage(
-            baseURL: "https://api.anthropic.com/v1", apiKey: "k", model: "claude-haiku-4-5",
-            system: "rules", user: "draft", timeout: 20, onPartial: { _ in }
+            AnthropicMessage(model: "claude-haiku-4-5", system: "rules", user: "draft"),
+            baseURL: "https://api.anthropic.com/v1", apiKey: "k", timeout: 20, onPartial: { _ in }
         )
     }
 
@@ -240,8 +274,8 @@ final class AnthropicMessagesClientTests: XCTestCase {
         }
         defer { RewriteStubURLProtocol.handler = nil }
         do {
-            _ = try await makeClient().streamMessage(baseURL: "https://api.anthropic.com/v1", apiKey: "k", model: "claude-opus-5-5",
-                                                     system: "s", user: "u", timeout: 20, onPartial: { _ in })
+            _ = try await makeClient().streamMessage(AnthropicMessage(model: "claude-opus-5-5", system: "s", user: "u"),
+                                                     baseURL: "https://api.anthropic.com/v1", apiKey: "k", timeout: 20, onPartial: { _ in })
             XCTFail("Expected a refusal error")
         } catch {
             XCTAssertEqual(error as? AnthropicMessagesError, .refused)
@@ -254,12 +288,73 @@ final class AnthropicMessagesClientTests: XCTestCase {
         }
         defer { RewriteStubURLProtocol.handler = nil }
         do {
-            _ = try await makeClient().streamMessage(baseURL: "https://api.anthropic.com/v1", apiKey: "bad", model: "claude-opus-5-5",
-                                                     system: "s", user: "u", timeout: 20, onPartial: { _ in })
+            _ = try await makeClient().streamMessage(AnthropicMessage(model: "claude-opus-5-5", system: "s", user: "u"),
+                                                     baseURL: "https://api.anthropic.com/v1", apiKey: "bad", timeout: 20, onPartial: { _ in })
             XCTFail("Expected an API error")
         } catch {
             XCTAssertEqual(error as? AnthropicMessagesError, .api(status: 401, message: "invalid x-api-key"))
         }
+    }
+
+    func test_emptyKeyFailsBeforeTheRequest() async {
+        RewriteStubURLProtocol.handler = { request in
+            XCTFail("No request may be sent without a key")
+            return try Self.reply(request, "")
+        }
+        defer { RewriteStubURLProtocol.handler = nil }
+        do {
+            _ = try await makeClient().streamMessage(AnthropicMessage(model: "claude-opus-5-5", system: "s", user: "u"),
+                                                     baseURL: "https://api.anthropic.com/v1", apiKey: "  ", timeout: 20, onPartial: { _ in })
+            XCTFail("Expected missingKey")
+        } catch {
+            XCTAssertEqual(error as? AnthropicMessagesError, .missingKey)
+        }
+    }
+
+    func test_haikuGetsEffortButNoServerSideFallback() async throws {
+        let body = stream
+        RewriteStubURLProtocol.handler = { request in
+            XCTAssertNil(request.value(forHTTPHeaderField: "anthropic-beta"))
+            let json = try Self.json(request)
+            XCTAssertNil(json["fallbacks"], "Claude Haiku 5.5 has no server-side fallback")
+            XCTAssertEqual((json["output_config"] as? [String: String])?["effort"], "low")
+            return try Self.reply(request, body)
+        }
+        defer { RewriteStubURLProtocol.handler = nil }
+        _ = try await makeClient().streamMessage(
+            AnthropicMessage(model: "claude-haiku-5-5", system: "rules", user: "draft"),
+            baseURL: "https://api.anthropic.com/v1", apiKey: "k", timeout: 20, onPartial: { _ in }
+        )
+    }
+
+    func test_streamWithoutMessageStopIsAnError() async {
+        RewriteStubURLProtocol.handler = { request in
+            try Self.reply(request, """
+            event: content_block_delta
+            data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Half a"}}
+
+            """)
+        }
+        defer { RewriteStubURLProtocol.handler = nil }
+        do {
+            _ = try await makeClient().streamMessage(AnthropicMessage(model: "claude-opus-5-5", system: "s", user: "u"),
+                                                     baseURL: "https://api.anthropic.com/v1", apiKey: "k", timeout: 20, onPartial: { _ in })
+            XCTFail("Expected an incomplete-reply error")
+        } catch {
+            XCTAssertEqual(error as? AnthropicMessagesError, .incomplete)
+        }
+    }
+
+    func test_streamEventKeepsOnlyTextAndTheEnd() throws {
+        let text = #"data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Hi"}}"#
+        let thinking = #"data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"x"}}"#
+        XCTAssertEqual(try AnthropicMessagesClient.streamEvent(fromLine: text), .text("Hi"))
+        XCTAssertNil(try AnthropicMessagesClient.streamEvent(fromLine: thinking))
+        XCTAssertNil(try AnthropicMessagesClient.streamEvent(fromLine: "event: ping"))
+        XCTAssertEqual(try AnthropicMessagesClient.streamEvent(fromLine: #"data: {"type":"message_stop"}"#), .stop)
+        XCTAssertThrowsError(try AnthropicMessagesClient.streamEvent(
+            fromLine: #"data: {"type":"message_delta","delta":{"stop_reason":"refusal"}}"#
+        ))
     }
 
     func test_listsModelIDs() async throws {

@@ -16,6 +16,9 @@ final class AnswerCardController {
 
     var isVisible: Bool { panel?.isVisible ?? false }
 
+    /// See `AnswerDraftEngine`: released through a nonisolated deinit.
+    nonisolated deinit {}
+
     /// `caret` and `field` are in AppKit screen coordinates. The card starts at the caret and spans
     /// the rest of the field's width, within readable bounds.
     func show(_ offer: AnswerOffer, caret: CGRect, field: CGRect?, tabInserts: Bool, onInsert: @escaping () -> Void) {

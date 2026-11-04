@@ -10,8 +10,9 @@ import Foundation
 ///
 /// Mapping to memory records:
 /// - Conversation: the chat session's JID (`…@s.whatsapp.net` for a person, `…@g.us` for a
-///   group), titled with the partner or group name, which is what WhatsApp's chat header shows and
-///   what Cotabby reads from the focused window (`ConversationHeaderPolicy`).
+///   group), titled with the partner or group name, which is what WhatsApp's chat header shows.
+///   Suggestions match it against the focused window's title (`FocusedInputContext.windowTitle`);
+///   WhatsApp titles its window "WhatsApp", so reading the open chat's name is a follow-up.
 /// - Participants: JIDs, not names, so memory's audience rule (only conversations with exactly the
 ///   same people) identifies a person reliably; names are not unique and can change.
 /// - Only messages with text (including captions), from 1:1 chats and groups; status updates,
@@ -19,6 +20,8 @@ import Foundation
 /// - Cursor: the message's Core Data primary key, which only grows.
 nonisolated struct WhatsAppHistoryReader: MemoryHistoryReading {
     let sourceID = "whatsapp"
+    /// Added to every group's participants, so a group never shares memory with a 1:1 chat.
+    static let groupMarker = "whatsapp-group:"
     let databasePath: String
 
     init(databasePath: String = WhatsAppHistoryReader.defaultDatabasePath) {
@@ -78,13 +81,16 @@ nonisolated struct WhatsAppHistoryReader: MemoryHistoryReading {
             [.integer(after), .real(sinceApple), .integer(Int64(limit))]
         )
         var membersBySession: [Int64: [String]] = [:]
+        // A group's member list does not say who was there when: a group can never vouch for what
+        // any one member saw, so every group carries its own marker and never has exactly the
+        // people of a 1:1 chat or of another group (the store's "same people" rule).
         func members(of session: Int64, chatJID: String, isGroup: Bool) throws -> [String] {
             guard isGroup else { return [chatJID] }
             if let cached = membersBySession[session] { return cached }
             let jids = try database.rows(
                 "SELECT ZMEMBERJID AS jid FROM ZWAGROUPMEMBER WHERE ZCHATSESSION = ? AND ZMEMBERJID IS NOT NULL",
                 [.integer(session)]
-            ).compactMap { $0["jid"]?.string }
+            ).compactMap { $0["jid"]?.string } + [Self.groupMarker + chatJID]
             membersBySession[session] = jids
             return jids
         }
@@ -114,7 +120,7 @@ nonisolated struct WhatsAppHistoryReader: MemoryHistoryReading {
                 isFromMe: isFromMe,
                 timestamp: Date(timeIntervalSince1970: appleDate + Self.appleEpochOffset),
                 // Capped like mail bodies: memory needs the gist, and one enormous message must not
-                // exceed the service's request limit and stall every later sync at this cursor.
+                // cost a whole sync's time to scrub, store and embed.
                 text: text.count > EmailBodyExtractor.maximumCharacters
                     ? String(text.prefix(EmailBodyExtractor.maximumCharacters)) : text,
                 participants: try members(of: session, chatJID: jid, isGroup: isGroup),

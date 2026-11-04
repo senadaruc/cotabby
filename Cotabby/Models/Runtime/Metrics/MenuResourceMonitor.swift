@@ -4,7 +4,8 @@ import Foundation
 /// File overview:
 /// Publishes `ResourceUsageSummary` for the menu bar popover. Unlike `SystemMetricsStore` it keeps
 /// no history: it holds only the latest value and polls only between `start()` and `stop()`, which
-/// the popover calls from `.onAppear` / `.onDisappear`, so a closed menu costs nothing. One instance
+/// the popover calls when its window is presented or dismissed (and from `.onAppear` /
+/// `.onDisappear` as a fallback), so a closed menu costs nothing. One instance
 /// lives for the app's lifetime (built by `CotabbyAppEnvironment`).
 @MainActor
 final class MenuResourceMonitor: ObservableObject {

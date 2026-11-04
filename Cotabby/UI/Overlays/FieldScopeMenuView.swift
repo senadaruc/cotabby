@@ -123,7 +123,13 @@ struct FieldScopeMenuView: View {
                 )
 
                 // Answers' app switch is this app's place in the answer settings' disabled list.
-                if let answers = memoryControl.configuration?.answers, answers.enabled {
+                // Shown only where answers can run at all: a mail app, or a chat app whose memory
+                // source is on (`IncomingMessageResolver.answersIn`).
+                let answersRunHere = IncomingMessageResolver.answersIn(
+                    bundleIdentifier: target.bundleIdentifier,
+                    sourcesByBundle: [target.bundleIdentifier: memorySources.filter(\.enabled).map(\.id)]
+                )
+                if let answers = memoryControl.configuration?.answers, answers.enabled, answersRunHere {
                     featureRow(
                         title: "Answers",
                         feature: .answers,

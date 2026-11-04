@@ -35,10 +35,8 @@ import Logging
 nonisolated struct TeamsCacheReader: MemoryHistoryReading {
     let sourceID = "teams"
     let webViewRoot: String
-    /// IndexedDB folders to read instead of discovering the profiles (tests, the golden check).
+    /// IndexedDB folders to read instead of discovering the profiles (tests).
     private let explicitFolders: [String]?
-    /// See `V8ValueDeserializer.Options`; only the golden test changes it.
-    var decodingOptions = V8ValueDeserializer.Options()
 
     static let originFolder = "https_teams.microsoft.com_0.indexeddb"
     /// How far before the cursor each read starts again, to pick up edited messages.
@@ -99,9 +97,9 @@ nonisolated struct TeamsCacheReader: MemoryHistoryReading {
     }
 
     func read(after cursor: String?, since: Date?, limit: Int) throws -> MemoryReadPage {
-        // Cursors written by the Python service look like "1791034747629.0"; both forms parse.
-        // A stored cursor outside real Teams times (written by an older reader from a corrupt
-        // value) would hide every message; start over instead (the store's upsert is idempotent).
+        // The cursor is the newest message time in milliseconds ("1791034747629" or
+        // "1791034747629.0"; both forms parse). A stored cursor outside real Teams times (from a
+        // corrupt value) would hide every message; start over instead (the store's upsert is idempotent).
         let stored = cursor.flatMap(Double.init) ?? 0
         let previous = stored.isFinite && stored <= TeamsMessageMapper.latestAcceptedMilliseconds ? stored : 0
         let after = previous > 0 ? max(0, previous - Self.lookbackMilliseconds) : 0
@@ -131,6 +129,8 @@ nonisolated struct TeamsCacheReader: MemoryHistoryReading {
     }
 
     /// Every cached message that arrived after `afterMilliseconds`, mapped, across all profiles.
+    /// Each profile is mapped on its own: each is a signed-in account with its own user, and
+    /// pooling them would make one account's user everyone's "You".
     func readCache(afterMilliseconds: Double) throws -> TeamsMessageMapper.Result {
         let folders: [String]
         do {
@@ -141,9 +141,8 @@ nonisolated struct TeamsCacheReader: MemoryHistoryReading {
         }
         guard !folders.isEmpty else { throw ReadOnlySQLiteDatabase.DatabaseError.missing(webViewRoot) }
 
-        var conversations: [[String: Any]] = []
-        var messages: [[String: Any]] = []
-        var profiles: [String: String] = [:]
+        var messages: [TeamsMessageMapper.Message] = []
+        var newest = afterMilliseconds
         for folder in folders {
             let rows: Rows
             do {
@@ -151,13 +150,14 @@ nonisolated struct TeamsCacheReader: MemoryHistoryReading {
             } catch LevelDBReader.ReadError.notPermitted(let path) {
                 throw ReadOnlySQLiteDatabase.DatabaseError.notPermitted(path)
             }
-            conversations += rows.conversations
-            messages += rows.messages
-            profiles.merge(rows.profiles) { _, newer in newer }
+            let mapped = TeamsMessageMapper.map(
+                conversations: rows.conversations, messages: rows.messages, profiles: rows.profiles,
+                afterMilliseconds: afterMilliseconds
+            )
+            messages += mapped.messages
+            newest = max(newest, mapped.newestMilliseconds)
         }
-        return TeamsMessageMapper.map(
-            conversations: conversations, messages: messages, profiles: profiles, afterMilliseconds: afterMilliseconds
-        )
+        return TeamsMessageMapper.Result(messages: messages, newestMilliseconds: newest)
     }
 
     /// The fields `TeamsMessageMapper` reads. A cached message carries dozens more (reactions,
@@ -195,12 +195,12 @@ nonisolated struct TeamsCacheReader: MemoryHistoryReading {
         var rows = Rows()
         for entry in database.databases {
             if entry.name.hasPrefix(Self.conversationDatabasePrefix) {
-                database.forEachValue(in: entry, stores: ["conversations"], options: decodingOptions) { value in
+                database.forEachValue(in: entry, stores: ["conversations"]) { value in
                     guard case .object(let row) = value else { return }
                     rows.conversations.append(Self.fields(Self.conversationFields, of: row))
                 }
             } else if entry.name.hasPrefix(Self.replyChainDatabasePrefix) {
-                database.forEachValue(in: entry, stores: ["replychains", "replychains-2"], options: decodingOptions) { value in
+                database.forEachValue(in: entry, stores: ["replychains", "replychains-2"]) { value in
                     // Messages in the chain's own order: the mapper's tie-breaks follow input order.
                     guard case .object(let chain) = value, case .object(let messageMap)? = chain["messageMap"] else { return }
                     for case .object(let message) in messageMap.values {
@@ -208,7 +208,7 @@ nonisolated struct TeamsCacheReader: MemoryHistoryReading {
                     }
                 }
             } else if entry.name.hasPrefix(Self.profileDatabasePrefix) {
-                database.forEachValue(in: entry, stores: ["profiles"], options: decodingOptions) { value in
+                database.forEachValue(in: entry, stores: ["profiles"]) { value in
                     guard case .object(let profile) = value, case .string(let mri)? = profile["mri"],
                           case .string(let name)? = profile["displayName"] else { return }
                     let display = PythonText.strip(name)

@@ -3,7 +3,7 @@ import Foundation
 import Logging
 
 /// File overview:
-/// Conversation memory, in-process: what used to be the Python memory service, now native.
+/// Conversation memory, in-process: ingest, background indexing and search over the encrypted store.
 ///
 /// Responsibilities:
 /// - **Ingest**: the pipeline every message passes whichever reader produced it (exclusions,
@@ -12,8 +12,9 @@ import Logging
 ///   `EmbeddingSchedulePolicy` allows it, newest first, persisting each vector as it is computed so
 ///   an interrupted run resumes where it stopped, and keeps `FlatVectorIndex` in step.
 /// - **Search**: the scope rule suggestions rely on (this conversation, then conversations with
-///   exactly the same people, never a guess on an ambiguous title), and the wider search answers
-///   use (any conversation of the sources the user marked for answers).
+///   exactly the same people, never a guess on an ambiguous title), the wider search answers use
+///   (any conversation of the sources the user marked for answers, plus the one being answered),
+///   and the Playground's exploring search over every enabled source.
 ///
 /// Lifetime and threading: built by `MemoryEngineController` when memory is switched on and dropped
 /// when it is switched off. Every method is synchronous and thread-safe (the store, the index and
@@ -28,7 +29,7 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
 
     /// The scope of a suggestion's search.
     struct Scope: Hashable, Sendable {
-        /// The chat name or mail subject the focused window shows.
+        /// The chat name the focused window shows (never a mail subject: see `resolve`).
         var title: String?
         /// The sources serving the focused app; titles never match outside them.
         var sources: [String] = []
@@ -65,22 +66,49 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
 
     private let statusLock = NSLock()
     private var statusValue = MemoryEngineStatus()
-    /// Called with every status change, on an arbitrary thread.
-    var onStatusChange: (@Sendable (MemoryEngineStatus) -> Void)?
+    private var statusCallback: (@Sendable (MemoryEngineStatus) -> Void)?
+    /// Called with every status change, on an arbitrary thread. Kept under `statusLock`: the
+    /// indexing loop already reports while the controller sets this on the main actor, and an
+    /// unsynchronized closure (two words) could be read half written.
+    var onStatusChange: (@Sendable (MemoryEngineStatus) -> Void)? {
+        get {
+            statusLock.lock()
+            defer { statusLock.unlock() }
+            return statusCallback
+        }
+        set {
+            statusLock.lock()
+            statusCallback = newValue
+            statusLock.unlock()
+        }
+    }
+
+    /// Serializes everything that writes messages (`ingest`) with everything that removes them or
+    /// changes what may be stored (settings, forget, delete). Without it an ingest that filtered
+    /// with the old settings could write an excluded conversation back after its purge.
+    private let writeLock = NSLock()
+    private let generationLock = NSLock()
+    private var dataGenerationValue: UInt64 = 0
 
     private var indexingTask: Task<Void, Never>?
+    /// Set once the engine is being stopped: a sync still holding it must not write any more.
+    private let stoppedLock = NSLock()
+    private var stopped = false
     private let wakeLock = NSLock()
     private var wakeRequested = false
+
+    /// Mail sources: searched as a conversation only by exact id, never by title.
+    static let mailSources: Set<String> = ["apple_mail", "outlook"]
 
     /// Messages read per indexing step, and passages embedded per native call (small, so a query
     /// waiting for the model waits for at most one call).
     static let messagesPerStep = 32
     static let passagesPerCall = 8
 
-    /// Opens the store with the master key and loads the settings. Throws `MemoryVault.VaultError
+    /// Opens the store with the root key and loads the settings. Throws `MemoryVault.VaultError
     /// .keyMismatch` when the store was encrypted with another key.
     init(
-        paths: Paths, masterKey: SymmetricKey, modelURL: URL,
+        paths: Paths, rootKey: SymmetricKey, modelURL: URL,
         conditions: @escaping @Sendable () async -> EmbeddingSchedulePolicy.Conditions
     ) throws {
         self.paths = paths
@@ -90,14 +118,51 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
         modelIdentifier = "\(modelURL.deletingPathExtension().lastPathComponent)@\(size)"
         try FileManager.default.createDirectory(at: paths.dataDirectory, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
-        store = try MemoryStore(path: paths.store, vault: MemoryVault(masterKey: masterKey))
+        store = try MemoryStore(path: paths.store, vault: MemoryVault(rootKey: rootKey))
         configurationValue = Self.loadConfiguration(paths.configuration)
         statusValue.modelBytes = size
         statusValue.modelName = modelURL.deletingPathExtension().lastPathComponent
+        // Set before the engine is shared: the store calls it before it removes or replaces rows.
+        store.willRemove = { [weak self] in self?.bumpDataGeneration() }
+        let migration = store.openingMigration
+        if !migration.rereadSources.isEmpty {
+            log("record ids are keyed now: \(migration.legacyRecords) stored messages keep their rows and are renamed "
+                + "as they are read again; reading \(migration.rereadSources.joined(separator: ", ")) again once")
+        }
     }
 
     deinit {
         indexingTask?.cancel()
+    }
+
+    /// Changes whenever stored messages are removed, replaced or moved, or the settings change
+    /// (forget, delete, never-remember, retention, a source switched off, a deleted document). It
+    /// moves twice: once before anything is removed (the store calls back, still holding the
+    /// rows) and once after. A search result is only good while it has not moved since the search
+    /// started; callers that keep results (`MemoryRetriever`) check and store them inside
+    /// `withDataGeneration`, so nothing deleted is kept or served from a cache.
+    var dataGeneration: UInt64 {
+        generationLock.lock()
+        defer { generationLock.unlock() }
+        return dataGenerationValue
+    }
+
+    /// Runs `body` with the current data generation while no removal can begin (the generation
+    /// cannot move until `body` returns). Keep `body` short: removals wait for it.
+    func withDataGeneration<T>(_ body: (UInt64) throws -> T) rethrows -> T {
+        generationLock.lock()
+        defer { generationLock.unlock() }
+        return try body(dataGenerationValue)
+    }
+
+    /// This engine's identity: a cache filled under one engine is never served under the next,
+    /// even one created at the same address after memory was switched off and on.
+    let instanceID = UUID()
+
+    private func bumpDataGeneration() {
+        generationLock.lock()
+        dataGenerationValue &+= 1
+        generationLock.unlock()
     }
 
     // MARK: - Lifecycle
@@ -117,9 +182,24 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
     }
 
     func stop() {
+        markStopped()
         indexingTask?.cancel()
         indexingTask = nil
         embedding.unload()
+    }
+
+    /// Makes every later `ingest` a no-op. Cheap and synchronous, so the controller calls it the
+    /// moment memory is switched off, before the slower `stop` runs off the main actor.
+    func markStopped() {
+        stoppedLock.lock()
+        stopped = true
+        stoppedLock.unlock()
+    }
+
+    var isStopped: Bool {
+        stoppedLock.lock()
+        defer { stoppedLock.unlock() }
+        return stopped
     }
 
     private func reloadIndex() {
@@ -152,15 +232,31 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
     /// Applies a change to the settings and saves them, then does what the change requires: purge
     /// what privacy now excludes, or re-index when passages are cut differently.
     func updateConfiguration(_ change: (inout MemoryConfiguration) -> Void) throws {
+        writeLock.lock()
+        defer { writeLock.unlock() }
         configurationLock.lock()
         let before = configurationValue
         change(&configurationValue)
         let after = configurationValue
         configurationLock.unlock()
+        // Results found under the old settings (a source now off, a conversation now excluded)
+        // are stale from here on, and again once the purge below is done.
+        bumpDataGeneration()
+        defer { bumpDataGeneration() }
         try Self.saveConfiguration(after, to: paths.configuration)
         if after.privacy != before.privacy {
             try purgeForPrivacy()
             reloadIndex()
+        }
+        // A source reading another folder now: what it read from the old one (records, cursor)
+        // must not stay, or the new folder's older files would be skipped and same-named ones
+        // take over the old records.
+        for (id, settings) in after.sources {
+            let old = before.sources[id]?.options[Self.folderOption] ?? ""
+            if !old.isEmpty, (settings.options[Self.folderOption] ?? "") != old {
+                try store.deleteSource(id)
+                reloadIndex()
+            }
         }
         if after.index.chunkSize != before.index.chunkSize || after.index.chunkOverlap != before.index.chunkOverlap {
             try store.resetIndex()
@@ -168,6 +264,9 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
         }
         wakeIndexing()
     }
+
+    /// The option naming a source's folder (the Documents Folder source).
+    static let folderOption = "folder"
 
     static func loadConfiguration(_ url: URL) -> MemoryConfiguration {
         let decoder = JSONDecoder()
@@ -215,8 +314,11 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
 
     /// Deletes everything stored from one source.
     func forget(source: String) throws {
+        writeLock.lock()
+        defer { writeLock.unlock() }
         try store.deleteSource(source)
         reloadIndex()
+        bumpDataGeneration()
     }
 
     /// Embeds every stored message again.
@@ -228,8 +330,11 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
 
     /// Forgets every message, vector and cursor. Settings stay.
     func deleteEverything() throws {
+        writeLock.lock()
+        defer { writeLock.unlock() }
         try store.deleteEverything()
         reloadIndex()
+        bumpDataGeneration()
     }
 
     // MARK: - Ingest
@@ -246,8 +351,14 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
     func ingest(
         source: String, records: [MemoryIngestRecord], cursor: String?, completeConversations: Set<String> = []
     ) throws -> IngestResult {
+        // Held for the whole page: the settings it filters with stay the settings in force until
+        // its records are written (see `writeLock`).
+        writeLock.lock()
+        defer { writeLock.unlock() }
         let configuration = configuration
-        guard configuration.sources[source]?.enabled == true else { return IngestResult(stored: 0, dropped: records.count) }
+        guard !isStopped, configuration.sources[source]?.enabled == true else {
+            return IngestResult(stored: 0, dropped: records.count)
+        }
         let excludedConversations = Set(configuration.privacy.excludedConversations)
         let excludedPeople = Set(configuration.privacy.excludedParticipants.map(ParticipantNormalizer.normalize))
         let cutoff = retentionCutoff(configuration)
@@ -255,7 +366,8 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
         var dropped = 0
         for record in records {
             let people = Set((record.participants + [record.sender]).map(ParticipantNormalizer.normalize))
-            if excludedConversations.contains(record.conversationID) || !excludedPeople.isDisjoint(with: people)
+            if Self.isExcluded(conversationID: record.conversationID, by: excludedConversations)
+                || !excludedPeople.isDisjoint(with: people)
                 || (!MemorySourceCatalog.keepsAllDates(source) && (cutoff.map { record.timestamp < $0 } ?? false)) {
                 dropped += 1
                 continue
@@ -272,22 +384,56 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
             ))
         }
         var stored = 0
+        var adoptedLegacyRecords = 0
         // Short transactions, so a search never waits behind a whole sync.
         for start in stride(from: 0, to: kept.count, by: 200) {
             let result = try store.upsert(source: source, records: Array(kept[start..<min(start + 200, kept.count)]))
             stored += result.changed
-            index.remove(recordIDs: Set(result.replacedRecordIDs))
+            index.remove(recordIDs: Set(result.replacedRecordIDs + result.legacyRecordIDs))
+            // Rows renamed from a legacy record id keep their vectors: the index takes them under
+            // the new id (a renamed message that also changed has none left, and is indexed again).
+            if !result.adoptedRecordIDs.isEmpty {
+                index.upsert((try? store.vectors(model: modelIdentifier, recordIDs: result.adoptedRecordIDs)) ?? [])
+                adoptedLegacyRecords += result.adoptedRecordIDs.count
+            }
+            // Replaced or moved messages: lines found before are stale (the store moved the
+            // generation before writing, this is the second move).
+            if !result.replacedRecordIDs.isEmpty || !result.legacyRecordIDs.isEmpty { bumpDataGeneration() }
         }
         if let cursor { try store.setCursor(cursor, source: source) }
         if !completeConversations.isEmpty {
             // Read whole: what memory held for them beyond this page's records is gone from the source.
-            let kept = Set(kept.map { MemoryStore.recordID(source: source, sourceMessageID: $0.sourceMessageID) })
+            let kept = Set(kept.map { store.recordID(source: source, sourceMessageID: $0.sourceMessageID) })
             let removed = try store.removeRecords(source: source, inConversations: completeConversations, notIn: kept)
-            if !removed.isEmpty { index.remove(recordIDs: Set(removed)) }
+            if !removed.isEmpty {
+                index.remove(recordIDs: Set(removed))
+                bumpDataGeneration()
+            }
         }
+        if adoptedLegacyRecords > 0 { log("\(source): \(adoptedLegacyRecords) messages moved to keyed record ids") }
         updateStatus { $0.databaseBytes = self.databaseBytes() }
         if stored > 0 { wakeIndexing() }
         return IngestResult(stored: stored, dropped: dropped)
+    }
+
+    /// Whether a never-remember entry covers this conversation. Also by the id an earlier build gave
+    /// it: a mail thread became one conversation per audience (`thread|people`), and a New Outlook
+    /// topic one per sender (`hx-topic:topic|sender`), so an entry saved as the whole thread or
+    /// topic keeps covering every conversation it was split into.
+    ///
+    /// Every prefix that ends right before a "|" is checked, not only the last one: an address's
+    /// local part and a sender (chosen by whoever sent the mail) may contain "|", and so may a
+    /// thread or topic, so the split point cannot be found from the id. Checking each prefix can
+    /// only exclude more, never less.
+    static func isExcluded(conversationID: String, by excluded: Set<String>) -> Bool {
+        guard !excluded.isEmpty else { return false }
+        if excluded.contains(conversationID) { return true }
+        var index = conversationID.startIndex
+        while let bar = conversationID[index...].firstIndex(of: "|") {
+            if excluded.contains(String(conversationID[..<bar])) { return true }
+            index = conversationID.index(after: bar)
+        }
+        return false
     }
 
     private func retentionCutoff(_ configuration: MemoryConfiguration) -> Date? {
@@ -299,8 +445,11 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
     /// .liveConversationIDs`: documents deleted from their drive). Returns how many records went.
     @discardableResult
     func forget(source: String, conversationsNotIn live: Set<String>) throws -> Int {
+        writeLock.lock()
+        defer { writeLock.unlock() }
         let removed = try store.removeConversations(source: source, notIn: live)
         if !removed.isEmpty {
+            bumpDataGeneration()
             index.remove(recordIDs: Set(removed))
             updateStatus { status in
                 status.passages = self.index.count
@@ -361,7 +510,7 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
             case .run:
                 if embeddedThisRun == 0 { runStarted = Date() }
                 do {
-                    embeddedThisRun += try indexStep(sources: sources)
+                    embeddedThisRun += try await indexStep(sources: sources, pending: pending)
                 } catch {
                     log("indexing step failed: \(error.localizedDescription)")
                     try? await Task.sleep(nanoseconds: 5_000_000_000)
@@ -383,41 +532,70 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
         }
     }
 
+    /// One passage to embed: which message of the step it came from, its stored id, and its text.
+    private struct PendingPassage {
+        let message: Int
+        let passageID: String
+        let text: String
+    }
+
     /// Embeds one step of unindexed messages and stores their vectors. Returns passages embedded.
-    private func indexStep(sources: [String]) throws -> Int {
+    /// The schedule is asked again between native calls, so a suggestion that starts mid-step (or
+    /// heat, or unplugging during a backlog) stops the rest of the step: the messages embedded
+    /// whole so far are saved, the others stay pending.
+    private func indexStep(sources: [String], pending: Int) async throws -> Int {
         let messages = try store.unindexedMessages(sources: sources, limit: Self.messagesPerStep)
         guard !messages.isEmpty else { return 0 }
         let settings = configuration.index
-        var passages: [(message: Int, passageID: String, text: String)] = []
+        var passages: [PendingPassage] = []
         for (position, message) in messages.enumerated() {
             let text = PassageChunker.passageText(
                 timestamp: Date(timeIntervalSince1970: message.timestamp), sender: message.sender,
                 isFromMe: message.isFromMe, subject: message.subject, text: message.text
             )
             for (number, chunk) in PassageChunker.chunks(text, size: settings.chunkSize, overlap: settings.chunkOverlap).enumerated() {
-                passages.append((position, number == 0 ? message.recordID : "\(message.recordID)#\(number)", chunk))
+                let passageID = number == 0 ? message.recordID : "\(message.recordID)#\(number)"
+                passages.append(PendingPassage(message: position, passageID: passageID, text: chunk))
             }
         }
         var vectors: [[Float]] = []
         for start in stride(from: 0, to: passages.count, by: Self.passagesPerCall) {
             guard !Task.isCancelled else { return 0 }
+            if start > 0 {
+                var current = await conditions()
+                current.pendingPassages = pending
+                if case .wait = EmbeddingSchedulePolicy.decide(current) { break }
+            }
             let slice = passages[start..<min(start + Self.passagesPerCall, passages.count)]
             vectors += try embedding.embedPassages(slice.map(\.text))
         }
+        let whole = Self.wholeMessages(passageMessages: passages.map(\.message), embedded: vectors.count,
+                                       messageCount: messages.count)
+        guard whole > 0 else { return 0 }
         var grouped: [Int: [(passageID: String, vector: [UInt16])]] = [:]
-        for (passage, vector) in zip(passages, vectors) {
+        for (passage, vector) in zip(passages, vectors) where passage.message < whole {
             grouped[passage.message, default: []].append((passage.passageID, HalfPrecision.encode(vector)))
         }
-        let entries = messages.enumerated().map { (message: $0.element, passages: grouped[$0.offset] ?? []) }
-        try store.saveIndexEntries(entries, model: modelIdentifier)
-        index.upsert(entries.flatMap { entry in
+        let entries = messages.prefix(whole).enumerated().map { (message: $0.element, passages: grouped[$0.offset] ?? []) }
+        // Only messages unchanged since they were read are saved (an edit during the step keeps
+        // its new terms and stays pending).
+        let saved = try store.saveIndexEntries(entries, model: modelIdentifier)
+        index.upsert(entries.filter { saved.contains($0.message.recordID) }.flatMap { entry in
             entry.passages.map {
                 MemoryStore.StoredVector(passageID: $0.passageID, recordID: entry.message.recordID, source: entry.message.source,
                                          conversationKey: entry.message.conversationKey, timestamp: entry.message.timestamp,
                                          vector: $0.vector)
             }
         })
-        return passages.count
+        return vectors.count
+    }
+
+    /// How many of a step's messages (in order) have every passage embedded, when the first
+    /// `embedded` passages were (`passageMessages[i]` is the message passage `i` belongs to). A
+    /// message with no passages at all counts once those before it are done.
+    static func wholeMessages(passageMessages: [Int], embedded: Int, messageCount: Int) -> Int {
+        guard embedded < passageMessages.count else { return messageCount }
+        return passageMessages[embedded]
     }
 
     // MARK: - Search
@@ -463,14 +641,17 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
     }
 
     /// An answer's search: facts from any conversation of `sources` (the user's answer sources) and
-    /// from the conversation being answered, never the question itself.
+    /// from the conversation being answered, never the question itself (`excludingRecordIDs`).
+    /// Unlike a suggestion's search this crosses conversations by design; `AnswerCoordinator`
+    /// shows every fact's origin on the card and marks the ones from other conversations.
     func answerSearch(
         question: String, sources: [String], currentConversation: (source: String, conversationID: String)?,
         excludingRecordIDs: Set<String>, topK: Int = 6
     ) -> MemorySearchResult {
         let started = Date()
         let enabled = Set(enabledSources)
-        let allowedSources = enabled.intersection(sources)
+        // Never a source that cannot answer (Calendar), whatever the caller passes.
+        let allowedSources = enabled.intersection(sources.filter(MemorySourceCatalog.canAnswer))
         let currentKey = currentConversation.map {
             (source: $0.source, conversationKey: store.conversationKey(source: $0.source, conversationID: $0.conversationID))
         }
@@ -494,12 +675,15 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
         return result("answer", conversation, hits, started)
     }
 
-    /// The latest messages of one conversation, newest first.
+    /// The latest messages of one conversation, newest first: where answers read the question a
+    /// chat is waiting on.
     func latestMessages(source: String, conversationID: String, limit: Int) -> [MemoryStore.StoredMessage] {
         let key = store.conversationKey(source: source, conversationID: conversationID)
         return (try? store.recentMessages(conversations: [(source, key)], limit: limit)) ?? []
     }
 
+    /// The conversations of enabled `sources` a title names (all of them: the caller decides what
+    /// an ambiguous title means).
     func findConversations(title: String, sources: [String]) -> [MemoryConversation] {
         let enabled = Set(enabledSources)
         return ((try? store.findConversations(title: title, sources: sources)) ?? []).filter { enabled.contains($0.source) }
@@ -526,14 +710,18 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
             guard enabled.contains(exact.source) else { return nil }
             return try? store.conversation(source: exact.source, conversationID: exact.conversationID)
         }
-        let sources = scope.sources.filter(enabled.contains)
+        // A mail subject never names a thread: it does not say who the mail is for, and nothing the
+        // engine is given can (see `ConversationScopeResolver.scope`).
+        let sources = scope.sources.filter { enabled.contains($0) && !Self.mailSources.contains($0) }
         guard let title = scope.title, !title.isEmpty, !sources.isEmpty,
               let found = try? store.findConversations(title: title, sources: sources) else { return nil }
         if found.count > 1 { log("title matches \(found.count) conversations; not using memory") }
         return found.count == 1 ? found[0] : nil
     }
 
-    private func scopedHybrid(query: String, conversations: [(source: String, conversationKey: String)], topK: Int) -> [MemorySearchResult.Hit] {
+    private func scopedHybrid(
+        query: String, conversations: [(source: String, conversationKey: String)], topK: Int
+    ) -> [MemorySearchResult.Hit] {
         let allowed = Set(conversations.map { $0.source + "\u{1f}" + $0.conversationKey })
         return hybrid(
             query: query, task: .conversationContext, topK: topK,
@@ -544,6 +732,7 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
 
     /// Vector and keyword rankings, fused. The vector side is filtered before scoring, so nothing
     /// outside the filter can be returned; the keyword side is given ids already restricted.
+    /// `recencyBoost` (answers) lifts newer facts among similarly relevant ones.
     private func hybrid(
         query: String, task: EmbeddingCore.QueryTask, topK: Int,
         vectorFilter: (FlatVectorIndex.Entry) -> Bool, keyword: () throws -> [String], recencyBoost: Bool = false
@@ -552,7 +741,7 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
         var vectorRanked: [String] = []
         var similarity: [String: Float] = [:]
         let embeddingStarted = Date()
-        if weight > 0, index.count > 0, let queryVector = try? embedding.embedQuery(query, task: task) {
+        if weight > 0, !index.isEmpty, let queryVector = try? embedding.embedQuery(query, task: task) {
             let milliseconds = Date().timeIntervalSince(embeddingStarted) * 1000
             updateStatus { $0.queryEmbeddingLatency.record(milliseconds) }
             for (entry, score) in index.search(queryVector, limit: max(topK * 3, 12), where: vectorFilter) {
@@ -571,12 +760,7 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
             if let message = try? store.message(recordID: item.id) { messages[item.id] = message }
         }
         if recencyBoost {
-            // Among similarly relevant facts, the more recent is more likely to still be true.
-            let now = Date().timeIntervalSince1970
-            fused = fused.map { item in
-                let age = max(0, now - (messages[item.id]?.timestamp ?? 0)) / 86_400
-                return (id: item.id, score: item.score * (1 + 0.15 * exp(-age / 60)))
-            }.sorted { $0.score > $1.score }
+            fused = Self.boostingRecent(fused, timestamps: messages.mapValues(\.timestamp), now: Date().timeIntervalSince1970)
         }
         return fused.compactMap { item -> MemorySearchResult.Hit? in
             guard let message = messages[item.id] else { return nil }  // Deleted since it was indexed.
@@ -591,7 +775,21 @@ nonisolated final class MemoryEngine: @unchecked Sendable {
         }.prefix(topK).map { $0 }
     }
 
-    private func result(_ scope: String, _ conversation: MemoryConversation?, _ hits: [MemorySearchResult.Hit], _ started: Date) -> MemorySearchResult {
+    /// Among similarly relevant facts, the more recent is more likely to still be true: up to 15%
+    /// more score, fading over about two months.
+    private static func boostingRecent(
+        _ fused: [(id: String, score: Double)], timestamps: [String: Double], now: Double
+    ) -> [(id: String, score: Double)] {
+        let boosted: [(id: String, score: Double)] = fused.map { (item: (id: String, score: Double)) -> (id: String, score: Double) in
+            let age: Double = max(0, now - (timestamps[item.id] ?? 0)) / 86_400
+            return (id: item.id, score: item.score * (1 + 0.15 * exp(-age / 60)))
+        }
+        return boosted.sorted { $0.score > $1.score }
+    }
+
+    private func result(
+        _ scope: String, _ conversation: MemoryConversation?, _ hits: [MemorySearchResult.Hit], _ started: Date
+    ) -> MemorySearchResult {
         let milliseconds = Date().timeIntervalSince(started) * 1000
         updateStatus { $0.searchLatency.record(milliseconds) }
         return MemorySearchResult(scope: scope, conversation: conversation, elapsedMs: milliseconds, hits: hits)

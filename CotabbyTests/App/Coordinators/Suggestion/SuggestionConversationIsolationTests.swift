@@ -113,7 +113,7 @@ final class SuggestionConversationIsolationTests: XCTestCase {
     @MainActor
     private final class FakeMemory: SuggestionMemoryProviding {
         var lines: [String] = []
-        var onMemoryReady: (@MainActor () -> Void)?
+        var onMemoryReady: (@MainActor @Sendable () -> Void)?
         func memorySnippets(for context: FocusedInputContext, engine: SuggestionEngineKind) -> [String] { lines }
     }
 
