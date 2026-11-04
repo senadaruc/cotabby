@@ -126,7 +126,7 @@ final class SelectionTranslationCoordinatorTests: XCTestCase {
         let output: Output
     }
 
-    private func make() -> Rig {
+    private func make(debounce: UInt64 = 0) -> Rig {
         let presenter = Presenter(), reader = Reader(), events = Events(), runner = Runner(), output = Output()
         reader.capture = capture(dutch)
         let coordinator = SelectionTranslationCoordinator(
@@ -138,7 +138,7 @@ final class SelectionTranslationCoordinatorTests: XCTestCase {
             windowOverride: { [unowned self] _, _ in self.override },
             wandFrame: { [unowned self] in self.wand },
             presenter: presenter, reader: reader, events: events, engine: runner, output: output,
-            hotkey: nil, ownBundleIdentifier: "com.cotabby.test", debounce: 0
+            hotkey: nil, ownBundleIdentifier: "com.cotabby.test", debounce: debounce
         )
         let objects: [AnyObject] = [coordinator, presenter, reader, events, runner, output]
         Self.retained.append(contentsOf: objects)
@@ -303,5 +303,28 @@ final class SelectionTranslationCoordinatorTests: XCTestCase {
         await select(events)
         coordinator.hide()
         XCTAssertFalse(presenter.isVisible)
+    }
+
+    func test_credentialFieldSnapshotIsNeverReadNorTranslated() async {
+        let rig = make()
+        let input = CotabbyTestFixtures.focusedInputSnapshot(
+            bundleIdentifier: "com.apple.mail", processIdentifier: 123, selectedText: dutch
+        )
+        current = FocusSnapshot(applicationName: "Mail", bundleIdentifier: "com.apple.mail",
+                                capability: .blocked(CredentialFieldDetector.blockedReason), context: input)
+        await select(rig.events)
+        XCTAssertEqual(rig.reader.calls, 0)
+        XCTAssertEqual(rig.runner.calls, 0)
+        XCTAssertEqual(rig.presenter.showCalls, 0)
+    }
+
+    func test_triggerChangedDuringDebounceCancelsTheGesture() async {
+        let rig = make(debounce: 50_000_000)
+        rig.events.onSelectionGesture?(CGPoint(x: 60, y: 310))
+        store.setSelectionTrigger(.shortcut)
+        try? await Task.sleep(nanoseconds: 120_000_000)
+        await settle()
+        XCTAssertEqual(rig.runner.calls, 0)
+        XCTAssertEqual(rig.presenter.showCalls, 0)
     }
 }

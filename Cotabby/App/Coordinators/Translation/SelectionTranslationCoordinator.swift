@@ -142,6 +142,8 @@ final class SelectionTranslationCoordinator {
             close()
             cache.removeAll()
         }
+        // A gesture still in its debounce belongs to the old settings.
+        if !prefs.translatesSelection || prefs.selectionTrigger != .automatic { pendingTask?.cancel() }
         // A cached translation or a showing strip is in the old language once the setting changes.
         if let applied = appliedLanguage, applied != prefs.readingLanguage {
             close()
@@ -152,9 +154,13 @@ final class SelectionTranslationCoordinator {
 
     // MARK: - Triggers
 
-    private func handleGesture(at point: CGPoint) {
+    private var automaticTriggerIsOn: Bool {
         let prefs = preferences.preferences
-        guard prefs.translatesSelection, prefs.selectionTrigger == .automatic else { return }
+        return prefs.translatesSelection && prefs.selectionTrigger == .automatic
+    }
+
+    private func handleGesture(at point: CGPoint) {
+        guard automaticTriggerIsOn else { return }
         log("select-gesture", "Translate on Select gesture", level: .trace)
         pendingTask?.cancel()
         pendingTask = Task { [weak self] in
@@ -195,6 +201,8 @@ final class SelectionTranslationCoordinator {
     // MARK: - Reading and gating
 
     private func fire(pointer: CGPoint, viaShortcut: Bool) {
+        // A debounce that outlived a setting change must not fire an automatic run.
+        guard viaShortcut || automaticTriggerIsOn else { return }
         guard let app = frontmostApplication(), app.bundleIdentifier != ownBundleIdentifier else { return }
         guard isAppAllowed(app.bundleIdentifier) else {
             log("select-verdict", "Translate on Select verdict",
@@ -217,10 +225,7 @@ final class SelectionTranslationCoordinator {
         ])
 
         let candidate = SelectionTranslationTarget(capture: capture)
-        if !viaShortcut {
-            if candidate == target, model != nil { return }
-            if candidate == dismissedTarget { return }
-        }
+        if !viaShortcut, isAlreadyHandled(candidate) { return }
         let prefs = preferences.preferences
         let verdict = SelectionTranslationPolicy.verdict(
             for: capture, appAllowed: true, targetLanguage: prefs.readingLanguage,
@@ -233,15 +238,26 @@ final class SelectionTranslationCoordinator {
         case .translate(let source):
             begin(capture, candidate, sourceCode: source, pointer: pointer, viaShortcut: viaShortcut)
         case .sameLanguage where viaShortcut:
-            let name = displayName(for: prefs.readingLanguage)
-            // A translation still running for an older selection must not overwrite the notice.
-            translateTask?.cancel()
-            runID += 1
-            target = candidate
-            showNotice("Already in \(name)", in: model, capture: capture, pointer: pointer)
+            noticeAlreadyInReadingLanguage(capture, candidate, pointer: pointer)
         default:
             return
         }
+    }
+
+    /// The automatic trigger skips a selection that is already showing or that the user dismissed.
+    private func isAlreadyHandled(_ candidate: SelectionTranslationTarget) -> Bool {
+        (candidate == target && model != nil) || candidate == dismissedTarget
+    }
+
+    private func noticeAlreadyInReadingLanguage(
+        _ capture: SelectedTextCapture, _ candidate: SelectionTranslationTarget, pointer: CGPoint
+    ) {
+        let name = displayName(for: preferences.preferences.readingLanguage)
+        // A translation still running for an older selection must not overwrite the notice.
+        translateTask?.cancel()
+        runID += 1
+        target = candidate
+        showNotice("Already in \(name)", in: model, capture: capture, pointer: pointer)
     }
 
     /// Everything one translation run needs, so `runTranslation` takes one value instead of seven.
@@ -262,6 +278,14 @@ final class SelectionTranslationCoordinator {
     private func readSelection(
         in snapshot: FocusSnapshot, app: (processIdentifier: pid_t, bundleIdentifier: String), pointer: CGPoint
     ) -> SelectedTextCapture? {
+        if snapshot.context?.processIdentifier == app.processIdentifier,
+           snapshot.capability == .blocked(CredentialFieldDetector.blockedReason) {
+            // A username, email, phone or code box: the focus resolver keeps its context but marks it
+            // blocked. Return nil without asking the reader, which would read the same field through
+            // Accessibility. (Not `.supported` only: a selection in an ordinary editable field is
+            // reported as `.blocked("Text is currently selected.")` and must keep working.)
+            return nil
+        }
         if let input = snapshot.context, input.processIdentifier == app.processIdentifier, !input.selectedText.isEmpty {
             // An editable field already carries its selection in the snapshot: no extra AX calls.
             return SelectedTextCapture(
@@ -375,8 +399,10 @@ final class SelectionTranslationCoordinator {
             // A superseded request can fail with URLError(.cancelled) rather than CancellationError;
             // the id check keeps that failure off the newer strip.
             guard isCurrent() else { return }
-            let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            log("select-translate", "Translate on Select failed", level: .warning, metadata: ["error": .string(reason)])
+            // Only a code, never the description: a provider error can echo the request body, which is
+            // the selected text.
+            log("select-translate", "Translate on Select failed", level: .warning,
+                metadata: ["error": .string(Self.safeErrorCode(error))])
             if viaShortcut {
                 model.phase = .failed((error as? LocalizedError)?.errorDescription ?? "Couldn't translate this.")
                 presenter.refit()
@@ -461,6 +487,14 @@ final class SelectionTranslationCoordinator {
     }
 
     // MARK: - Helpers
+
+    /// The error's type, plus the case name (no associated values) for `RewriteError`.
+    private static func safeErrorCode(_ error: Error) -> String {
+        let type = String(describing: Swift.type(of: error))
+        guard error is RewriteError else { return type }
+        let described = String(describing: error)
+        return "\(type).\(described.prefix { $0 != "(" })"
+    }
 
     private func displayName(for code: String) -> String {
         Locale.current.localizedString(forLanguageCode: code) ?? code
