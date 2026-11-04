@@ -179,6 +179,11 @@ targets:
         # Overridable so a contributor whose personal team rejects the shared id can set their own
         # COTABBY_DEV_BUNDLE_ID in Signing.local.xcconfig; defaults to the canonical dev identity.
         PRODUCT_BUNDLE_IDENTIFIER: "$(COTABBY_DEV_BUNDLE_ID:default=com.jacobfu.tabby.dev)"
+        # A fork that ships this variant as its only Cotabby can name the product plainly
+        # (scripts/build_share_dmg.sh passes COTABBY_DEV_PRODUCT_NAME=Cotabby). Only the file,
+        # executable and CFBundleName change; the bundle id above stays, so installed copies keep
+        # their permissions and Sparkle still accepts the update. Local builds keep "Cotabby Dev".
+        PRODUCT_NAME: "$(COTABBY_DEV_PRODUCT_NAME:default=Cotabby Dev)"
         # Keep this under `base:` so COTABBY_DEV is defined in EVERY configuration, Release included.
         # Do not scope it to `configs: Debug:`. A Release-config dev build (the scheme's Profile and
         # Archive actions) must still compile Sparkle out; otherwise it could pull the prod appcast

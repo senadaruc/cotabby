@@ -41,11 +41,12 @@
 ## This fork: Cotabby with memory, answers, rewrite and translation
 
 This is [@senadaruc](https://github.com/senadaruc)'s build of Cotabby. It adds features that are not
-(yet) in the official app. It runs as **Cotabby Dev** and can be installed next to the official
-Cotabby.
+(yet) in the official app. It is its own app (a separate bundle id, so its settings and
+permissions never mix with the official Cotabby's), but it is also named Cotabby, so keep one
+of the two in Applications.
 
 **[Download the latest Cotabby](https://github.com/senadaruc/cotabby/releases/latest)**: open the
-DMG and drag the app (it is named Cotabby Dev) to Applications. The build is signed but not yet notarized, so the first
+DMG and drag Cotabby to Applications. The build is signed but not yet notarized, so the first
 time, macOS blocks it: open **System Settings → Privacy & Security** and click **Open Anyway**.
 After that it updates itself from this fork's releases. It never takes updates from the official
 feed, which would replace these features.

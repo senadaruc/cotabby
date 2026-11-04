@@ -27,6 +27,7 @@
 #   COTABBY_SHARE_PROJECT_URL the repository the app's GitHub links open (default: upstream)
 #   COTABBY_SHARE_DMG        where to write the DMG (default: build/share/Cotabby-<version>.dmg)
 #   COTABBY_SHARE_VOLUME_NAME the mounted DMG's name (default: Cotabby)
+#   COTABBY_SHARE_APP_NAME   the app's file and menu name (default: Cotabby; the bundle id stays the dev one)
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -53,6 +54,7 @@ build="${COTABBY_SHARE_BUILD:-$(git rev-list --count HEAD)}"
 archive="$OUT_DIR/CotabbyDev.xcarchive"
 dmg="${COTABBY_SHARE_DMG:-$OUT_DIR/Cotabby-$version.dmg}"
 volume_name="${COTABBY_SHARE_VOLUME_NAME:-Cotabby}"
+app_name="${COTABBY_SHARE_APP_NAME:-Cotabby}"
 update_settings=()
 if [[ -n "${COTABBY_SHARE_FEED_URL:-}" ]]; then
     update_settings=(COTABBY_DEV_UPDATE_FEED_URL="$COTABBY_SHARE_FEED_URL"
@@ -63,7 +65,7 @@ fi
 rm -rf "$archive" "$dmg" "$OUT_DIR/DerivedData"
 mkdir -p "$OUT_DIR"
 
-step "Building Cotabby Dev $version (build $build)"
+step "Building $app_name $version (build $build)"
 "$REPO_ROOT/scripts/prepare_cotabby_workspace.sh"
 xcodebuild archive \
     -workspace "$REPO_ROOT/build/cotabby-dependencies/Cotabby.xcworkspace" \
@@ -74,10 +76,10 @@ xcodebuild archive \
     -destination 'generic/platform=macOS' \
     CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$identity" DEVELOPMENT_TEAM="$team_id" \
     OTHER_CODE_SIGN_FLAGS="--timestamp" \
-    MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$build" \
+    MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$build" COTABBY_DEV_PRODUCT_NAME="$app_name" \
     ${update_settings[@]+"${update_settings[@]}"} \
     -quiet
-app="$archive/Products/Applications/Cotabby Dev.app"
+app="$archive/Products/Applications/$app_name.app"
 
 step "Signing"
 # Inside-out, as the release workflow does: Xcode can leave Sparkle's helpers ad-hoc signed, and
