@@ -10,9 +10,16 @@ import UniformTypeIdentifiers
 struct TranslationPaneView: View {
     @ObservedObject var preferences: TranslationPreferencesStore
     let service: TranslationService
+    /// Observed so the provider line follows Settings → Rewrite and "Same as autocomplete" live.
+    @ObservedObject var rewritePreferences: RewritePreferencesStore
+    @ObservedObject var suggestionSettings: SuggestionSettingsModel
+    /// Not observable: it only answers "which provider is active", re-read on each redraw the two
+    /// stores above trigger.
+    let rewriteEngine: RewriteEngine
 
     @State private var statuses: [String: TranslationPairAvailability] = [:]
     @State private var isRecordingShortcut = false
+    @State private var isRecordingSelectionShortcut = false
 
     /// Chat languages whose status is shown; the user's own from their Writing languages are
     /// common ones, and Macedonian shows how the local-model fallback is reported.
@@ -38,11 +45,12 @@ struct TranslationPaneView: View {
                 } label: {
                     SettingsRowLabel(
                         title: "My Language",
-                        description: "Messages are translated into this language, and replies you write in it are offered in the chat's language.",
+                        description: "Messages are translated into this language, and replies you write in it are offered in the chat's " +
+                            "language, and selected text is translated into it.",
                         systemImage: "person.wave.2"
                     )
                 }
-                .disabled(!preferences.preferences.isEnabled)
+                .disabled(!preferences.preferences.isEnabled && !preferences.preferences.translatesSelection)
 
                 Toggle(isOn: binding(\.translatesIncoming, preferences.setTranslatesIncoming)) {
                     SettingsRowLabel(
@@ -102,6 +110,72 @@ struct TranslationPaneView: View {
                 .disabled(!preferences.preferences.isEnabled || !preferences.preferences.offersReplyTranslation)
             }
 
+            Section("Translate on Select") {
+                Toggle(isOn: binding(\.translatesSelection, preferences.setTranslatesSelection)) {
+                    SettingsRowLabel(
+                        title: "Translate Selected Text",
+                        description: "Select text in any app and its translation into your language appears " +
+                            "above the selection, with a Copy button.",
+                        systemImage: "text.magnifyingglass"
+                    )
+                }
+                .settingsItem(.translationOnSelect)
+
+                Picker(selection: binding(\.selectionTrigger, preferences.setSelectionTrigger)) {
+                    ForEach(SelectionTranslationTrigger.allCases, id: \.self) { trigger in
+                        Text(Self.label(for: trigger)).tag(trigger)
+                    }
+                } label: {
+                    SettingsRowLabel(
+                        title: "Show Translation",
+                        description: "Automatic shows it about half a second after you select; the shortcut always works.",
+                        systemImage: "cursorarrow.click.2"
+                    )
+                }
+                .disabled(!preferences.preferences.translatesSelection)
+
+                LabeledContent {
+                    KeybindRow(
+                        label: preferences.preferences.selectionKeyLabel,
+                        keyCode: preferences.preferences.selectionKeyCode,
+                        isRecording: $isRecordingSelectionShortcut,
+                        onRecord: { keyCode, modifiers, label in
+                            preferences.setSelectionKey(keyCode: keyCode, modifiers: modifiers.rawValue, label: label)
+                        },
+                        onReset: { resetSelectionKey() },
+                        resetLabel: "Reset",
+                        shouldShowReset: preferences.preferences.selectionKeyCode != TranslationPreferences.defaultSelectionKeyCode
+                            || preferences.preferences.selectionKeyModifiers != TranslationPreferences.defaultSelectionKeyModifiers,
+                        onClear: { resetSelectionKey() },
+                        clearLabel: "Use Default",
+                        clearHelp: "Go back to \(TranslationPreferences.defaultSelectionKeyLabel).",
+                        conflictChecker: { keyCode, modifiers in selectionShortcutConflict(keyCode, modifiers) }
+                    )
+                } label: {
+                    SettingsRowLabel(
+                        title: "Translate Selection Shortcut",
+                        description: "Shows the translation of the selected text, or shows it again after you closed it.",
+                        systemImage: "keyboard"
+                    )
+                }
+                .settingsItem(.translationOnSelectShortcut)
+                .disabled(!preferences.preferences.translatesSelection)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Translates with \(Self.providerName(rewriteEngine.resolvedKind, rewritePreferences)) from Settings → Rewrite.")
+                    if rewriteEngine.activeProviderSendsOffDevice {
+                        Text("The selected text is sent to \(rewriteEngine.activeHostName ?? "that service"). " +
+                            "Memory facts are never sent.")
+                            .foregroundStyle(Color.orange)
+                    } else {
+                        Text("Runs on this Mac.")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
             Section("Apps") {
                 ForEach(preferences.preferences.appBundleIdentifiers, id: \.self) { identifier in
                     LabeledContent {
@@ -139,7 +213,9 @@ struct TranslationPaneView: View {
             Section("Privacy") {
                 Text("Translation reads text from the chat window with Screen Recording, translates it on this Mac, " +
                     "and keeps translations in memory only. Nothing is saved, logged, or sent to a server. " +
-                    "Password fields and apps where Cotabby is off are never read.")
+                    "Password fields and apps where Cotabby is off are never read. " +
+                    "Translate on Select sends only the selected text to the Rewrite model you chose; " +
+                    "with a cloud service that text leaves this Mac.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -157,6 +233,47 @@ struct TranslationPaneView: View {
         NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
             .map { FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "") }
             ?? bundleIdentifier
+    }
+
+    private static func label(for trigger: SelectionTranslationTrigger) -> String {
+        switch trigger {
+        case .automatic: return "Automatically when I select text"
+        case .shortcut: return "Only with the shortcut"
+        }
+    }
+
+    /// Close to the Rewrite pane's row wording (its helper is private), phrased to read inside a
+    /// sentence. `resolvedKind` is never `sameAsAutocomplete`, but the switch stays exhaustive and
+    /// names that case anyway.
+    private static func providerName(_ kind: RewriteProviderKind, _ rewritePreferences: RewritePreferencesStore) -> String {
+        switch kind {
+        case .sameAsAutocomplete: return "the autocomplete model"
+        case .appleIntelligence: return "Apple Intelligence"
+        case .openSource: return "the Open Source model"
+        case .localEndpoint: return "Local Endpoint"
+        case .mlx: return "MLX"
+        case .api: return rewritePreferences.preferences.cloudProvider.displayName
+        }
+    }
+
+    private func resetSelectionKey() {
+        preferences.setSelectionKey(
+            keyCode: TranslationPreferences.defaultSelectionKeyCode,
+            modifiers: TranslationPreferences.defaultSelectionKeyModifiers,
+            label: TranslationPreferences.defaultSelectionKeyLabel
+        )
+    }
+
+    /// Blocks the two chords this feature would otherwise shadow: the reply key and Rewrite's ⌃⌥R.
+    private func selectionShortcutConflict(_ keyCode: CGKeyCode, _ modifiers: ShortcutModifierMask) -> String? {
+        if keyCode == preferences.preferences.replaceKeyCode, modifiers.rawValue == preferences.preferences.replaceKeyModifiers {
+            return "Already used to replace your draft."
+        }
+        if keyCode == 15,
+           modifiers.rawValue == (ShortcutModifierMask.control.rawValue | ShortcutModifierMask.option.rawValue) {
+            return "Already used by Rewrite (⌃⌥R)."
+        }
+        return nil
     }
 
     private static let readingLanguageChoices = ["en", "tr", "mk", "de", "fr", "es", "it", "nl", "ru"]

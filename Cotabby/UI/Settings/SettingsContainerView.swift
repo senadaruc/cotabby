@@ -165,7 +165,11 @@ struct SettingsContainerView: View {
         case .memory:
             MemoryPaneView(controller: memoryController, control: memoryControl)
         case .translation:
-            TranslationPaneView(preferences: translationPreferences, service: translationService)
+            TranslationPaneView(
+                preferences: translationPreferences, service: translationService,
+                rewritePreferences: rewritePreferences, suggestionSettings: suggestionSettings,
+                rewriteEngine: rewriteEngine
+            )
         case .rewrite:
             RewritePaneView(preferences: rewritePreferences, credentials: rewriteCredentials,
                             modelList: rewriteModelList, engine: rewriteEngine, suggestionSettings: suggestionSettings,

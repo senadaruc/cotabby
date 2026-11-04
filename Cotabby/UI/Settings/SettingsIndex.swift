@@ -65,6 +65,8 @@ enum SettingsItem: String, CaseIterable, Identifiable {
     case translationEnabled
     case translationApps
     case translationLanguages
+    case translationOnSelect
+    case translationOnSelectShortcut
     case contextLivePreview
     // Rewrite
     case rewriteProvider
@@ -179,6 +181,8 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .translationEnabled: return "Translate Messages"
         case .translationApps: return "Translation Apps"
         case .translationLanguages: return "Translation Languages"
+        case .translationOnSelect: return "Translate Selected Text"
+        case .translationOnSelectShortcut: return "Translate Selection Shortcut"
         case .rewriteProvider: return "Rewrite Model"
         case .rewriteMemory: return "Rewrite with Memory"
         case .rewriteButton: return "Rewrite Button"
@@ -285,6 +289,8 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .translationEnabled: return "character.bubble"
         case .translationApps: return "app.badge"
         case .translationLanguages: return "globe"
+        case .translationOnSelect: return "text.magnifyingglass"
+        case .translationOnSelectShortcut: return "keyboard"
         case .rewriteProvider: return "cpu"
         case .rewriteMemory: return "brain"
         case .rewriteButton: return "wand.and.stars"
@@ -363,7 +369,8 @@ enum SettingsItem: String, CaseIterable, Identifiable {
             return .context
         case .memoryService, .memorySources, .memoryIndex, .memoryPrivacy, .memoryPlayground, .memoryAnswers:
             return .memory
-        case .translationEnabled, .translationApps, .translationLanguages:
+        case .translationEnabled, .translationApps, .translationLanguages, .translationOnSelect,
+             .translationOnSelectShortcut:
             return .translation
         case .rewriteProvider, .rewriteMemory, .rewriteButton:
             return .rewrite
@@ -441,6 +448,8 @@ enum SettingsItem: String, CaseIterable, Identifiable {
         case .translationEnabled: return "Translate incoming messages and offer replies in the chat's language."
         case .translationApps: return "Apps whose chats are translated."
         case .translationLanguages: return "Which languages translate on this Mac, and how."
+        case .translationOnSelect: return "Show the translation of any text you select, with a Copy button."
+        case .translationOnSelectShortcut: return "The key that shows the translation of the selected text."
         case .rewriteProvider: return "Rewrite with the engine autocomplete uses, another local engine, or your API model."
         case .rewriteMemory: return "Let rewrites use facts and your style from memory."
         case .rewriteButton: return "Show a button when you select text, or use ⌃⌥R."
@@ -636,6 +645,11 @@ enum SettingsItem: String, CaseIterable, Identifiable {
             return ["translate", "translation apps", "whatsapp", "teams", "telegram", "slack", "outlook", "mail"]
         case .translationLanguages:
             return ["translation languages", "apple translation", "download languages", "offline translation"]
+        case .translationOnSelect:
+            return ["translate selection", "translate on select", "select text translate", "selected text",
+                    "copy translation", "hover translation", "popup translation", "mail", "web page", "chrome"]
+        case .translationOnSelectShortcut:
+            return ["translate shortcut", "translation shortcut", "⌃⌥L", "control option l", "selection shortcut"]
         case .rewriteProvider:
             return ["rewrite", "rephrase", "api", "openai", "cloud", "model", "polish", "mlx", "apple intelligence", "endpoint", "ollama", "open source"]
         case .rewriteMemory:

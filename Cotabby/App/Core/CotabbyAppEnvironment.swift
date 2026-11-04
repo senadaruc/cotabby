@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 import Logging
@@ -69,6 +70,7 @@ final class CotabbyAppEnvironment {
     let rewritePreferences: RewritePreferencesStore
     let rewriteCredentials: RewriteCredentialVault
     let selectionRewriteCoordinator: SelectionRewriteCoordinator
+    let selectionTranslationCoordinator: SelectionTranslationCoordinator
     let settingsCoordinator: SettingsCoordinator
     let activationIndicatorController: ActivationIndicatorController
     /// Per-window Autocomplete/Translate choices made from the field icon.
@@ -464,6 +466,15 @@ final class CotabbyAppEnvironment {
             autocompleteEngine: { [weak suggestionSettings] in suggestionSettings?.selectedEngine ?? .llamaOpenSource },
             preferences: { [weak rewritePreferences] in rewritePreferences?.preferences ?? .defaults }
         )
+        // One app gate for both selection features, so Rewrite and Translate on Select can never
+        // disagree about whether Cotabby is on in the frontmost app.
+        let isAppAllowed: @MainActor (String) -> Bool = { [weak suggestionSettings, weak lowPowerModeMonitor] bundleIdentifier in
+            guard let suggestionSettings else { return false }
+            let settings = suggestionSettings.snapshot
+            let lowPower = (lowPowerModeMonitor?.isLowPowerModeEnabled ?? false) && settings.isLowPowerModeAutoDisableEnabled
+            return settings.isGloballyEnabled && !settings.isTemporarilyPaused && !lowPower
+                && !settings.disabledAppBundleIdentifiers.contains(bundleIdentifier)
+        }
         let selectionRewriteCoordinator = SelectionRewriteCoordinator(
             snapshots: focusModel.$snapshot.eraseToAnyPublisher(),
             currentSnapshot: { [weak focusModel] in focusModel?.snapshot ?? .inactive },
@@ -483,18 +494,41 @@ final class CotabbyAppEnvironment {
                 }
             ),
             preferences: { [weak rewritePreferences] in rewritePreferences?.preferences ?? .defaults },
-            isAppAllowed: { [weak suggestionSettings, weak lowPowerModeMonitor] bundleIdentifier in
-                guard let suggestionSettings else { return false }
-                let settings = suggestionSettings.snapshot
-                let lowPower = (lowPowerModeMonitor?.isLowPowerModeEnabled ?? false) && settings.isLowPowerModeAutoDisableEnabled
-                return settings.isGloballyEnabled && !settings.isTemporarilyPaused && !lowPower
-                    && !settings.disabledAppBundleIdentifiers.contains(bundleIdentifier)
-            },
+            isAppAllowed: isAppAllowed,
             hotkey: TranslationHotkeyTap(suppressionController: suppressionController),
             keyTap: TemporaryKeyTap(suppressionController: suppressionController),
             writingLanguages: { [weak suggestionSettings] in suggestionSettings?.responseLanguages ?? [] },
             setFixesMistakes: { [weak rewritePreferences] in rewritePreferences?.setFixesMistakes($0) }
         )
+        // Translate on Select: a selection anywhere (editable or not), read once after the gesture ends,
+        // translated by the Rewrite provider, shown in a strip that never takes the keyboard.
+        let selectionTranslationCoordinator = SelectionTranslationCoordinator(
+            preferences: translationPreferences,
+            currentSnapshot: { [weak focusModel] in focusModel?.snapshot ?? .inactive },
+            frontmostApplication: {
+                guard let app = NSWorkspace.shared.frontmostApplication, let bundle = app.bundleIdentifier else { return nil }
+                return (app.processIdentifier, bundle)
+            },
+            pointerLocation: { NSEvent.mouseLocation },
+            isAppAllowed: isAppAllowed,
+            windowOverride: { [weak windowFeatureOverrides] bundle, title in
+                windowFeatureOverrides?.override(
+                    for: .translation,
+                    windowKey: WindowFeatureScope.windowKey(bundleIdentifier: bundle, windowTitle: title)
+                )
+            },
+            wandFrame: { [weak activationIndicatorController] in activationIndicatorController?.rewriteIconFrame },
+            presenter: SelectionTranslationPanelController(),
+            reader: ReadOnlySelectionReader(),
+            events: SelectionEventMonitor(),
+            engine: rewriteEngine,
+            output: LiveSelectionRewriteTextOutput(inserter: suggestionInserter),
+            hotkey: TranslationHotkeyTap(suppressionController: suppressionController)
+        )
+        // The Rewrite popup and the translation strip must not stack on the same selection.
+        selectionRewriteCoordinator.onPopupOpened = { [weak selectionTranslationCoordinator] in
+            selectionTranslationCoordinator?.hide()
+        }
         let settingsCoordinator = SettingsCoordinator(
             appUpdateManager: appUpdateManager,
             permissionManager: permissionManager,
@@ -689,6 +723,7 @@ final class CotabbyAppEnvironment {
         self.rewritePreferences = rewritePreferences
         self.rewriteCredentials = rewriteCredentials
         self.selectionRewriteCoordinator = selectionRewriteCoordinator
+        self.selectionTranslationCoordinator = selectionTranslationCoordinator
         self.settingsCoordinator = settingsCoordinator
         self.activationIndicatorController = activationIndicatorController
         self.windowFeatureOverrides = windowFeatureOverrides

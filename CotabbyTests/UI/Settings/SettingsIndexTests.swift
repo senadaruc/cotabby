@@ -64,7 +64,10 @@ final class SettingsIndexTests: XCTestCase {
             ("typo", .automaticallyFixTypos),
             ("model status", .modelStatus),
             ("battery", .batteryModel),
-            ("plugged", .pluggedInModel)
+            ("plugged", .pluggedInModel),
+            ("translate selection", .translationOnSelect),
+            ("select text translate", .translationOnSelect),
+            ("translation shortcut", .translationOnSelectShortcut)
         ]
         for expectation in expectations {
             XCTAssertTrue(
