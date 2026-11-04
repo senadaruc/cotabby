@@ -113,12 +113,12 @@ final class SelectionTranslationPolicyTests: XCTestCase {
         )
     }
 
-    /// A bare link is not a sentence, so the verdict depends on the trigger. Only the eligibility
-    /// rules are pinned here; the automatic and shortcut verdicts are left to the detector's own guess.
-    func test_linkIsNotTranslatedAutomaticallyWhenNoLanguageIsKnown() {
-        let url = "https://example.com/path/to/page"
-        XCTAssertNotEqual(verdict(url, target: "nl", secure: true), .translate(sourceCode: nil))
-        XCTAssertNotEqual(verdict(url, target: "nl", appAllowed: false), .translate(sourceCode: nil))
+    /// "abc" has enough letters to pass the size floor, but neither detector can answer for three
+    /// letters, so the verdict depends only on the trigger: the automatic path stays quiet while the
+    /// shortcut, an explicit request, translates with no source language named.
+    func test_undetectedTextIsSkippedAutomaticallyButTranslatedByTheShortcut() {
+        XCTAssertEqual(verdict("abc", target: "nl", trigger: .automatic), .undetected)
+        XCTAssertEqual(verdict("abc", target: "nl", trigger: .shortcut), .translate(sourceCode: nil))
     }
 
     // MARK: - Names and echoes
