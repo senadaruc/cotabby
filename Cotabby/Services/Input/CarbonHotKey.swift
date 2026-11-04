@@ -1,5 +1,6 @@
 import Carbon.HIToolbox
 import Foundation
+import Logging
 
 /// File overview:
 /// One system-wide keyboard shortcut registered through Carbon's `RegisterEventHotKey`. Translate on
@@ -36,7 +37,15 @@ final class CarbonHotKey: SelectionHotkeyInstalling {
         let status = RegisterEventHotKey(
             UInt32(keyCode), Self.carbonModifiers(from: modifiers), id, GetApplicationEventTarget(), 0, &ref
         )
-        if status == noErr { hotKeyRef = ref }
+        if status == noErr {
+            hotKeyRef = ref
+        } else {
+            // Most often the chord is already owned by another app (eventHotKeyExistsErr).
+            CotabbyLogger.app.log(level: .warning, "Selection shortcut could not be registered", metadata: [
+                "category": "translation", "stage": "hotkey-register-failed",
+                "os_status": .stringConvertible(status)
+            ])
+        }
     }
 
     func remove() {
