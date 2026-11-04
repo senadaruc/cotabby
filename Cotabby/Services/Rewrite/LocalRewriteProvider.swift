@@ -85,16 +85,19 @@ final class OpenSourceRewriteProvider: RewriteProviding {
         )
         // A rewrite can be several sentences; autocomplete's stop at the first sentence end would cut it.
         options.sentenceStopMinimumTokens = .max
-        options.stopSequences = RewritePromptBuilder.stopSequences(for: request.action)
+        let stops = RewritePromptBuilder.stopSequences(for: request.action)
+        options.stopSequences = stops
         let relay = PartialRelay(deliver: onPartial)
         // Stop delivery on every exit, including a thrown error, so no partial can arrive after
         // this function has returned.
         defer { relay.finish() }
+        // The runtime stops at a stop sequence but returns it on the end of the text (both in the
+        // partials and in the final output), so every piece is cut here before anyone sees it.
         let output = try await runtimeManager.generate(
             prompt: RewritePromptBuilder.basePrompt(request), options: options,
-            onPartialRawText: { text in relay.send(text) }
+            onPartialRawText: { text in relay.send(RewriteOutputCleaner.cutAtStopSequence(text, stops: stops)) }
         )
-        return output.text
+        return RewriteOutputCleaner.cutAtStopSequence(output.text, stops: stops)
     }
 }
 

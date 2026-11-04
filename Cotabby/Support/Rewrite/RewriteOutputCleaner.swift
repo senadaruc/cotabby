@@ -43,6 +43,19 @@ nonisolated enum RewriteOutputCleaner {
         return leading + text + trailing
     }
 
+    /// Cuts the output at the first stop sequence it contains. The in-process llama runtime stops
+    /// decoding once the text *contains* a stop sequence but hands back the text with that sequence
+    /// still on the end, so a base-model translation came through as "…delivery person\n\nDraft"
+    /// and the strip showed a stray "Draft" line. Servers (llama-server, Ollama, MLX) exclude the
+    /// stop themselves; running this on their output is a no-op.
+    static func cutAtStopSequence(_ text: String, stops: [String]) -> String {
+        var cut = text
+        for stop in stops {
+            if let range = cut.range(of: stop) { cut = String(cut[..<range.lowerBound]) }
+        }
+        return cut
+    }
+
     private static func stripCodeFence(_ text: String) -> String {
         guard text.hasPrefix("```"), text.hasSuffix("```"), text.count >= 6 else { return text }
         var lines = text.components(separatedBy: "\n")
