@@ -22,6 +22,14 @@ nonisolated enum TranslationPairAvailability: Equatable, Sendable {
     case unavailable
 }
 
+/// How Translate on Select shows a translation.
+nonisolated enum SelectionTranslationTrigger: String, CaseIterable, Sendable {
+    /// The strip appears on its own once a selection has held still.
+    case automatic
+    /// Only the shortcut shows it.
+    case shortcut
+}
+
 /// The user's translation preferences, persisted by `TranslationPreferencesStore`.
 nonisolated struct TranslationPreferences: Equatable, Sendable {
     /// Master switch. Off by default: translation reads other people's messages from the screen,
@@ -38,6 +46,16 @@ nonisolated struct TranslationPreferences: Equatable, Sendable {
     var replaceKeyCode: CGKeyCode
     var replaceKeyModifiers: UInt32
     var replaceKeyLabel: String
+    /// Translate on Select: the translation of any selected text, in a strip above the selection.
+    /// Independent of `isEnabled`, which gates the chat-window features (and is scoped by the app
+    /// list); it shares `readingLanguage`. Off by default: with a cloud Rewrite provider it is a new
+    /// path for text to leave the Mac, which the user turns on knowingly.
+    var translatesSelection: Bool
+    var selectionTrigger: SelectionTranslationTrigger
+    /// The key that shows (or re-shows) the translation of the current selection.
+    var selectionKeyCode: CGKeyCode
+    var selectionKeyModifiers: UInt32
+    var selectionKeyLabel: String
 
     /// Messaging and mail apps offered when the user first turns translation on.
     static let suggestedAppBundleIdentifiers = [
@@ -55,6 +73,11 @@ nonisolated struct TranslationPreferences: Equatable, Sendable {
     static let defaultReplaceKeyModifiers: UInt32 = (1 << 2) | (1 << 3)
     static let defaultReplaceKeyLabel = "⌃ ⌥ T"
 
+    /// ⌃⌥L ("language"): ⌃⌥T is the reply key above, ⌃⌥R is Rewrite's.
+    static let defaultSelectionKeyCode: CGKeyCode = 37
+    static let defaultSelectionKeyModifiers: UInt32 = (1 << 2) | (1 << 3)
+    static let defaultSelectionKeyLabel = "⌃ ⌥ L"
+
     static let defaults = TranslationPreferences(
         isEnabled: false,
         readingLanguage: "en",
@@ -63,7 +86,12 @@ nonisolated struct TranslationPreferences: Equatable, Sendable {
         offersReplyTranslation: true,
         replaceKeyCode: defaultReplaceKeyCode,
         replaceKeyModifiers: defaultReplaceKeyModifiers,
-        replaceKeyLabel: defaultReplaceKeyLabel
+        replaceKeyLabel: defaultReplaceKeyLabel,
+        translatesSelection: false,
+        selectionTrigger: .automatic,
+        selectionKeyCode: defaultSelectionKeyCode,
+        selectionKeyModifiers: defaultSelectionKeyModifiers,
+        selectionKeyLabel: defaultSelectionKeyLabel
     )
 }
 

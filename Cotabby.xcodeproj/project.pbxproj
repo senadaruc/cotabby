@@ -507,6 +507,7 @@
 		5B190F19D361B89D60B73B44 /* PerformanceTuningMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CB960C83836BCD1680ED358 /* PerformanceTuningMode.swift */; };
 		5B3FAD231ECFC7539C33FC1E /* DownloadableModelCatalogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 415E80FEA7C1330D502CE97F /* DownloadableModelCatalogView.swift */; };
 		5B63CBEBEC445DEECDD2037E /* SentenceBoundaryClassifierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C74D10CCC6CB008695F5C0A /* SentenceBoundaryClassifierTests.swift */; };
+		5BC7DF31F567F0875844CE26 /* SelectionTranslationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 931EE80833EB5E95C36D2669 /* SelectionTranslationModels.swift */; };
 		5BF39DDF3101BB4C58863C19 /* PermissionModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = D47E1471C110614F0D07E399 /* PermissionModels.swift */; };
 		5C5A2751F848F8A11DCF64B2 /* it-100k.txt in Resources */ = {isa = PBXBuildFile; fileRef = 2D8AA55C2B730110E8598F91 /* it-100k.txt */; };
 		5C67947575E96AABF06B1AC9 /* TypingSessionEvalScoringTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB1E28CF7847BCBA577C1A2D /* TypingSessionEvalScoringTests.swift */; };
@@ -617,6 +618,7 @@
 		6F3B43828817C2C303E8D16E /* InlineCommandCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65AF0FF1CE97A0761ADAFEB8 /* InlineCommandCoordinatorTests.swift */; };
 		6FA8CBA189210C9821B03656 /* TokenHealingBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50AECDF57800BBB6617620D5 /* TokenHealingBuffer.swift */; };
 		6FE39CA30AD9A5ED657B4C58 /* AnswerDraftEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9D70DB834AF24B4FB6F4CCB /* AnswerDraftEngine.swift */; };
+		6FE552493B5694912AF35DE1 /* SelectionTranslationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 931EE80833EB5E95C36D2669 /* SelectionTranslationModels.swift */; };
 		6FEB82EB34BB3C89EF656F9E /* MessageBlockGrouper.swift in Sources */ = {isa = PBXBuildFile; fileRef = B77C56D304F76441BD79ED08 /* MessageBlockGrouper.swift */; };
 		7008657841ECD4F06A46A9DE /* PromptPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC4D7129517D678D95D0BC2 /* PromptPolicyTests.swift */; };
 		7097797640547007DF552F4E /* SuggestionOverlayStabilityGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49DB247AACE1B28D45DB52B0 /* SuggestionOverlayStabilityGate.swift */; };
@@ -1916,6 +1918,7 @@
 		92854D0927EBF17A48AE2804 /* LowPowerModeMonitorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LowPowerModeMonitorTests.swift; sourceTree = "<group>"; };
 		928A884292355FEF8B605B64 /* SuggestionFadeInPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SuggestionFadeInPolicyTests.swift; sourceTree = "<group>"; };
 		9316289DD11A72D3EAC0A929 /* CompositionInputModeClassifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompositionInputModeClassifier.swift; sourceTree = "<group>"; };
+		931EE80833EB5E95C36D2669 /* SelectionTranslationModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionTranslationModels.swift; sourceTree = "<group>"; };
 		93208561AC9A2CEB4F18D6C0 /* SuggestionSettingsMLXTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SuggestionSettingsMLXTests.swift; sourceTree = "<group>"; };
 		93A0240056E678E31444517A /* PerAppSettingsResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerAppSettingsResolver.swift; sourceTree = "<group>"; };
 		94A26D86030FC5FA67371C52 /* DateMacroEvaluator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DateMacroEvaluator.swift; sourceTree = "<group>"; };
@@ -4204,6 +4207,7 @@
 		B83C01707055589407F5338B /* Translation */ = {
 			isa = PBXGroup;
 			children = (
+				931EE80833EB5E95C36D2669 /* SelectionTranslationModels.swift */,
 				AB05DAD47115DAEF0BFE11AF /* TranslationModels.swift */,
 			);
 			path = Translation;
@@ -5489,6 +5493,7 @@
 				E84481B625303282B54A8A7C /* SelectionRewriteEligibility.swift in Sources */,
 				D940141FE66D0544EAC777D4 /* SelectionRewritePanelController.swift in Sources */,
 				EBE20D86BEC6C025E26364CF /* SelectionRewritePopupView.swift in Sources */,
+				5BC7DF31F567F0875844CE26 /* SelectionTranslationModels.swift in Sources */,
 				EFEA8845584EC9AE7D3B123D /* SelfCaptureGate.swift in Sources */,
 				A262EF1BD871C12840DA75F2 /* SentenceBoundaryClassifier.swift in Sources */,
 				1AB037C6DC95769F4765B5CA /* SettingsAttentionEvaluator.swift in Sources */,
@@ -5978,6 +5983,7 @@
 				34C6CA29ABBB2068A61D39C2 /* SelectionRewriteEligibility.swift in Sources */,
 				51F7EC7F35B9D78BF8DACFF7 /* SelectionRewritePanelController.swift in Sources */,
 				4AE0A44A40D4F4B6880F6714 /* SelectionRewritePopupView.swift in Sources */,
+				6FE552493B5694912AF35DE1 /* SelectionTranslationModels.swift in Sources */,
 				BC973BC6939231E0DB1836F1 /* SelfCaptureGate.swift in Sources */,
 				00B988D789E7FC55653191DB /* SentenceBoundaryClassifier.swift in Sources */,
 				CC615916E478E98D403F5714 /* SettingsAttentionEvaluator.swift in Sources */,
