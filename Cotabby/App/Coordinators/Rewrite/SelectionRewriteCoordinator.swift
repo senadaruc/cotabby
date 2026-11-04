@@ -64,6 +64,10 @@ final class SelectionRewriteCoordinator {
     /// while the selection is unchanged, but ⌃⌥R still reopens the popup for it. Cleared by `close()`.
     private var dismissedTarget: SelectionRewriteTarget?
 
+    /// Called as the popup opens. Lets Translate on Select hide its strip, which would otherwise sit
+    /// over the rewrite popup (both float above the same selection).
+    var onPopupOpened: (() -> Void)?
+
     static let escapeKeyCode: CGKeyCode = 53
     static let returnKeyCode: CGKeyCode = 36
 
@@ -208,6 +212,7 @@ final class SelectionRewriteCoordinator {
 
     private func openPopup() {
         guard let input = targetInput, model == nil else { return }
+        onPopupOpened?()
         stableTask?.cancel()
         let prefs = preferences()
         let model = SelectionRewritePopupModel()
