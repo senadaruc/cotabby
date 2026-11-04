@@ -126,7 +126,11 @@ final class SelectionTranslationCoordinatorTests: XCTestCase {
         let output: Output
     }
 
-    private func make(debounce: UInt64 = 0) -> Rig {
+    private func make(
+        debounce: UInt64 = 0,
+        windowOverride: (@MainActor (String, String?) -> Bool?)? = nil,
+        focusedWindowTitle: @escaping @MainActor (pid_t) -> String? = { _ in nil }
+    ) -> Rig {
         let presenter = Presenter(), reader = Reader(), events = Events(), runner = Runner(), output = Output()
         reader.capture = capture(dutch)
         let coordinator = SelectionTranslationCoordinator(
@@ -135,8 +139,9 @@ final class SelectionTranslationCoordinatorTests: XCTestCase {
             frontmostApplication: { (123, "com.apple.mail") },
             pointerLocation: { CGPoint(x: 100, y: 100) },
             isAppAllowed: { [unowned self] _ in self.allowed },
-            windowOverride: { [unowned self] _, _ in self.override },
+            windowOverride: windowOverride ?? { [unowned self] _, _ in self.override },
             wandFrame: { [unowned self] in self.wand },
+            focusedWindowTitle: focusedWindowTitle,
             presenter: presenter, reader: reader, events: events, engine: runner, output: output,
             hotkey: nil, ownBundleIdentifier: "com.cotabby.test", debounce: debounce
         )
@@ -286,6 +291,20 @@ final class SelectionTranslationCoordinatorTests: XCTestCase {
         await select(events)
         XCTAssertEqual(presenter.showCalls, 0)
         XCTAssertEqual(reader.calls, 0)
+    }
+
+    func test_readOnlySelectionUsesTheFocusedWindowTitleForTheWindowVeto() async {
+        final class TitleBox { var seen: [String?] = [] }
+        let box = TitleBox()
+        current = .inactive
+        let rig = make(windowOverride: { _, title in box.seen.append(title); return false },
+                        focusedWindowTitle: { _ in "Chat with Bob" })
+        let presenter = rig.presenter; let reader = rig.reader; let events = rig.events; let runner = rig.runner
+        reader.capture = capture(dutch)
+        await select(events)
+        XCTAssertEqual(box.seen, ["Chat with Bob"])
+        XCTAssertEqual(presenter.showCalls, 0)
+        XCTAssertEqual(runner.calls, 0)
     }
 
     func test_turningTheSettingOffHidesTheStripAndStopsObserving() async {

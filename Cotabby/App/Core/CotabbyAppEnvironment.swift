@@ -523,7 +523,7 @@ final class CotabbyAppEnvironment {
             events: SelectionEventMonitor(),
             engine: rewriteEngine,
             output: LiveSelectionRewriteTextOutput(inserter: suggestionInserter),
-            hotkey: TranslationHotkeyTap(suppressionController: suppressionController)
+            hotkey: CarbonHotKey()
         )
         // The Rewrite popup and the translation strip must not stack on the same selection.
         selectionRewriteCoordinator.onPopupOpened = { [weak selectionTranslationCoordinator] in

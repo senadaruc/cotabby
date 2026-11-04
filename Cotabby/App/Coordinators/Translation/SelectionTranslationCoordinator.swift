@@ -30,12 +30,13 @@ final class SelectionTranslationCoordinator {
     private let isAppAllowed: @MainActor (String) -> Bool
     private let windowOverride: @MainActor (_ bundleIdentifier: String, _ windowTitle: String?) -> Bool?
     private let wandFrame: @MainActor () -> CGRect?
+    private let focusedWindowTitle: @MainActor (pid_t) -> String?
     private let presenter: SelectionTranslationPresenting
     private let reader: SelectionReading
     private let events: SelectionEventObserving
     private let engine: SelectionTranslationRunning
     private let output: SelectionTranslationTextOutput
-    private let hotkey: TranslationHotkeyTap?
+    private let hotkey: SelectionHotkeyInstalling?
     private let ownBundleIdentifier: String?
     private let debounce: UInt64
 
@@ -70,12 +71,13 @@ final class SelectionTranslationCoordinator {
         isAppAllowed: @escaping @MainActor (String) -> Bool,
         windowOverride: @escaping @MainActor (_ bundleIdentifier: String, _ windowTitle: String?) -> Bool?,
         wandFrame: @escaping @MainActor () -> CGRect?,
+        focusedWindowTitle: @escaping @MainActor (pid_t) -> String? = { AXHelper.focusedWindowTitle(processIdentifier: $0) },
         presenter: SelectionTranslationPresenting,
         reader: SelectionReading,
         events: SelectionEventObserving,
         engine: SelectionTranslationRunning,
         output: SelectionTranslationTextOutput,
-        hotkey: TranslationHotkeyTap?,
+        hotkey: SelectionHotkeyInstalling?,
         ownBundleIdentifier: String? = Bundle.main.bundleIdentifier,
         debounce: UInt64 = 500_000_000
     ) {
@@ -86,6 +88,7 @@ final class SelectionTranslationCoordinator {
         self.isAppAllowed = isAppAllowed
         self.windowOverride = windowOverride
         self.wandFrame = wandFrame
+        self.focusedWindowTitle = focusedWindowTitle
         self.presenter = presenter
         self.reader = reader
         self.events = events
@@ -131,9 +134,11 @@ final class SelectionTranslationCoordinator {
     private func applyPreferences(_ prefs: TranslationPreferences) {
         if prefs.translatesSelection {
             events.start()
-            // `install` re-points an existing tap at the new key, so a changed shortcut applies at once.
+            // `install` re-registers the chord, so a changed shortcut applies at once. A Carbon hot key
+            // costs nothing per keystroke, unlike an always-on modifying event tap.
             hotkey?.install(keyCode: prefs.selectionKeyCode, modifiers: prefs.selectionKeyModifiers) { [weak self] in
-                // The tap calls this from its event thread; the state machine lives on the main actor.
+                // Already on the main thread. The hop lets the hot-key handler return at once; the
+                // Accessibility reads run on the next main-loop turn.
                 DispatchQueue.main.async { self?.handleShortcut() }
             }
         } else {
@@ -210,7 +215,12 @@ final class SelectionTranslationCoordinator {
             return
         }
         let snapshot = currentSnapshot()
-        let title = Self.windowTitle(in: snapshot, for: app.processIdentifier)
+        // The snapshot only names a window when an editable field of this app holds focus. A Mail
+        // reading pane, a web page or a chat history has none, so fall back to the focused window's
+        // own title (one bounded Accessibility call, made only after a gesture) or the per-window
+        // "translation off" would be ignored for the feature's main input. Conversation-scoped keys in
+        // chat apps still match only while the composer holds focus.
+        let title = Self.windowTitle(in: snapshot, for: app.processIdentifier) ?? focusedWindowTitle(app.processIdentifier)
         // The field icon can turn translation off for one window.
         if windowOverride(app.bundleIdentifier, title) == false { return }
         let capture = readSelection(in: snapshot, app: app, pointer: pointer)
@@ -512,6 +522,13 @@ final class SelectionTranslationCoordinator {
 }
 
 // MARK: - Collaborator protocols
+
+/// What the coordinator needs from the selection shortcut: register one chord, drop it. `CarbonHotKey`
+/// is the live implementation; tests pass nil.
+@MainActor protocol SelectionHotkeyInstalling: AnyObject {
+    func install(keyCode: CGKeyCode, modifiers: UInt32, onPress: @escaping () -> Void)
+    func remove()
+}
 
 /// The Rewrite engine as Translate on Select sees it: provider facts for the disclosure, one translation.
 @MainActor protocol SelectionTranslationRunning: AnyObject {

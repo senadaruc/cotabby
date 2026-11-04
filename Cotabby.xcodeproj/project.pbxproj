@@ -993,6 +993,7 @@
 		B39FB21A6FA1A214386EB433 /* MLXModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70F9C7C2FD21D85CBFFE4807 /* MLXModels.swift */; };
 		B3E9C077CF064F2DEC3E22B8 /* ModelAndPresentationValueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BA1D28712B262ABD96F8399 /* ModelAndPresentationValueTests.swift */; };
 		B3EB0A706B7510CBB4AB23BB /* SettingsQuickLinkCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E69CFA319C5F9E4C30F699 /* SettingsQuickLinkCard.swift */; };
+		B3F77EBC7E13E3B4B99CAE29 /* CarbonHotKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DE41BBD9EAE941741590C94 /* CarbonHotKey.swift */; };
 		B413327721F83D9B5C8D4BCE /* SuggestionInteractionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6017E8AEDF88042933C61DFD /* SuggestionInteractionState.swift */; };
 		B422256933F7BEAEF2FC4176 /* es-100l.txt in Resources */ = {isa = PBXBuildFile; fileRef = 620D393D3B7E687A08FA9446 /* es-100l.txt */; };
 		B42C9D3DCDE6E50DC75D0342 /* HostAdvanceFit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A5DC5FF5BD2995FB6709A65 /* HostAdvanceFit.swift */; };
@@ -1158,6 +1159,7 @@
 		D07ED62B4BB3EEBB6566C1ED /* FocusedInputContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFB06531A54FDCDBAAD14E8B /* FocusedInputContext.swift */; };
 		D0BA4677F47C6943310B8A28 /* PopupChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87C6335EED41343595F17A08 /* PopupChrome.swift */; };
 		D11C6108CB46F563F65F4818 /* CalendarEventText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FAF81A688183ABB68C17773 /* CalendarEventText.swift */; };
+		D11E5389A4884BFBC9AB5114 /* CarbonHotKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DE41BBD9EAE941741590C94 /* CarbonHotKey.swift */; };
 		D18F11732EA94EA16CD8101F /* SystemUIFocusShadowPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 209089420F2EE43C312657A7 /* SystemUIFocusShadowPolicyTests.swift */; };
 		D1B42567FEECD406CECFEC45 /* BrowserDomainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBD829565558CB1EA8CA69D5 /* BrowserDomainTests.swift */; };
 		D1CB2B2D33E5B6C76DDB2A9C /* FocusTrackingModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 480596411FBB38BA3B993EDC /* FocusTrackingModel.swift */; };
@@ -1754,6 +1756,7 @@
 		5D0AEFF86F8210CBE7CFCBAD /* SettingsCategory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsCategory.swift; sourceTree = "<group>"; };
 		5D549854AD86485DF61F3B75 /* WordPrefixIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WordPrefixIndexTests.swift; sourceTree = "<group>"; };
 		5DCA3E46621815A19300365F /* fr.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = fr.txt; sourceTree = "<group>"; };
+		5DE41BBD9EAE941741590C94 /* CarbonHotKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarbonHotKey.swift; sourceTree = "<group>"; };
 		5EDA75D6923BE8CD1C6A2018 /* TerminalScreenTextMapperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalScreenTextMapperTests.swift; sourceTree = "<group>"; };
 		5FF4FF5C43E650FF46F4BE76 /* THIRD_PARTY_LICENSES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = THIRD_PARTY_LICENSES.md; sourceTree = "<group>"; };
 		6017E8AEDF88042933C61DFD /* SuggestionInteractionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SuggestionInteractionState.swift; sourceTree = "<group>"; };
@@ -2590,6 +2593,7 @@
 		1A748DD787833F29034EF2EA /* Input */ = {
 			isa = PBXGroup;
 			children = (
+				5DE41BBD9EAE941741590C94 /* CarbonHotKey.swift */,
 				B81DD30EB657368AACE9625A /* InputMonitor.swift */,
 				2D1F9CEBAB0F330F8E7B61D8 /* InputSuppressionController.swift */,
 				534F1297DEF3547D0DE56FB2 /* KeyboardInputSourceMonitor.swift */,
@@ -5230,6 +5234,7 @@
 				03673524EC7D0444A6D2B01E /* CalendarEventSnapshot.swift in Sources */,
 				D11C6108CB46F563F65F4818 /* CalendarEventText.swift in Sources */,
 				220A96CDDC102A915FF88C9F /* CalendarHistoryReader.swift in Sources */,
+				D11E5389A4884BFBC9AB5114 /* CarbonHotKey.swift in Sources */,
 				3744E92A7A36B0958F9DB488 /* CaretAdvanceSampleStore.swift in Sources */,
 				1C853F8F3BE4DFE89F90BF35 /* CaretAdvanceSampler.swift in Sources */,
 				3D62542845E1048A93A48749 /* CaretGeometrySelector.swift in Sources */,
@@ -5727,6 +5732,7 @@
 				C122B0BF03351F140C328247 /* CalendarEventSnapshot.swift in Sources */,
 				24F78A47DC2FF155806D22A4 /* CalendarEventText.swift in Sources */,
 				EFD143D928936D18DEC21AEC /* CalendarHistoryReader.swift in Sources */,
+				B3F77EBC7E13E3B4B99CAE29 /* CarbonHotKey.swift in Sources */,
 				E4B3CF7EB30D22DABFF46F33 /* CaretAdvanceSampleStore.swift in Sources */,
 				F09B3B8B1E61818BCE539358 /* CaretAdvanceSampler.swift in Sources */,
 				6D088E2762DBDE195463DE47 /* CaretGeometrySelector.swift in Sources */,
