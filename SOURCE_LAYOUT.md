@@ -72,6 +72,7 @@ Cotabby/
 │   │   └── Guidance/                 permission overlay and System Settings guidance
 │   ├── Power/                        power-source observation
 │   ├── Presentation/                 process-level AppKit panels and indicators
+│   │   ├── FloatingWindowLocator.swift
 │   │   ├── SelectionRewritePanelController.swift
 │   │   ├── SelectionTranslationPanelController.swift
 │   │   └── TranslationOverlayController.swift
@@ -295,9 +296,10 @@ third-party editor AX behavior or visual placement.
   first by strict language detection and then by a looser guess for single words.
 - The translation runs through the Rewrite provider as `RewriteAction.translate(into:)` and keeps no
   conversation memory.
-- `Support/Translation/TranslationStripPlacement.swift` centres the strip above the selection. When
-  the Rewrite wand is showing, the strip sits above the wand instead. It goes below the selection
-  only when the screen has no room above.
+- `Support/Translation/TranslationStripPlacement.swift` centres the strip above the selection and
+  steps it over whatever already floats there: the Rewrite wand, or another utility's selection bar
+  (PopClip) found by `Services/Presentation/FloatingWindowLocator.swift` from the window list. It
+  goes below the selection only when the screen has no room above.
 - `Services/Presentation/SelectionTranslationPanelController.swift` owns the panel. The panel never
   becomes key, so Return and Command-C keep going to the host app.
 - A window can turn the feature off from its field icon. That per-window veto uses

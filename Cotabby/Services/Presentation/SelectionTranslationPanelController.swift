@@ -36,8 +36,13 @@ final class SelectionTranslationPanelController: SelectionTranslationPresenting 
     private var selectionRect: CGRect?
     private var lineRect: CGRect = .zero
     private var wandFrame: CGRect?
+    /// Other apps' floating windows near the anchor, asked for at every placement (one cheap window
+    /// list call) so a toolbar that appears or leaves between partials is honoured on the next fit.
+    private let floatingWindows: @MainActor (CGRect) -> [CGRect]
 
-    nonisolated init() {}
+    nonisolated init(floatingWindows: @escaping @MainActor (CGRect) -> [CGRect] = FloatingWindowLocator.floatingWindows(near:)) {
+        self.floatingWindows = floatingWindows
+    }
 
     var isVisible: Bool { panel?.isVisible ?? false }
 
@@ -92,8 +97,11 @@ final class SelectionTranslationPanelController: SelectionTranslationPresenting 
         let anchor = selectionRect ?? lineRect
         let midpoint = CGPoint(x: anchor.midX, y: anchor.midY)
         let screen = NSScreen.screens.first { $0.frame.contains(midpoint) } ?? NSScreen.main
+        // The Rewrite wand first, then whatever another utility floats over the same selection.
+        let others = floatingWindows(anchor)
+        let obstacles = (wandFrame.map { [$0] } ?? []) + others
         let frame = TranslationStripPlacement.frame(
-            selectionRect: selectionRect, lineRect: lineRect, avoiding: wandFrame,
+            selectionRect: selectionRect, lineRect: lineRect, avoiding: obstacles,
             size: size, visibleFrame: screen?.visibleFrame
         )
         // Geometry only, never text: the one way to see why a strip landed where it did.
@@ -101,6 +109,7 @@ final class SelectionTranslationPanelController: SelectionTranslationPresenting 
             "category": "translation", "stage": "select-place",
             "selection": .string(Self.describe(selectionRect)), "line": .string(Self.describe(lineRect)),
             "wand": .string(Self.describe(wandFrame)), "screen": .string(Self.describe(screen?.visibleFrame)),
+            "windows": .string(others.map { Self.describe($0) }.joined(separator: ";")),
             "size": .string("\(Int(size.width))x\(Int(size.height))"), "frame": .string(Self.describe(frame))
         ])
         panel.setFrame(frame, display: true)
