@@ -80,7 +80,7 @@ final class LocalEndpointRewriteProvider: RewriteProviding {
     static func completionOptions(for request: RewriteRequest) -> OpenAICompatibleGenerationOptions {
         OpenAICompatibleGenerationOptions(
             maxPredictionTokens: RewritePromptBuilder.completionTokenBudget(for: request),
-            temperature: 0.3, topP: 0.9, stop: RewritePromptBuilder.baseStopSequences
+            temperature: 0.3, topP: 0.9, stop: RewritePromptBuilder.stopSequences(for: request.action)
         )
     }
 }

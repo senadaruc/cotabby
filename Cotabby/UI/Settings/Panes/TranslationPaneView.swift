@@ -98,7 +98,11 @@ struct TranslationPaneView: View {
                         },
                         clearLabel: "Use Default",
                         clearHelp: "Go back to \(TranslationPreferences.defaultReplaceKeyLabel).",
-                        conflictChecker: { _, _ in nil }
+                        conflictChecker: { keyCode, modifiers in
+                            keyCode == preferences.preferences.selectionKeyCode
+                                && modifiers.rawValue == preferences.preferences.selectionKeyModifiers
+                                ? "Already used to translate the selection." : nil
+                        }
                     )
                 } label: {
                     SettingsRowLabel(
@@ -269,9 +273,9 @@ struct TranslationPaneView: View {
         if keyCode == preferences.preferences.replaceKeyCode, modifiers.rawValue == preferences.preferences.replaceKeyModifiers {
             return "Already used to replace your draft."
         }
-        if keyCode == 15,
-           modifiers.rawValue == (ShortcutModifierMask.control.rawValue | ShortcutModifierMask.option.rawValue) {
-            return "Already used by Rewrite (⌃⌥R)."
+        let rewrite = rewritePreferences.preferences
+        if keyCode == rewrite.shortcutKeyCode, modifiers.rawValue == rewrite.shortcutModifiers {
+            return "Already used by Rewrite (\(rewrite.shortcutLabel))."
         }
         return nil
     }

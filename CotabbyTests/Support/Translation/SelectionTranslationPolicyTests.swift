@@ -27,12 +27,10 @@ final class SelectionTranslationPolicyTests: XCTestCase {
         target: String = "en",
         trigger: SelectionTranslationTrigger = .automatic,
         bundle: String = "com.apple.mail",
-        secure: Bool = false,
-        appAllowed: Bool = true
+        secure: Bool = false
     ) -> SelectionTranslationPolicy.Verdict {
         SelectionTranslationPolicy.verdict(
             for: capture(text, bundle: bundle, secure: secure),
-            appAllowed: appAllowed,
             targetLanguage: target,
             trigger: trigger,
             ownBundleIdentifier: ownBundle
@@ -85,11 +83,13 @@ final class SelectionTranslationPolicyTests: XCTestCase {
 
     // MARK: - Eligibility
 
-    func test_appNotAllowedIsIneligible() {
-        XCTAssertEqual(
-            verdict("Thanks for your message, I will reply tomorrow.", target: "nl", appAllowed: false),
-            .ineligible
-        )
+    func test_passwordManagersAreIneligible() {
+        for bundle in ["com.apple.Passwords", "com.bitwarden.desktop"] {
+            XCTAssertEqual(
+                verdict("Thanks for your message, I will reply tomorrow.", target: "nl", bundle: bundle),
+                .ineligible, bundle
+            )
+        }
     }
 
     func test_secureFieldIsIneligible() {

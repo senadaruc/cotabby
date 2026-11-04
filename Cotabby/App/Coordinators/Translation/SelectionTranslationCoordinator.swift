@@ -238,7 +238,7 @@ final class SelectionTranslationCoordinator {
         if !viaShortcut, isAlreadyHandled(candidate) { return }
         let prefs = preferences.preferences
         let verdict = SelectionTranslationPolicy.verdict(
-            for: capture, appAllowed: true, targetLanguage: prefs.readingLanguage,
+            for: capture, targetLanguage: prefs.readingLanguage,
             trigger: viaShortcut ? .shortcut : .automatic, ownBundleIdentifier: ownBundleIdentifier
         )
         // The verdict prints only its case and a language code, never the text.

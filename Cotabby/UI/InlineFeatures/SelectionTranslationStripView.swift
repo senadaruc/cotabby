@@ -110,7 +110,8 @@ struct SelectionTranslationStripView: View {
         case .translating(let partial):
             if !partial.isEmpty { text(partial, primary: false) }
         case .shown(let text), .copied(let text):
-            self.text(text, primary: true).textSelection(.enabled)
+            // No `.textSelection`: the panel can never become key, so ⌘C would go to the host; Copy covers it.
+            self.text(text, primary: true)
         case .notice(let message), .failed(let message):
             text(message, primary: false).font(.callout)
         }

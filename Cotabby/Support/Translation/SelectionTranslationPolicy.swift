@@ -30,16 +30,28 @@ nonisolated enum SelectionTranslationPolicy {
         case ineligible
     }
 
+    /// Password managers show revealed passwords and secure notes as plain static text, which the read-only
+    /// reader would happily capture. In automatic mode with a cloud provider a double-click there would
+    /// send them off the Mac, so these apps are never eligible.
+    static let passwordManagerBundlePrefixes = [
+        "com.apple.Passwords", "com.agilebits.onepassword", "com.1password", "com.bitwarden", "com.lastpass",
+        "com.dashlane", "com.keepassxc", "org.keepassxc", "com.nordpass", "com.enpass", "in.sinew.Enpass"
+    ]
+
+    static func isPasswordManager(bundleIdentifier: String) -> Bool {
+        passwordManagerBundlePrefixes.contains { bundleIdentifier.hasPrefix($0) }
+    }
+
     static func verdict(
         for capture: SelectedTextCapture,
-        appAllowed: Bool,
         targetLanguage: String,
         trigger: SelectionTranslationTrigger,
         ownBundleIdentifier: String? = Bundle.main.bundleIdentifier
     ) -> Verdict {
-        guard appAllowed, !capture.isSecure, capture.bundleIdentifier != ownBundleIdentifier,
+        guard !capture.isSecure, capture.bundleIdentifier != ownBundleIdentifier,
               !TerminalAppDetector.isTerminal(bundleIdentifier: capture.bundleIdentifier),
-              !TerminalAppDetector.isTerminalScreenField(bundleIdentifier: capture.bundleIdentifier)
+              !TerminalAppDetector.isTerminalScreenField(bundleIdentifier: capture.bundleIdentifier),
+              !isPasswordManager(bundleIdentifier: capture.bundleIdentifier)
         else { return .ineligible }
         let text = capture.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard text.filter(\.isLetter).count >= minimumLetters else { return .tooShort }
