@@ -77,7 +77,9 @@ base="$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-s[0-9]*' 2
 build="$(git rev-list --count HEAD)"
 version="${base:-0.0.0}-s$build"
 tag="v$version"
-dmg_name="Cotabby-Dev-$version.dmg"
+# The release is called plain "Cotabby": it is the only Cotabby this fork ships. The app bundle
+# inside keeps its "Cotabby Dev" name and bundle id, which Sparkle needs unchanged to update it.
+dmg_name="Cotabby-$version.dmg"
 dmg="$OUT_DIR/$dmg_name"
 feed="https://github.com/$repo/releases/latest/download/appcast.xml"
 gh release view "$tag" --repo "$repo" >/dev/null 2>&1 && fail "release $tag already exists on $repo"
@@ -85,7 +87,7 @@ gh release view "$tag" --repo "$repo" >/dev/null 2>&1 && fail "release $tag alre
 step "Building $version"
 COTABBY_SHARE_VERSION="$version" COTABBY_SHARE_BUILD="$build" COTABBY_SHARE_DMG="$dmg" \
     COTABBY_SHARE_PROJECT_URL="https://github.com/$repo" \
-    COTABBY_SHARE_FEED_URL="$feed" COTABBY_SHARE_PUBLIC_KEY="$public_key" \
+    COTABBY_SHARE_FEED_URL="$feed" COTABBY_SHARE_PUBLIC_KEY="$public_key" COTABBY_SHARE_VOLUME_NAME="Cotabby" \
     bash "$REPO_ROOT/scripts/build_share_dmg.sh"
 
 step "Signing the update"
@@ -96,7 +98,7 @@ cat >| "$appcast" <<XML
 <?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
-    <title>Cotabby Dev ($repo)</title>
+    <title>Cotabby ($repo)</title>
     <link>https://github.com/$repo/releases</link>
     <item>
       <title>$version</title>
@@ -120,7 +122,7 @@ if ! $assume_yes; then
     read -r -p "  Publish now? [y/N] " answer
     [[ "$answer" == "y" || "$answer" == "Y" ]] || { note "not published; the DMG and appcast stay in build/share"; exit 0; }
 fi
-notes="Cotabby Dev $version, built from ${commit:0:8}. Installed copies update to it from Check for Updates."
-gh release create "$tag" "$dmg" "$appcast" --repo "$repo" --target "$commit" --title "Cotabby Dev $version" \
+notes="Cotabby $version, built from ${commit:0:8}. Installed copies update to it from Check for Updates."
+gh release create "$tag" "$dmg" "$appcast" --repo "$repo" --target "$commit" --title "Cotabby $version" \
     --notes "$notes" --latest
 step "Published: https://github.com/$repo/releases/tag/$tag"

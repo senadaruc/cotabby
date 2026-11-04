@@ -25,7 +25,8 @@
 #                            an update feed and its Sparkle public key, so the build updates itself
 #                            from there (publish_fork_release.sh sets them); none by default
 #   COTABBY_SHARE_PROJECT_URL the repository the app's GitHub links open (default: upstream)
-#   COTABBY_SHARE_DMG        where to write the DMG (default: build/share/Cotabby-Dev-<version>.dmg)
+#   COTABBY_SHARE_DMG        where to write the DMG (default: build/share/Cotabby-<version>.dmg)
+#   COTABBY_SHARE_VOLUME_NAME the mounted DMG's name (default: Cotabby)
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -50,7 +51,8 @@ version="$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')"
 version="${COTABBY_SHARE_VERSION:-${version:-0.0.0}-$(git rev-parse --short HEAD)}"
 build="${COTABBY_SHARE_BUILD:-$(git rev-list --count HEAD)}"
 archive="$OUT_DIR/CotabbyDev.xcarchive"
-dmg="${COTABBY_SHARE_DMG:-$OUT_DIR/Cotabby-Dev-$version.dmg}"
+dmg="${COTABBY_SHARE_DMG:-$OUT_DIR/Cotabby-$version.dmg}"
+volume_name="${COTABBY_SHARE_VOLUME_NAME:-Cotabby}"
 update_settings=()
 if [[ -n "${COTABBY_SHARE_FEED_URL:-}" ]]; then
     update_settings=(COTABBY_DEV_UPDATE_FEED_URL="$COTABBY_SHARE_FEED_URL"
@@ -108,7 +110,7 @@ mkdir -p "$(dirname "$VENV_DIR")"
     --output-path "$dmg" \
     --background-path "$REPO_ROOT/assets/release/dmg_background.png" \
     --background-2x-path "$REPO_ROOT/assets/release/dmg_background@2x.png" \
-    --volume-name "Cotabby Dev"
+    --volume-name "$volume_name"
 codesign --force --sign "$identity" --timestamp "$dmg"
 codesign --verify --strict "$dmg"
 
