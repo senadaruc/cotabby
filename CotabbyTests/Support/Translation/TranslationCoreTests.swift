@@ -211,4 +211,40 @@ final class TranslationPreferencesStoreTests: XCTestCase {
         XCTAssertTrue(reloaded.isActive(forBundleIdentifier: "com.example.Chat"))
         XCTAssertEqual(reloaded.preferences.readingLanguage, "tr")
     }
+
+    func test_selectionTranslationDefaults() {
+        let suite = "cotabby.test.translation.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = TranslationPreferencesStore(userDefaults: defaults)
+        Self.retained.append(store)
+
+        XCTAssertFalse(store.preferences.translatesSelection)
+        XCTAssertEqual(store.preferences.selectionTrigger, .automatic)
+        XCTAssertEqual(store.preferences.selectionKeyCode, 37)
+        XCTAssertEqual(store.preferences.selectionKeyModifiers, (1 << 2) | (1 << 3))
+        XCTAssertEqual(store.preferences.selectionKeyLabel, "⌃ ⌥ L")
+    }
+
+    func test_selectionTranslationPersistsIndependentlyOfTheMainSwitch() {
+        let suite = "cotabby.test.translation.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = TranslationPreferencesStore(userDefaults: defaults)
+        Self.retained.append(store)
+
+        store.setTranslatesSelection(true)
+        store.setSelectionTrigger(.shortcut)
+        store.setSelectionKey(keyCode: 17, modifiers: 1 << 3, label: "⌃ T")
+
+        let reloaded = TranslationPreferencesStore(userDefaults: defaults)
+        Self.retained.append(reloaded)
+        XCTAssertTrue(reloaded.preferences.translatesSelection)
+        XCTAssertEqual(reloaded.preferences.selectionTrigger, .shortcut)
+        XCTAssertEqual(reloaded.preferences.selectionKeyCode, 17)
+        XCTAssertEqual(reloaded.preferences.selectionKeyModifiers, 1 << 3)
+        XCTAssertEqual(reloaded.preferences.selectionKeyLabel, "⌃ T")
+        XCTAssertFalse(reloaded.preferences.isEnabled, "Selection translation does not turn on the chat-window master switch")
+        XCTAssertEqual(defaults.string(forKey: "cotabbyTranslationSelectionTrigger"), "shortcut")
+    }
 }

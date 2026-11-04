@@ -190,6 +190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         environment.translationCoordinator.start()
         environment.answerCoordinator.start()
         environment.selectionRewriteCoordinator.start()
+        environment.selectionTranslationCoordinator.start()
         // Brings the memory service up only if the user switched Memory on; a no-op otherwise.
         environment.memoryController.startIfEnabled()
         welcomeCoordinator.presentIfNeeded()
@@ -282,6 +283,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         environment.translationCoordinator.stop()
         environment.answerCoordinator.stop()
         environment.selectionRewriteCoordinator.stop()
+        environment.selectionTranslationCoordinator.stop()
         inputMonitor.stop()
         focusModel.stop()
 
@@ -381,6 +383,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             updateActivationIndicator(for: focusModel.snapshot)
         case .translation:
             environment.translationCoordinator.handleScopeChange()
+            environment.selectionTranslationCoordinator.handleScopeChange()
         case .answers:
             environment.answerCoordinator.handleScopeChange()
         case .multiLine, .memory:

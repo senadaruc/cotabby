@@ -76,7 +76,8 @@ an answer from memory.
 - It uses Apple Intelligence or the local model, never the remote endpoint.
 
 **Other additions** (also offered upstream as pull requests):
-- Translation of incoming messages, and of your replies.
+- Translation of incoming messages, of your replies, and of any text you select (shown above the
+  selection with a Copy button, using your Rewrite model).
 - Typing history that learns from what you write, with import from Cotypist.
 - Per-app settings, plus turning autocomplete and translation on or off per app or per window
   from the field icon.

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Logging
 import SwiftUI
 
 /// File overview:
@@ -63,17 +64,38 @@ final class ActivationIndicatorController {
     /// The icon's screen frame while it is the rewrite button, so the popup can open beside it.
     var rewriteIconFrame: CGRect? { onRewritePress != nil && panel.isVisible ? panel.frame : nil }
 
-    /// Turns the field-edge icon into the rewrite button for the current selection, at the same place
-    /// the Cotabby icon sits (just outside the field's left edge), whatever the indicator setting:
-    /// the rewrite button has its own setting in Settings → Rewrite.
-    func showRewrite(caretRect: CGRect, inputFrameRect: CGRect?, onPress: @escaping () -> Void) {
+    /// Turns the icon into the rewrite button for the current selection, floating just above the
+    /// first selected line (`RewriteButtonPlacement`), whatever the indicator setting: the rewrite
+    /// button has its own setting in Settings → Rewrite. `caretRect` is the caret at the selection's
+    /// start (its line places the wand vertically) and `selectionRect` the selected text's box (the
+    /// wand centers on it when the host gave one).
+    func showRewrite(caretRect: CGRect, selectionRect: CGRect?, onPress: @escaping () -> Void) {
         onRewritePress = onPress
         guard Self.isUsableCaret(caretRect) else {
+            CotabbyLogger.app.debug(
+                "Rewrite button hidden: caret rect unusable",
+                metadata: ["category": "rewrite", "caret": .string("\(caretRect)")]
+            )
             panel.orderOut(nil)
             isVisible = false
             return
         }
-        place(view: FieldEdgeIconIndicatorView(rewrite: true), caretRect: caretRect, inputFrameRect: inputFrameRect)
+        let contentSize = render(FieldEdgeIconIndicatorView(rewrite: true))
+        let frame = RewriteButtonPlacement.frame(
+            lineRect: caretRect, selectionRect: selectionRect, size: contentSize,
+            visibleFrame: screen(for: caretRect)?.visibleFrame
+        )
+        CotabbyLogger.app.debug(
+            "Rewrite button placed",
+            metadata: [
+                "category": "rewrite",
+                "frame": .string("\(frame)"),
+                "caret": .string("\(caretRect)"),
+                "selection": .string("\(selectionRect ?? .null)"),
+                "on_screen": .stringConvertible(NSScreen.screens.contains { $0.frame.intersects(frame) })
+            ]
+        )
+        order(frame: frame)
     }
 
     /// Gives the icon back to focus-driven control and hides it; the next focus update shows the
@@ -115,20 +137,27 @@ final class ActivationIndicatorController {
 
     /// Renders `view` and puts the panel just outside the field's edge.
     private func place(view: FieldEdgeIconIndicatorView, caretRect: CGRect, inputFrameRect: CGRect?) {
-        contentView.rootView = AnyView(view)
-        contentView.layoutSubtreeIfNeeded()
-        let contentSize = contentView.fittingSize
+        let contentSize = render(view)
         let origin = fieldEdgeIconOrigin(
             caretRect: caretRect,
             inputFrameRect: inputFrameRect,
             contentSize: contentSize
         )
+        order(frame: CGRect(origin: origin, size: contentSize).integral)
+    }
 
-        let frame = CGRect(origin: origin, size: contentSize).integral
+    /// Swaps the panel's SwiftUI content and returns the size it wants.
+    private func render(_ view: FieldEdgeIconIndicatorView) -> CGSize {
+        contentView.rootView = AnyView(view)
+        contentView.layoutSubtreeIfNeeded()
+        return contentView.fittingSize
+    }
+
+    /// Moves the panel to `frame` and shows it, unless it is already exactly there.
+    private func order(frame: CGRect) {
         if isVisible, panel.frame == frame, panel.isVisible {
             return
         }
-
         panel.setFrame(frame, display: true)
         panel.orderFrontRegardless()
         isVisible = true

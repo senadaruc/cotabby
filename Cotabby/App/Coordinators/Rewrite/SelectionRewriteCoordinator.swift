@@ -7,7 +7,7 @@ import Logging
 /// Selection rewrite's state machine: hidden → button → popup → generating → preview.
 ///
 /// 1. A selection in an eligible field (`SelectionRewriteEligibility`) that stays the same for
-///    `stableSelectionDelay` shows the button at the selection's end, if the setting allows it, and
+///    `stableSelectionDelay` shows the button above the selected line, if the setting allows it, and
 ///    arms the ⌃⌥R shortcut either way.
 /// 2. The button or the shortcut opens the popup (`SelectionRewritePopupModel`), with the memory
 ///    toggle set from Settings and disabled when the provider is an API that memory may not reach.
@@ -64,6 +64,10 @@ final class SelectionRewriteCoordinator {
     /// while the selection is unchanged, but ⌃⌥R still reopens the popup for it. Cleared by `close()`.
     private var dismissedTarget: SelectionRewriteTarget?
 
+    /// Called as the popup opens. Lets Translate on Select hide its strip, which would otherwise sit
+    /// over the rewrite popup (both float above the same selection).
+    var onPopupOpened: (() -> Void)?
+
     static let escapeKeyCode: CGKeyCode = 53
     static let returnKeyCode: CGKeyCode = 36
 
@@ -81,7 +85,10 @@ final class SelectionRewriteCoordinator {
         keyTap: TemporaryKeyTap?,
         writingLanguages: @escaping @MainActor () -> [String] = { [] },
         setFixesMistakes: @escaping @MainActor (Bool) -> Void = { _ in },
-        stableSelectionDelay: UInt64 = 250_000_000
+        // The wand appears once the selection has held still this long. Focus polls run about every
+        // 50 ms, so 100 ms still swallows a drag in progress while the wand lands within roughly
+        // 150 ms of the mouse going up; 250 ms read as lag next to macOS's own selection toolbars.
+        stableSelectionDelay: UInt64 = 100_000_000
     ) {
         self.snapshots = snapshots
         self.currentSnapshot = currentSnapshot
@@ -145,9 +152,22 @@ final class SelectionRewriteCoordinator {
         }
         // A selection the user already dismissed keeps its shortcut but not its button.
         let isDismissed = dismissedTarget != nil && dismissedTarget == target
+        // Debug trail for "the button never appeared": which gate closed, and where the icon went.
+        CotabbyLogger.app.debug(
+            "Rewrite selection armed",
+            metadata: [
+                "category": "rewrite",
+                "app": .string(input.bundleIdentifier),
+                "words": .stringConvertible(input.selectedText.split(whereSeparator: { $0.isWhitespace }).count),
+                "button_setting": .stringConvertible(prefs.showsButtonOnSelection),
+                "dismissed": .stringConvertible(isDismissed),
+                "caret": .string("\(input.caretRect)"),
+                "selection": .string("\(input.selectionRect ?? .null)")
+            ]
+        )
         if prefs.showsButtonOnSelection, !isDismissed {
-            // The button replaces the field-edge Cotabby icon, so it is placed from the field's own frame.
-            presenter.showButton(caretRect: input.caretRect, fieldFrame: input.elementFrameRect ?? input.inputFrameRect) { [weak self] in
+            // The button floats above the selected line, centered over the selected text.
+            presenter.showButton(caretRect: input.caretRect, selectionRect: input.selectionRect) { [weak self] in
                 self?.openPopup()
             }
         }
@@ -169,7 +189,20 @@ final class SelectionRewriteCoordinator {
         guard snapshot.capability != .blocked(CredentialFieldDetector.blockedReason),
               let input = snapshot.context
         else { return nil }
-        switch SelectionRewriteEligibility.verdict(for: input, appAllowed: isAppAllowed(input.bundleIdentifier)) {
+        let verdict = SelectionRewriteEligibility.verdict(for: input, appAllowed: isAppAllowed(input.bundleIdentifier))
+        if !input.selectedText.isEmpty {
+            CotabbyLogger.app.debug(
+                "Rewrite selection verdict",
+                metadata: [
+                    "category": "rewrite",
+                    "app": .string(input.bundleIdentifier),
+                    "verdict": .string("\(verdict)"),
+                    "capability": .string(snapshot.capability.shortLabel),
+                    "characters": .stringConvertible(input.selectedText.count)
+                ]
+            )
+        }
+        switch verdict {
         case .eligible, .tooLong: return input
         case .noSelection, .tooShort, .ineligible: return nil
         }
@@ -179,6 +212,7 @@ final class SelectionRewriteCoordinator {
 
     private func openPopup() {
         guard let input = targetInput, model == nil else { return }
+        onPopupOpened?()
         stableTask?.cancel()
         let prefs = preferences()
         let model = SelectionRewritePopupModel()
@@ -487,7 +521,7 @@ final class SelectionRewriteCoordinator {
 @MainActor protocol SelectionRewritePresenting: AnyObject {
     var isPopupVisible: Bool { get }
     var isPopupKey: Bool { get }
-    func showButton(caretRect: CGRect, fieldFrame: CGRect?, onPress: @escaping () -> Void)
+    func showButton(caretRect: CGRect, selectionRect: CGRect?, onPress: @escaping () -> Void)
     /// `takesKeyboard` is true for a popup the user opened (it needs typing and Return) and false for a
     /// notice, which must not swallow the user's keystrokes while it is on screen.
     func showPopup(near anchor: CGRect, model: SelectionRewritePopupModel, takesKeyboard: Bool)

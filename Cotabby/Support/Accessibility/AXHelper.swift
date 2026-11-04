@@ -841,6 +841,16 @@ enum AXHelper {
         return copyOpaqueParameterized(markerRangeForMarkersAttribute, parameter: markers, on: element)
     }
 
+    /// The selected text read through the text-marker API (WebKit and Chromium web areas, where
+    /// `kAXSelectedText` is often empty): the opaque selected marker range is handed straight back to
+    /// `AXStringForTextMarkerRange`. Marker objects are Core Foundation values owned by the returned
+    /// `CFTypeRef` (a "Copy" result, released by ARC when it goes out of scope); they are never
+    /// inspected, only passed through, which is the only safe use.
+    static func selectedTextMarkerString(on element: AXUIElement) -> String? {
+        guard let range = copyOpaqueAttribute(selectedTextMarkerRangeAttribute, on: element) else { return nil }
+        return stringForMarkerRange(range, on: element)
+    }
+
     /// Reads the plain text spanned by an opaque marker range.
     private static func stringForMarkerRange(_ range: CFTypeRef, on element: AXUIElement) -> String? {
         copyOpaqueParameterized(stringForMarkerRangeAttribute, parameter: range, on: element) as? String

@@ -14,7 +14,11 @@ nonisolated enum RewriteOutputCleaner {
         text = stripCodeFence(text)
         // A preface is a wrapper the model added. When the user's own selection opens the same way
         // ("Here is my address: ..."), the model may be echoing it, so the opening stays.
-        if !startsWithPreface(selection.trimmingCharacters(in: .whitespacesAndNewlines)) {
+        if case .translate = action {
+            // A translation's selection is in another language, so "selection opens the same way" can
+            // never protect real text; translations use the stricter pattern below instead.
+            text = stripTranslatePreface(text)
+        } else if !startsWithPreface(selection.trimmingCharacters(in: .whitespacesAndNewlines)) {
             text = stripPreface(text)
         }
         text = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -28,6 +32,9 @@ nonisolated enum RewriteOutputCleaner {
         case .shorter: limit = core.count
         // Longer expands a short draft into a full message, so a few words may become a paragraph.
         case .longer: limit = core.count * 8 + 400
+        // A 3-character Chinese selection can become a 25-character English sentence, so translations
+        // are not held to the 3x rewrite rule.
+        case .translate: limit = core.count * 4 + 80
         default: limit = core.count * maximumGrowth + 40
         }
         guard text.count <= limit else { return nil }
@@ -44,9 +51,25 @@ nonisolated enum RewriteOutputCleaner {
         return lines.joined(separator: "\n")
     }
 
-    /// "Here is…:", "Here's a friendlier version:", "Sure! …:", "Rewritten text:", "Rewritten:".
+    /// "Here is…:", "Here's a friendlier version:", "Sure! …:", "Rewritten text:", "Rewritten:",
+    /// "Translation:", "Translated text:".
     /// Anchored at the start, so only an opening preface matches.
-    private static let prefacePattern = #"^(?:(?:sure|certainly|of course)[!.,]?\s*)?(?:here(?:'s| is)[^:\n]{0,60}:|rewritten(?: text| version)?:)\s*"#
+    private static let prefacePattern = #"^(?:(?:sure|certainly|of course)[!.,]?\s*)?(?:here(?:'s| is)[^:\n]{0,60}:|rewritten(?: text| version)?:|translation(?: text)?:|translated text:)\s*"#
+
+    /// The translate-only pattern. Bare labels ("Translation:", "Translated text:") are never part of a
+    /// translated sentence, so they go with or without a newline. Sentence-like prefaces ("Here is the
+    /// translation:") go only when they end their own line: "Here's what happened: the server crashed."
+    /// and "Here is the link: https://example.com" are legitimate translations of a German sentence.
+    /// Tradeoff: a one-line "Here is the translation: Hello there." is indistinguishable from a
+    /// translated sentence that happens to start that way, so it is left as is.
+    private static let translatePrefacePattern =
+        #"^(?:(?:sure|certainly|of course)[!.,]?\s*)?"#
+        + #"(?:(?:translation(?: text)?|translated text):\s*|here(?:'s| is)[^:\n]{0,60}:[ \t]*\n\s*)"#
+
+    private static func stripTranslatePreface(_ text: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: translatePrefacePattern, options: [.caseInsensitive]) else { return text }
+        return regex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "")
+    }
 
     private static func stripPreface(_ text: String) -> String {
         guard let regex = try? NSRegularExpression(pattern: prefacePattern, options: [.caseInsensitive]) else { return text }

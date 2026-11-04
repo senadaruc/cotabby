@@ -28,7 +28,12 @@ Cotabby/
 │   ├── Core/                         process entry, composition root, lifecycle
 │   └── Coordinators/
 │       ├── InlineFeatures/           emoji/macro capture arbitration
+│       ├── Rewrite/                  selection rewrite popup coordination
+│       │   └── SelectionRewriteCoordinator.swift
 │       ├── Suggestion/               autocomplete interaction state machine
+│       ├── Translation/              select-to-translate and reply translation
+│       │   ├── SelectionTranslationCoordinator.swift
+│       │   └── TranslationCoordinator.swift
 │       ├── SettingsCoordinator.swift
 │       └── WelcomeCoordinator.swift
 ├── Models/
@@ -39,27 +44,38 @@ Cotabby/
 │   ├── Input/                        keyboard event values
 │   ├── Onboarding/                   onboarding templates
 │   ├── Permissions/                  TCC permission values
+│   ├── Rewrite/                      rewrite actions, requests, and results
+│   │   └── RewriteModels.swift
 │   ├── Runtime/
 │   │   └── Metrics/                  performance and system metric stores
 │   ├── Settings/                     durable and UI-facing settings values
 │   ├── Spelling/                     spelling catalog values
-│   └── Suggestion/
-│       ├── Request/                  immutable request inputs and configuration
-│       ├── Result/                   engine result and client error values
-│       └── Session/                  active, paused, and presented session values
+│   ├── Suggestion/
+│   │   ├── Request/                  immutable request inputs and configuration
+│   │   ├── Result/                   engine result and client error values
+│   │   └── Session/                  active, paused, and presented session values
+│   └── Translation/                  translation strip and selection values
+│       ├── SelectionTranslationModels.swift
+│       └── TranslationModels.swift
 ├── Services/
 │   ├── Context/                      live clipboard acquisition
 │   ├── Focus/
 │   │   ├── Caching/                  field-scoped focus caches
 │   │   ├── Chromium/                 Chromium AX enablement and diagnostics
-│   │   └── Resolution/               focus snapshots, geometry, bounded AX walks
+│   │   ├── Resolution/               focus snapshots, geometry, bounded AX walks
+│   │   └── ReadOnlySelectionReader.swift
 │   ├── History/                      typing-history store, recording, and encrypted vault
 │   ├── Input/                        event taps and input-source monitoring
+│   │   └── SelectionEventMonitor.swift
 │   ├── ModelManagement/              model discovery, download, and validation
 │   ├── Permission/
 │   │   └── Guidance/                 permission overlay and System Settings guidance
 │   ├── Power/                        power-source observation
 │   ├── Presentation/                 process-level AppKit panels and indicators
+│   │   ├── SelectionRewritePanelController.swift
+│   │   ├── SelectionTranslationPanelController.swift
+│   │   └── TranslationOverlayController.swift
+│   ├── Rewrite/                      rewrite engine, providers, preferences store, and clients
 │   ├── Runtime/
 │   │   ├── AppleIntelligence/        Foundation Models availability and engine
 │   │   ├── Llama/                    llama engine, manager, and native core
@@ -68,6 +84,11 @@ Cotabby/
 │   ├── Spelling/                     live spell-checking services
 │   ├── Suggestion/
 │   │   └── State/                    work identity and mutable interaction state
+│   ├── Translation/                  engines, hotkey tap, preferences, and anchor reader
+│   │   ├── TranslationAnchorReader.swift
+│   │   ├── TranslationEngines.swift
+│   │   ├── TranslationHotkeyTap.swift
+│   │   └── TranslationPreferencesStore.swift
 │   ├── Updates/                      manual release checks
 │   └── Visual/                       capture, OCR, and visual-context sessions
 ├── Support/
@@ -91,6 +112,7 @@ Cotabby/
 │   │   ├── Policy/                   render-mode, fade, and stability decisions
 │   │   └── Style/                    ghost text font and color rules
 │   ├── Prompting/                    Apple and base-model prompt rendering
+│   ├── Rewrite/                      rewrite prompts, cleanup, language checks, replace checks
 │   ├── Runtime/
 │   │   ├── Hardware/                 device capability and resource sampling
 │   │   ├── MLX/                      MLX cache scan, toolchain rules, server decision
@@ -107,10 +129,22 @@ Cotabby/
 │   │   ├── Request/                  availability, debounce, and request construction
 │   │   ├── Session/                  tail reconciliation and exhausted-tail state
 │   │   └── Streaming/                partial coalescing, monotonic text, presentation timing
+│   ├── Translation/                  few-shot prompts, cache, policy, and strip placement
+│   │   ├── ConversationLanguageTracker.swift
+│   │   ├── FewShotTranslationPrompt.swift
+│   │   ├── MessageBlockGrouper.swift
+│   │   ├── SelectionTranslationPolicy.swift
+│   │   ├── TranslationCache.swift
+│   │   ├── TranslationCoverStyle.swift
+│   │   ├── TranslationLanguagePolicy.swift
+│   │   ├── TranslationScrollFollow.swift
+│   │   └── TranslationStripPlacement.swift
 │   └── Utilities/                    small cross-subsystem value helpers
 └── UI/
     ├── Components/                   application-wide reusable views
-    ├── InlineFeatures/               emoji picker and macro reference surfaces
+    ├── InlineFeatures/               emoji picker, macro reference, Rewrite and translation views
+    │   ├── SelectionRewritePopupView.swift
+    │   └── SelectionTranslationStripView.swift
     ├── MenuBar/                      menu-bar status and popover content
     ├── Onboarding/
     │   └── Welcome/                  composed welcome flow and step views
@@ -122,7 +156,9 @@ Cotabby/
         ├── ModelManagement/           model catalog and browser views
         └── Panes/
             ├── About/                 product and acknowledgement panes
-            └── Engine/                engine pane and backend-specific extensions
+            ├── Engine/                engine pane and backend-specific extensions
+            ├── RewritePaneView.swift
+            └── TranslationPaneView.swift
 ~~~
 
 Files left directly inside a subsystem are intentionally its root owners or a small cohesive set.
@@ -144,6 +180,41 @@ CotabbyTests/Services/Runtime/Llama/LlamaSuggestionEngineStreamingTests.swift
 
 Cotabby/App/Coordinators/Suggestion/SuggestionCoordinator.swift
 CotabbyTests/App/Coordinators/Suggestion/SuggestionCoordinatorPredictionTests.swift
+~~~
+
+The Rewrite and Translation tests follow the same mirror:
+
+~~~text
+CotabbyTests/
+├── App/Coordinators/
+│   ├── Rewrite/
+│   │   └── SelectionRewriteCoordinatorTests.swift
+│   └── Translation/
+│       ├── SelectionTranslationCoordinatorTests.swift
+│       └── TranslationCaptureRowsTests.swift
+├── Services/Rewrite/
+│   ├── APIRewriteProviderTests.swift
+│   ├── LocalEndpointRewriteProviderTests.swift
+│   ├── MLXRewriteProviderTests.swift
+│   ├── MLXRewriteServerControllerTests.swift
+│   ├── RewriteEngineTests.swift
+│   ├── RewriteMemoryGathererTests.swift
+│   └── RewritePreferencesStoreTests.swift
+├── Support/Rewrite/
+│   ├── RewriteButtonPlacementTests.swift
+│   ├── RewriteChangeWarningTests.swift
+│   ├── RewriteLanguageDetectorTests.swift
+│   ├── RewriteOutputCleanerTests.swift
+│   ├── RewritePromptBuilderTests.swift
+│   ├── RewriteProviderResolverTests.swift
+│   ├── SelectionReplaceValidatorTests.swift
+│   └── SelectionRewriteEligibilityTests.swift
+└── Support/Translation/
+    ├── SelectionTranslationPolicyTests.swift
+    ├── TranslationCoreTests.swift
+    ├── TranslationCoverStyleTests.swift
+    ├── TranslationScrollFollowTests.swift
+    └── TranslationStripPlacementTests.swift
 ~~~
 
 Tests that exercise several production values may stay at the nearest shared subsystem root. Evals
@@ -205,6 +276,36 @@ word restoration, correction publication, and late cancellation. `TypingExperien
 the production coordinator with the real local engine and a synthetic editor, recording visible
 and buffered text plus actual requests in `build/eval/typing-experience.json`. It does not measure
 third-party editor AX behavior or visual placement.
+
+## Translate on Select
+
+- `Services/Input/SelectionEventMonitor.swift` installs global `NSEvent` monitors that only listen
+  and never consume events. They report the end of a selection gesture: a drag, a double or triple
+  click, Shift with the arrow, Home or End keys, or Command-A.
+- `App/Coordinators/Translation/SelectionTranslationCoordinator.swift` waits 500 ms after the
+  gesture so the selection settles. A newer gesture during that wait cancels the older one.
+- The selected text comes from the focus snapshot when the selection is in an editable field. In any
+  other field, `Services/Focus/ReadOnlySelectionReader.swift` reads it through three Accessibility
+  paths: the selected-text attribute, the selected range with string-for-range, and WebKit or
+  Chromium text markers. If those yield nothing, it reads the element under the pointer and up to
+  three parents.
+- `Support/Translation/SelectionTranslationPolicy.swift` gates the request. It needs an allowed app
+  with no secure or credential field, no terminal, and never Cotabby itself. The text must be
+  between three letters and 2,000 characters. Text already in the target language is skipped, judged
+  first by strict language detection and then by a looser guess for single words.
+- The translation runs through the Rewrite provider as `RewriteAction.translate(into:)` and keeps no
+  conversation memory.
+- `Support/Translation/TranslationStripPlacement.swift` centres the strip above the selection. When
+  the Rewrite wand is showing, the strip sits above the wand instead. It goes below the selection
+  only when the screen has no room above.
+- `Services/Presentation/SelectionTranslationPanelController.swift` owns the panel. The panel never
+  becomes key, so Return and Command-C keep going to the host app.
+- A window can turn the feature off from its field icon. That per-window veto uses
+  `ScopedFeature.translation`.
+- The shortcut, Control-Option-L by default, shows the strip for the current selection, or shows it
+  again after it was dismissed.
+- Settings live in the Translation pane under "Translate on Select", in
+  `UI/Settings/Panes/TranslationPaneView.swift`.
 
 ## Adding Or Moving A File
 

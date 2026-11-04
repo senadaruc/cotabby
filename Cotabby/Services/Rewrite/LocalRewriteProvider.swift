@@ -85,7 +85,7 @@ final class OpenSourceRewriteProvider: RewriteProviding {
         )
         // A rewrite can be several sentences; autocomplete's stop at the first sentence end would cut it.
         options.sentenceStopMinimumTokens = .max
-        options.stopSequences = RewritePromptBuilder.baseStopSequences
+        options.stopSequences = RewritePromptBuilder.stopSequences(for: request.action)
         let relay = PartialRelay(deliver: onPartial)
         // Stop delivery on every exit, including a thrown error, so no partial can arrive after
         // this function has returned.

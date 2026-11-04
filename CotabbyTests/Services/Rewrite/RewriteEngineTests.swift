@@ -233,6 +233,37 @@ final class RewriteEngineTests: XCTestCase {
         XCTAssertEqual(api.received.first?.language, "Turkish")
         XCTAssertEqual(api.received.first?.memory, .empty)
     }
+
+    func test_memoryStrippingKeepsToneTickBoxAndLanguage() async throws {
+        var prefs = RewritePreferences.defaults
+        prefs.provider = .api
+        prefs.sendsMemoryToAPI = false
+        let (engine, _, api) = make(prefs)
+        var request = RewriteRequest(selection: draft, action: .shorter, memory: memory)
+        request.tone = .formal
+        request.fixesMistakes = false
+        request.language = "Turkish"
+        _ = try await engine.rewrite(request, onPartial: { _ in })
+        let received = try XCTUnwrap(api.received.first)
+        XCTAssertEqual(received.memory, .empty)
+        XCTAssertEqual(received.tone, .formal)
+        XCTAssertEqual(received.fixesMistakes, false)
+        XCTAssertEqual(received.language, "Turkish")
+    }
+
+    func test_translateRequestReachesTheProviderUnchanged() async throws {
+        var prefs = RewritePreferences.defaults
+        prefs.provider = .api
+        prefs.sendsMemoryToAPI = false
+        let (engine, _, api) = make(prefs)
+        api.output = "Please let me know if the dates work."
+        var request = RewriteRequest(selection: "Laat het me weten.", action: .translate(into: "English"), memory: .empty)
+        request.language = "Dutch"
+        let result = try await engine.rewrite(request, onPartial: { _ in })
+        XCTAssertEqual(api.received.first?.action, .translate(into: "English"))
+        XCTAssertEqual(api.received.first?.language, "Dutch")
+        XCTAssertEqual(result, api.output)
+    }
 }
 
 /// Collects what the relay delivered, on the main actor where the relay delivers.

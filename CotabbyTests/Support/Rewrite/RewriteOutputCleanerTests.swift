@@ -67,4 +67,35 @@ final class RewriteOutputCleanerTests: XCTestCase {
         let longer = "Hi Richard, I hope you are well. Could we meet tomorrow to go over the POC results and the next steps? Let me know what time suits you best."
         XCTAssertEqual(RewriteOutputCleaner.clean(longer, selection: draft, action: .longer), longer)
     }
+    func test_translationMayGrowWellBeyondTheRewriteLimit() {
+        let output = "Thank you very much for your help with everything today, friend."
+        XCTAssertEqual(
+            RewriteOutputCleaner.clean(output, selection: "谢谢", action: .translate(into: "English")),
+            output
+        )
+        XCTAssertNil(RewriteOutputCleaner.clean(output, selection: "谢谢", action: .rewrite))
+    }
+
+    func test_translationPrefacesAreStripped() {
+        let action = RewriteAction.translate(into: "English")
+        let cases = [
+            "Translation: Hello there.",
+            "Here is the translation:\nHello there.",
+            "Translated text: Hello there."
+        ]
+        for output in cases {
+            XCTAssertEqual(RewriteOutputCleaner.clean(output, selection: "Hallo daar.", action: action), "Hello there.", output)
+        }
+    }
+
+    func test_translationKeepsSentenceLikeOpeningsThatAreRealText() {
+        let action = RewriteAction.translate(into: "English")
+        for output in ["Here is the link: https://example.com", "Here's what happened: the server crashed."] {
+            XCTAssertEqual(RewriteOutputCleaner.clean(output, selection: "Hier ist der Link.", action: action), output, output)
+        }
+        // Tradeoff: a one-line preface is indistinguishable from a translated sentence that happens to
+        // start that way, so it stays.
+        let oneLine = "Here is the translation: Hello there."
+        XCTAssertEqual(RewriteOutputCleaner.clean(oneLine, selection: "Hallo daar.", action: action), oneLine)
+    }
 }

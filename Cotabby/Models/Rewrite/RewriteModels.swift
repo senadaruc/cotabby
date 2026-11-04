@@ -11,6 +11,9 @@ nonisolated enum RewriteAction: Equatable, Hashable, Sendable {
     case fixOnly, rewrite, shorter, longer
     case family, friendly, closeFriend, formal, customer
     case custom(String)
+    /// Translate on Select's action; never offered by the Rewrite popup (it is in neither `tones`
+    /// nor `refinements`). The associated value is the target language's English name ("German").
+    case translate(into: String)
 
     /// The popup's buttons: who the text is for. `custom` comes from the instruction box instead.
     /// Typo fixing is the tick box, not a button.
@@ -30,6 +33,7 @@ nonisolated enum RewriteAction: Equatable, Hashable, Sendable {
         case .formal: return "Formal"
         case .customer: return "Customer"
         case .custom: return "Custom"
+        case .translate: return "Translate"
         }
     }
 
@@ -166,7 +170,8 @@ nonisolated struct RewriteMemoryContext: Equatable, Sendable {
 nonisolated struct RewriteRequest: Equatable, Sendable {
     let selection: String
     let action: RewriteAction
-    let memory: RewriteMemoryContext
+    /// The engine empties it when the provider may not receive memory, keeping every other field.
+    var memory: RewriteMemoryContext
     /// The selection's language by its English name ("Turkish"), when `RewriteLanguageDetector`
     /// could tell; the prompt then requires it instead of hoping the model keeps the language.
     var language: String? = nil

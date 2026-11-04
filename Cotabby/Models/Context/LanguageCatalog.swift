@@ -32,7 +32,7 @@ struct LanguageOption: Identifiable, Equatable, Sendable {
     var id: String { code }
 }
 
-enum LanguageCatalog {
+nonisolated enum LanguageCatalog {
     /// Caps protect the prompt's context budget; few people actively write across more than a handful.
     static let maxLanguages = 6
     static let maxLanguageLength = 30

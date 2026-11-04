@@ -5,8 +5,9 @@ import Foundation
 /// Owns the translation preferences and persists them in `UserDefaults`.
 ///
 /// Kept out of `SuggestionSettingsModel` because translation is its own subsystem: nothing in the
-/// suggestion pipeline reads these values, and the incoming/outgoing translation coordinators and
-/// the Translation settings pane are their only readers. Built once by `CotabbyAppEnvironment`.
+/// suggestion pipeline reads these values, and the incoming/outgoing translation coordinators, the
+/// Translate on Select coordinator and the Translation settings pane are their only readers. Built
+/// once by `CotabbyAppEnvironment`.
 @MainActor
 final class TranslationPreferencesStore: ObservableObject {
     @Published private(set) var preferences: TranslationPreferences
@@ -22,6 +23,11 @@ final class TranslationPreferencesStore: ObservableObject {
         static let replaceKeyCode = "cotabbyTranslationReplaceKeyCode"
         static let replaceKeyModifiers = "cotabbyTranslationReplaceKeyModifiers"
         static let replaceKeyLabel = "cotabbyTranslationReplaceKeyLabel"
+        static let selectionEnabled = "cotabbyTranslationSelectionEnabled"
+        static let selectionTrigger = "cotabbyTranslationSelectionTrigger"
+        static let selectionKeyCode = "cotabbyTranslationSelectionKeyCode"
+        static let selectionKeyModifiers = "cotabbyTranslationSelectionKeyModifiers"
+        static let selectionKeyLabel = "cotabbyTranslationSelectionKeyLabel"
     }
 
     init(userDefaults: UserDefaults = .standard) {
@@ -37,7 +43,15 @@ final class TranslationPreferencesStore: ObservableObject {
                 ?? defaults.replaceKeyCode,
             replaceKeyModifiers: (userDefaults.object(forKey: Key.replaceKeyModifiers) as? Int).map { UInt32($0) }
                 ?? defaults.replaceKeyModifiers,
-            replaceKeyLabel: userDefaults.string(forKey: Key.replaceKeyLabel) ?? defaults.replaceKeyLabel
+            replaceKeyLabel: userDefaults.string(forKey: Key.replaceKeyLabel) ?? defaults.replaceKeyLabel,
+            translatesSelection: userDefaults.object(forKey: Key.selectionEnabled) as? Bool ?? defaults.translatesSelection,
+            selectionTrigger: userDefaults.string(forKey: Key.selectionTrigger)
+                .flatMap(SelectionTranslationTrigger.init(rawValue:)) ?? defaults.selectionTrigger,
+            selectionKeyCode: (userDefaults.object(forKey: Key.selectionKeyCode) as? Int).map { CGKeyCode($0) }
+                ?? defaults.selectionKeyCode,
+            selectionKeyModifiers: (userDefaults.object(forKey: Key.selectionKeyModifiers) as? Int).map { UInt32($0) }
+                ?? defaults.selectionKeyModifiers,
+            selectionKeyLabel: userDefaults.string(forKey: Key.selectionKeyLabel) ?? defaults.selectionKeyLabel
         )
     }
 
@@ -78,6 +92,28 @@ final class TranslationPreferencesStore: ObservableObject {
         userDefaults.set(Int(keyCode), forKey: Key.replaceKeyCode)
         userDefaults.set(Int(modifiers), forKey: Key.replaceKeyModifiers)
         userDefaults.set(label, forKey: Key.replaceKeyLabel)
+    }
+
+    func setTranslatesSelection(_ enabled: Bool) {
+        update(\.translatesSelection, enabled, key: Key.selectionEnabled)
+    }
+
+    /// The trigger is an enum, which `update` cannot persist as-is, so it is stored by its raw string.
+    func setSelectionTrigger(_ trigger: SelectionTranslationTrigger) {
+        guard preferences.selectionTrigger != trigger else { return }
+        preferences.selectionTrigger = trigger
+        userDefaults.set(trigger.rawValue, forKey: Key.selectionTrigger)
+    }
+
+    func setSelectionKey(keyCode: CGKeyCode, modifiers: UInt32, label: String) {
+        guard preferences.selectionKeyCode != keyCode || preferences.selectionKeyModifiers != modifiers
+            || preferences.selectionKeyLabel != label else { return }
+        preferences.selectionKeyCode = keyCode
+        preferences.selectionKeyModifiers = modifiers
+        preferences.selectionKeyLabel = label
+        userDefaults.set(Int(keyCode), forKey: Key.selectionKeyCode)
+        userDefaults.set(Int(modifiers), forKey: Key.selectionKeyModifiers)
+        userDefaults.set(label, forKey: Key.selectionKeyLabel)
     }
 
     private func update<Value: Equatable>(_ keyPath: WritableKeyPath<TranslationPreferences, Value>, _ value: Value, key: String) {
