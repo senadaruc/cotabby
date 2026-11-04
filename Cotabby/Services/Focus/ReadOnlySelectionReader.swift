@@ -43,16 +43,23 @@ final class ReadOnlySelectionReader: SelectionReading {
 
     func read(frontmost pid: pid_t, bundleIdentifier: String, mouseUp: CGPoint?) -> SelectedTextCapture? {
         if let element = AXHelper.focusedElement(forApplicationPID: pid) ?? AXHelper.focusedElement(),
-           AXHelper.owningApplication(of: element)?.processIdentifier == pid,
-           let capture = capture(on: element, pid: pid, bundleIdentifier: bundleIdentifier) {
-            return capture
+           AXHelper.owningApplication(of: element)?.processIdentifier == pid {
+            switch read(element: element, pid: pid, bundleIdentifier: bundleIdentifier, path: nil) {
+            case .found(let capture): return capture
+            // Stop, do not fall through to the hit-test: a password field has the focus, and the
+            // pointer's element climbs to a parent web area whose marker selection can cover that field.
+            case .sensitive: return nil
+            case .nothing: break
+            }
         }
         guard let mouseUp, var element = AXHelper.element(atCocoaPoint: mouseUp),
               AXHelper.owningApplication(of: element)?.processIdentifier == pid
         else { return nil }
         for _ in 0...Self.maximumParentClimb {
-            if let capture = capture(on: element, pid: pid, bundleIdentifier: bundleIdentifier, path: .hitTest) {
-                return capture
+            switch read(element: element, pid: pid, bundleIdentifier: bundleIdentifier, path: .hitTest) {
+            case .found(let capture): return capture
+            case .sensitive: return nil
+            case .nothing: break
             }
             guard let parent = AXHelper.parentElement(of: element) else { return nil }
             element = parent
@@ -60,17 +67,25 @@ final class ReadOnlySelectionReader: SelectionReading {
         return nil
     }
 
-    /// The three read paths in order; nil when the element has no non-empty selection. A password
-    /// field's selection is never read, whatever it answers.
-    private func capture(on element: AXUIElement, pid: pid_t, bundleIdentifier: String,
-                         path override: SelectedTextReadPath? = nil) -> SelectedTextCapture? {
+    /// What one element yielded. `sensitive` is distinct from `nothing` so the caller can stop
+    /// instead of trying another element that might expose the same secret.
+    private enum ElementReading {
+        case found(SelectedTextCapture)
+        case sensitive
+        case nothing
+    }
+
+    /// The three read paths in order. A password or credential field's selection is never returned,
+    /// whatever it answers.
+    private func read(element: AXUIElement, pid: pid_t, bundleIdentifier: String,
+                      path override: SelectedTextReadPath?) -> ElementReading {
         AXUIElementSetMessagingTimeout(element, Self.messagingTimeout)
         let role = AXHelper.stringValue(for: kAXRoleAttribute as CFString, on: element) ?? ""
         let subrole = AXHelper.stringValue(for: kAXSubroleAttribute as CFString, on: element)
         // ApplicationServices has no role constant for secure fields, only the subrole; AppKit reports
         // `AXSecureTextField` as the subrole of an `AXTextField`, so the literal covers hosts that use it as a role.
         guard role != Self.secureTextFieldName, subrole != kAXSecureTextFieldSubrole as String,
-              subrole != Self.secureTextFieldName else { return nil }
+              subrole != Self.secureTextFieldName else { return .sensitive }
         let attributes = Set(AXHelper.attributeNames(on: element))
         let parameterized = Set(AXHelper.parameterizedAttributeNames(on: element))
         var text: String?
@@ -96,10 +111,33 @@ final class ReadOnlySelectionReader: SelectionReading {
             text = value
             path = .marker
         }
-        guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        return SelectedTextCapture(
+        guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .nothing }
+        // The richer detectors (the same ones autocomplete uses) cost several IPC reads, so they run
+        // only once there is a selection: a plain static-text hit pays nothing extra.
+        if isSensitive(element: element, role: role, subrole: subrole, text: text) { return .sensitive }
+        // `isSecure` stays false: a sensitive element never produces a capture.
+        return .found(SelectedTextCapture(
             text: text, rect: selectionRect(on: element, range: range, parameterized: parameterized), lineRect: nil,
             bundleIdentifier: bundleIdentifier, processIdentifier: pid, isSecure: false, source: override ?? path
+        ))
+    }
+
+    /// Parity with the autocomplete resolver: secure fields (role description, title, description) and
+    /// sign-in style fields (email, username, code boxes) are never translated or sent anywhere.
+    private func isSensitive(element: AXUIElement, role: String, subrole: String?, text: String) -> Bool {
+        let title = AXHelper.stringValue(for: kAXTitleAttribute as CFString, on: element)
+        let description = AXHelper.stringValue(for: kAXDescriptionAttribute as CFString, on: element)
+        if SecureFieldDetector.isSecure(
+            role: role, subrole: subrole,
+            roleDescription: AXHelper.stringValue(for: kAXRoleDescriptionAttribute as CFString, on: element),
+            title: title, descriptionLabel: description
+        ) { return true }
+        guard CredentialFieldDetector.mightBeCredentialField(role: role) else { return false }
+        return CredentialFieldDetector.isCredentialField(
+            role: role,
+            labels: [title, description, AXHelper.stringValue(for: kAXPlaceholderValueAttribute as CFString, on: element)],
+            domIdentifier: AXHelper.stringValue(for: "AXDOMIdentifier" as CFString, on: element),
+            text: text
         )
     }
 

@@ -46,6 +46,16 @@ final class SelectionEventMonitor: SelectionEventObserving {
     nonisolated init() {}
 
     func start() {
+        // Guarded separately: without Input Monitoring every add() yields nil and `monitors` stays
+        // empty, so one guard would stack a new workspace observer on each start(). Splitting them keeps
+        // the observer single and still lets the monitors be retried once permission is granted.
+        if activationObserver == nil {
+            activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.onAppActivated?() }
+            }
+        }
         guard monitors.isEmpty else { return }
         add(.leftMouseDown) { [weak self] _ in
             self?.mouseDownLocation = NSEvent.mouseLocation
@@ -59,11 +69,6 @@ final class SelectionEventMonitor: SelectionEventObserving {
             self?.onKeyDown?(CGKeyCode(event.keyCode), event.modifierFlags.intersection(.deviceIndependentFlagsMask))
         }
         add(.keyUp) { [weak self] event in self?.handleKeyUp(event) }
-        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.onAppActivated?() }
-        }
     }
 
     func stop() {
@@ -101,7 +106,7 @@ final class SelectionEventMonitor: SelectionEventObserving {
         let code = CGKeyCode(event.keyCode)
         if Self.selectionKeyCodes.contains(code), flags.contains(.shift) {
             onSelectionGesture?(NSEvent.mouseLocation)
-        } else if code == Self.selectAllKeyCode, flags.contains(.command) {
+        } else if code == Self.selectAllKeyCode, flags.contains(.command), !flags.contains(.shift) {
             onSelectionGesture?(NSEvent.mouseLocation)
         }
     }
