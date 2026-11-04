@@ -16,15 +16,49 @@ final class TranslationStripPlacementTests: XCTestCase {
         selection: CGRect?,
         line: CGRect,
         wand: CGRect? = nil,
+        windows: [CGRect] = [],
         visible: CGRect? = nil
     ) -> CGRect {
         TranslationStripPlacement.frame(
             selectionRect: selection,
             lineRect: line,
-            avoiding: wand,
+            avoiding: (wand.map { [$0] } ?? []) + windows,
             size: size,
             visibleFrame: visible ?? screen
         )
+    }
+
+    private let selection = CGRect(x: 710, y: 560, width: 692, height: 59)
+    private let line = CGRect(x: 710, y: 600, width: 2, height: 19)
+
+    /// PopClip's bar: centered over the selection, a few points above it, there before the strip.
+    func test_stacksAboveAnotherAppsSelectionBar() {
+        let bar = CGRect(x: 930, y: 623, width: 250, height: 44)
+        let frame = place(selection: selection, line: line, windows: [bar])
+        XCTAssertEqual(frame.minY, bar.maxY + gap)
+        XCTAssertEqual(frame.midX, selection.midX, accuracy: 1)
+    }
+
+    func test_stacksAboveTheWandAndTheBarTogether() {
+        let wand = CGRect(x: 1035, y: 623, width: 21, height: 21)
+        let bar = CGRect(x: 930, y: 650, width: 250, height: 44)
+        let frame = place(selection: selection, line: line, wand: wand, windows: [bar])
+        XCTAssertEqual(frame.minY, bar.maxY + gap)
+    }
+
+    /// A floating palette beside the selection, or well above it, is not in the strip's way.
+    func test_ignoresFloatingWindowsTheStripWouldNotCover() {
+        let beside = CGRect(x: 1500, y: 600, width: 200, height: 300)
+        let farAbove = CGRect(x: 900, y: 900, width: 300, height: 100)
+        let frame = place(selection: selection, line: line, windows: [beside, farAbove])
+        XCTAssertEqual(frame.minY, 619 + gap)
+    }
+
+    func test_goesBelowTheBarWhenTheStripHasToDropBelowTheSelection() {
+        let top = CGRect(x: 710, y: 1100, width: 400, height: 19)
+        let bar = CGRect(x: 800, y: 1050, width: 250, height: 44)
+        let frame = place(selection: top, line: top, windows: [bar])
+        XCTAssertEqual(frame.maxY, bar.minY - gap)
     }
 
     func test_centeredAboveTheSelectionWhenNothingIsInTheWay() {
