@@ -1,4 +1,5 @@
 import AppKit
+import Logging
 import SwiftUI
 
 /// File overview:
@@ -71,7 +72,19 @@ final class SelectionTranslationPanelController: SelectionTranslationPresenting 
             selectionRect: selectionRect, lineRect: lineRect, avoiding: wandFrame,
             size: size, visibleFrame: screen?.visibleFrame
         )
+        // Geometry only, never text: the one way to see why a strip landed where it did.
+        CotabbyLogger.app.debug("Translate on Select placed", metadata: [
+            "category": "translation", "stage": "select-place",
+            "selection": .string(Self.describe(selectionRect)), "line": .string(Self.describe(lineRect)),
+            "wand": .string(Self.describe(wandFrame)), "screen": .string(Self.describe(screen?.visibleFrame)),
+            "size": .string("\(Int(size.width))x\(Int(size.height))"), "frame": .string(Self.describe(frame))
+        ])
         panel.setFrame(frame, display: true)
+    }
+
+    private static func describe(_ rect: CGRect?) -> String {
+        guard let rect else { return "nil" }
+        return "\(Int(rect.minX)),\(Int(rect.minY)) \(Int(rect.width))x\(Int(rect.height))"
     }
 
     /// Built like the Rewrite popup's panel: non-activating, above normal windows, on every Space

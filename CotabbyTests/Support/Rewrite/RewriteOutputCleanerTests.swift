@@ -6,6 +6,20 @@ import XCTest
 final class RewriteOutputCleanerTests: XCTestCase {
     private let draft = "Please let me know if te dates are ok and wors for you."
 
+    /// The in-process runtime returns the stop sequence on the end of the text it stopped at.
+    func test_outputIsCutAtTheFirstStopSequence() {
+        let stops = RewritePromptBuilder.stopSequences(for: .translate(into: "English"))
+        XCTAssertEqual(
+            RewriteOutputCleaner.cutAtStopSequence("Give your package to the delivery person\n\nDraft", stops: stops),
+            "Give your package to the delivery person"
+        )
+        XCTAssertEqual(
+            RewriteOutputCleaner.cutAtStopSequence("Done.\nTranslation (English): again\n\nDraft", stops: stops),
+            "Done."
+        )
+        XCTAssertEqual(RewriteOutputCleaner.cutAtStopSequence("No stop here", stops: stops), "No stop here")
+    }
+
     func test_plainOutputPassesThrough() {
         XCTAssertEqual(
             RewriteOutputCleaner.clean("Please let me know if the dates work for you.", selection: draft, action: .fixOnly),

@@ -105,10 +105,10 @@ final class SelectionTranslationCoordinator {
 
     func start() {
         events.onSelectionGesture = { [weak self] point in self?.handleGesture(at: point) }
-        events.onPlainClick = { [weak self] in self?.close() }
-        events.onMouseDown = { [weak self] in self?.dismiss() }
+        events.onPlainClick = { [weak self] in self?.close(reason: "plain-click") }
+        events.onMouseDown = { [weak self] in self?.dismiss(reason: "mouse-down") }
         events.onKeyDown = { [weak self] code, flags in self?.handleKeyDown(code, flags) }
-        events.onAppActivated = { [weak self] in self?.dismiss() }
+        events.onAppActivated = { [weak self] in self?.dismiss(reason: "app-activated") }
         // The sink fires once at once with the current value, which applies the saved setting.
         preferences.$preferences
             .sink { [weak self] prefs in self?.applyPreferences(prefs) }
@@ -119,15 +119,15 @@ final class SelectionTranslationCoordinator {
         cancellables.removeAll()
         events.stop()
         hotkey?.remove()
-        close()
+        close(reason: "stop")
     }
 
     /// Hides the strip without forgetting the selection. The Rewrite popup opens over the same
     /// selection, so `AppDelegate` wires `SelectionRewriteCoordinator.onPopupOpened` here.
-    func hide() { dismiss() }
+    func hide() { dismiss(reason: "rewrite-popup") }
 
     /// The field icon changed the per-window setting: whatever the strip shows is stale.
-    func handleScopeChange() { close() }
+    func handleScopeChange() { close(reason: "scope-change") }
 
     /// Takes the emitted value, not `preferences.preferences`: `@Published` publishes in `willSet`, so
     /// the store still holds the old value while its subscribers run.
@@ -144,14 +144,14 @@ final class SelectionTranslationCoordinator {
         } else {
             events.stop()
             hotkey?.remove()
-            close()
+            close(reason: "feature-off")
             cache.removeAll()
         }
         // A gesture still in its debounce belongs to the old settings.
         if !prefs.translatesSelection || prefs.selectionTrigger != .automatic { pendingTask?.cancel() }
         // A cached translation or a showing strip is in the old language once the setting changes.
         if let applied = appliedLanguage, applied != prefs.readingLanguage {
-            close()
+            close(reason: "language-changed")
             cache.removeAll()
         }
         appliedLanguage = prefs.readingLanguage
@@ -191,7 +191,7 @@ final class SelectionTranslationCoordinator {
         let prefs = preferences.preferences
         // The shortcut's own key press must not hide the strip it is about to (re)show.
         if code == prefs.selectionKeyCode, Self.modifierMask(flags).rawValue == prefs.selectionKeyModifiers { return }
-        dismiss()
+        dismiss(reason: "key-down")
     }
 
     private static func modifierMask(_ flags: NSEvent.ModifierFlags) -> ShortcutModifierMask {
@@ -329,7 +329,7 @@ final class SelectionTranslationCoordinator {
             ? "The selected text is sent to \(engine.activeHostName ?? "your API provider")."
             : nil
         model.onCopy = { [weak self] in self?.copy() }
-        model.onClose = { [weak self] in self?.dismiss() }
+        model.onClose = { [weak self] in self?.dismiss(reason: "close-button") }
         self.model = model
 
         let lineRect = capture.lineRect ?? capture.rect ?? CGRect(origin: pointer, size: CGSize(width: 1, height: 1))
@@ -388,7 +388,7 @@ final class SelectionTranslationCoordinator {
                 if viaShortcut {
                     showNotice("Already in \(name)", in: model, capture: capture, pointer: pointer)
                 } else {
-                    dismiss()
+                    dismiss(reason: "echo")
                 }
                 return
             }
@@ -418,7 +418,7 @@ final class SelectionTranslationCoordinator {
                 presenter.refit()
                 autoHide(model, after: 4_000_000_000)
             } else {
-                dismiss()
+                dismiss(reason: "failed")
             }
         }
     }
@@ -434,7 +434,7 @@ final class SelectionTranslationCoordinator {
         } else {
             model = SelectionTranslationStripModel()
             model.targetLanguageName = displayName(for: preferences.preferences.readingLanguage)
-            model.onClose = { [weak self] in self?.dismiss() }
+            model.onClose = { [weak self] in self?.dismiss(reason: "close-button") }
             model.phase = .notice(text)
             self.model = model
             let lineRect = capture.lineRect ?? capture.rect ?? CGRect(origin: pointer, size: CGSize(width: 1, height: 1))
@@ -448,7 +448,7 @@ final class SelectionTranslationCoordinator {
         autoHideTask = Task { [weak self, weak model] in
             try? await Task.sleep(nanoseconds: nanoseconds)
             guard let self, let model, !Task.isCancelled, self.model === model else { return }
-            self.dismiss()
+            self.dismiss(reason: "auto-hide")
         }
     }
 
@@ -475,7 +475,9 @@ final class SelectionTranslationCoordinator {
 
     /// The user moved on, or closed the strip. Cancels everything in flight and hides the strip, but
     /// remembers the selection so the automatic trigger does not bring it straight back.
-    private func dismiss() {
+    /// `reason` names the trigger in the log line: a strip that vanishes "by itself" is otherwise
+    /// impossible to tell apart from one the user clicked away.
+    private func dismiss(reason: String) {
         pendingTask?.cancel()
         translateTask?.cancel()
         copiedTask?.cancel()
@@ -485,13 +487,15 @@ final class SelectionTranslationCoordinator {
         model = nil
         presenter.hide()
         dismissedTarget = target
-        if wasShowing { log("select-dismiss", "Translate on Select dismissed", level: .debug) }
+        if wasShowing {
+            log("select-dismiss", "Translate on Select dismissed", level: .debug, metadata: ["reason": .string(reason)])
+        }
     }
 
     /// Full teardown: the selection is gone (a plain click, a setting change). Forgets it too, so the
     /// same text selected again is treated as new.
-    private func close() {
-        dismiss()
+    private func close(reason: String) {
+        dismiss(reason: reason)
         target = nil
         dismissedTarget = nil
     }
