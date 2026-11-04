@@ -30,6 +30,8 @@ protocol SelectionTranslationPresenting: AnyObject {
 @MainActor
 final class SelectionTranslationPanelController: SelectionTranslationPresenting {
     private var panel: TranslationStripPanel?
+    private var hosting: NSHostingView<SelectionTranslationStripView>?
+    private var measurer: NSHostingController<SelectionTranslationStripView>?
     // Kept so `refit()` can place the grown strip with the same inputs `show` used.
     private var selectionRect: CGRect?
     private var lineRect: CGRect = .zero
@@ -48,14 +50,36 @@ final class SelectionTranslationPanelController: SelectionTranslationPresenting 
         // `FirstClickHostingView` (shared with the Rewrite popup): a click on a panel that is not
         // key would otherwise be spent on activation; accepting the first mouse lets Copy fire.
         let hosting = FirstClickHostingView(rootView: SelectionTranslationStripView(model: model))
+        // Without this the hosting view puts intrinsic-size constraints on the panel, and AppKit then
+        // resizes the panel to the SwiftUI content (anchored at its top-left) after every streamed
+        // partial: the strip slid downwards over the selection while the translation came in. The
+        // panel's size is set here, from `contentSize`, and nowhere else.
+        hosting.sizingOptions = []
+        // A second view of the same model, never on screen, exists only to be measured: NSHostingView
+        // has no `sizeThatFits`, and the displayed view with no sizing options reports no size at all.
+        let measurer = NSHostingController(rootView: SelectionTranslationStripView(model: model))
+        self.hosting = hosting
+        self.measurer = measurer
         panel.contentView = hosting
-        place(panel, size: hosting.fittingSize)
+        place(panel, size: Self.contentSize(measuredBy: measurer))
         panel.orderFrontRegardless()
     }
 
     func refit() {
-        guard let panel, let view = panel.contentView else { return }
-        place(panel, size: view.fittingSize)
+        guard let panel, let measurer else { return }
+        place(panel, size: Self.contentSize(measuredBy: measurer))
+    }
+
+    /// The strip is as wide as its content on one line, capped at `maximumWidth`, and as tall as that
+    /// content wrapped at that width. The intrinsic size alone is the single-line ideal: its height is
+    /// one text line even when the strip will wrap, which is what let the panel start one line tall.
+    private static let maximumWidth: CGFloat = 440
+
+    private static func contentSize(measuredBy measurer: NSHostingController<SelectionTranslationStripView>) -> CGSize {
+        let ideal = measurer.view.intrinsicContentSize
+        let width = min(ideal.width, maximumWidth)
+        let wrapped = measurer.sizeThatFits(in: CGSize(width: width, height: 10_000))
+        return CGSize(width: width, height: max(wrapped.height, ideal.height))
     }
 
     func hide() {
