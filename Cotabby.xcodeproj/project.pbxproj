@@ -894,6 +894,7 @@
 		A18051D870C0BEF082053D2C /* GhostFontResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3BB26526298A85454330591 /* GhostFontResolver.swift */; };
 		A1807CDAA7D835525D7B7870 /* TranslationHotkeyTap.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBF09B3CEB692504AE84F41E /* TranslationHotkeyTap.swift */; };
 		A18FF4078EA8C4F47D4FB651 /* TranslationCoverStyleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1343B400EC0B7351F2C99D90 /* TranslationCoverStyleTests.swift */; };
+		A19E4D455303245D7ACCADCD /* FloatingWindowLocatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EFA5598ADA7A67D1A463E0C /* FloatingWindowLocatorTests.swift */; };
 		A1A612C90221E0FE1195754A /* SettingsCategory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D0AEFF86F8210CBE7CFCBAD /* SettingsCategory.swift */; };
 		A1C4151AAE1CC55282C136BB /* GhostSpaceBoundary.swift in Sources */ = {isa = PBXBuildFile; fileRef = D99C3973D57C7F53416CFBF6 /* GhostSpaceBoundary.swift */; };
 		A1D47F271E70B4FF24FA9E77 /* PermissionHostAppTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EB3DF187FA7AE5A61B035F6 /* PermissionHostAppTests.swift */; };
@@ -1483,6 +1484,7 @@
 		0EA9F28D26F27CD420D3A0EA /* TeamsCacheReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeamsCacheReader.swift; sourceTree = "<group>"; };
 		0EB2E5C28DEAC11EB5EEFFE8 /* RewritePromptBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewritePromptBuilder.swift; sourceTree = "<group>"; };
 		0ED0AFAC10DC3406A6246ED1 /* CalendarHistoryReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarHistoryReader.swift; sourceTree = "<group>"; };
+		0EFA5598ADA7A67D1A463E0C /* FloatingWindowLocatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingWindowLocatorTests.swift; sourceTree = "<group>"; };
 		0F328B43743D803A16045110 /* HostFontRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostFontRegistry.swift; sourceTree = "<group>"; };
 		10107090891BE11E2B34BC9E /* TypefaceMatcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypefaceMatcherTests.swift; sourceTree = "<group>"; };
 		110BCAD18AFB2D446E5A607D /* ResourceUsageSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourceUsageSummary.swift; sourceTree = "<group>"; };
@@ -2960,6 +2962,7 @@
 			isa = PBXGroup;
 			children = (
 				717F4E7253B9B4F1E046AF69 /* ActivationIndicatorCaretTests.swift */,
+				0EFA5598ADA7A67D1A463E0C /* FloatingWindowLocatorTests.swift */,
 				F23A711EA8EF13B480FF34DE /* HostBaselineCalibratorTests.swift */,
 				147D8EAD035A66FCA1D07E37 /* HostBaselineCalibratorTypefaceTests.swift */,
 				9FA2CFC322EE56151646E745 /* HostBundledFontRegistryTests.swift */,
@@ -6273,6 +6276,7 @@
 				0E6692D2A7AEEDF72FCF1AE2 /* ExtendedContextTests.swift in Sources */,
 				C2D5D224A3B1954E198A9F9C /* FieldStyleCacheTests.swift in Sources */,
 				02ECD5C9C5FE7B4EB62ABCAF /* FileLogHandlerTests.swift in Sources */,
+				A19E4D455303245D7ACCADCD /* FloatingWindowLocatorTests.swift in Sources */,
 				A31CFE49A0D2052F213985E5 /* FocusCapabilityFlickerGateTests.swift in Sources */,
 				FB40CD665A949DF232B43195 /* FocusCapabilityResolverTests.swift in Sources */,
 				AE19FFF93A913CE6EE992F1E /* FocusDropoutGraceTests.swift in Sources */,
