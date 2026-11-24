@@ -114,6 +114,45 @@ nonisolated enum SelectionTranslationPolicy {
         return false
     }
 
+    /// Credential vocabulary for message content, stored already folded (lowercase, no diacritics) so
+    /// it compares against `folded(_:)` output: "şifre" is written "sifre" here. Deliberately small and
+    /// conservative: it names the credentials people actually send in chats (English, plus the Dutch
+    /// and Turkish the user's conversations use), not every word near a secret. A miss only means the
+    /// message is translated; a false hit only means no strip, so the list leans toward refusing.
+    static let credentialKeywords = [
+        "password", "passcode", "passphrase", "pin", "pincode", "pin code", "cvv", "cvc", "otp", "2fa",
+        "verification code", "security code", "login code", "one-time code", "one time code",
+        "authentication code",
+        "wachtwoord", "verificatiecode", "beveiligingscode", "inlogcode",
+        "sifre", "parola", "dogrulama kodu", "guvenlik kodu"
+    ]
+
+    /// Whether a message talks about a credential (a password, PIN, security or one-time code).
+    ///
+    /// Why it exists: the field detectors read a bubble's description as a field LABEL, and here the
+    /// description is the message itself, so they cannot be used on the whole-message path. This is the
+    /// keyword half of the content check there (`looksLikeOneTimeCode` is the digit half), covering
+    /// messages that discuss or contain a secret in words that have no code-shaped digits.
+    /// Matching is case- and diacritic-insensitive and on whole words or phrases via
+    /// `CredentialFieldDetector.containsWord`, so "pin" does not hit "spinning" or "pineapple" and a
+    /// bare "code" ("the dress code") never hits.
+    static func mentionsCredential(_ text: String) -> Bool {
+        let haystack = folded(text)
+        return credentialKeywords.contains { CredentialFieldDetector.containsWord($0, in: haystack) }
+    }
+
+    /// The single content check for a message the user did not select exactly: a one-time-code shape
+    /// or a credential keyword. Either one refuses the automatic translation.
+    static func isSensitiveMessage(_ text: String) -> Bool {
+        looksLikeOneTimeCode(text) || mentionsCredential(text)
+    }
+
+    /// Lowercased with diacritics removed, so "Şifre" and "ŞİFRE" both become "sifre". Turkish dotless
+    /// "ı" is a distinct letter that does not fold to "i"; the keyword list has no word that needs it.
+    private static func folded(_ text: String) -> String {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+    }
+
     static func verdict(
         for capture: SelectedTextCapture,
         targetLanguage: String,

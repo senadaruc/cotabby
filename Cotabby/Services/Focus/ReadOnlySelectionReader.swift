@@ -205,13 +205,14 @@ final class ReadOnlySelectionReader: SelectionReading {
             let role = kAXStaticTextRole as String
             let subrole = AXHelper.stringValue(for: kAXSubroleAttribute as CFString, on: candidate.element)
             // The field detectors (`isSensitive`) do not apply to a bubble: they read the element's
-            // AXDescription as a field LABEL ("Password"), but here the description IS the message, so a
-            // message that merely mentions a password would be refused, and they skip static text for
-            // the credential check anyway. What replaces them is a content check: a secure role is still
-            // refused, and so is a message that looks like a one-time code, because the user did not
-            // pick the exact text and double-clicking a code to copy it must not send it to a provider.
+            // AXDescription as a field LABEL ("Password"), but here the description IS the message, so
+            // they would refuse on a label that is really content, and they skip static text for the
+            // credential check anyway. What replaces them is a content check: a secure role is still
+            // refused, and so is a message that looks like a one-time code or talks about a credential
+            // (`isSensitiveMessage`), because the user did not pick the exact text and it may go to a
+            // cloud provider.
             if Self.isSecureTextRole(role, subrole: subrole)
-                || SelectionTranslationPolicy.looksLikeOneTimeCode(body) {
+                || SelectionTranslationPolicy.isSensitiveMessage(body) {
                 return nil
             }
             let rect = AXHelper.cocoaRect(fromAccessibilityRect: candidate.frame)
