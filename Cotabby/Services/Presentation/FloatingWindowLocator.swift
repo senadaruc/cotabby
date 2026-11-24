@@ -9,15 +9,39 @@ import Foundation
 /// strip arrives; without this the strip landed on top of it. Owned by nobody: one bounded
 /// `CGWindowListCopyWindowInfo` call per placement, made by `SelectionTranslationPanelController`.
 ///
+/// Which windows count is decided by `isObstacle`: a thin bar is a toolbar at any width, but a
+/// full-width strip or a large window is screen furniture. PopClip's bar is 28pt tall and 778 to
+/// 1126pt wide depending on how many extensions it shows, so a plain width cap threw the wide ones away.
+///
 /// Only window bounds, level and owner are read, which needs no permission; window titles would
 /// need Screen Recording and are never asked for.
 @MainActor
 enum FloatingWindowLocator {
     /// Windows farther than this from the anchor cannot be in the strip's way.
     static let searchMargin: CGFloat = 240
-    /// Anything larger is a full-screen overlay (a screen recorder's frame, a notch utility), not a
-    /// toolbar; stepping over it would push the strip off the selection entirely.
+    /// A window this thin is a toolbar however wide it is. PopClip's selection bar measures 28pt tall
+    /// and 778, 928 or 1126pt wide depending on its extensions, so width alone cannot tell it apart
+    /// from an overlay.
+    static let maximumToolbarHeight: CGFloat = 80
+    /// A thin window spanning this share of its display is screen furniture (the menu bar, a notch
+    /// utility's strip), not a selection toolbar; stepping over it would push the strip off the
+    /// selection. Just under 1 so a window a few points short of the edge still counts as full width.
+    static let fullWidthFraction: CGFloat = 0.98
+    /// Anything taller than a toolbar and larger than this is a full-screen overlay (a screen
+    /// recorder's frame, a dock-like panel), not a toolbar.
     static let maximumObstacleSize = CGSize(width: 900, height: 600)
+
+    /// Whether a window of `size` is a selection toolbar the strip should step over. Pure so the rule
+    /// is testable without a window list. `displayWidth` is the width of the display the window is on
+    /// (nil when no display could be found, in which case a thin window is kept: wrongly stepping
+    /// over a menu bar costs less than landing on a toolbar).
+    nonisolated static func isObstacle(size: CGSize, displayWidth: CGFloat?) -> Bool {
+        if size.height <= maximumToolbarHeight {
+            guard let displayWidth, displayWidth > 0 else { return true }
+            return size.width < displayWidth * fullWidthFraction
+        }
+        return size.width <= maximumObstacleSize.width && size.height <= maximumObstacleSize.height
+    }
 
     /// Floating windows of other processes that come within `searchMargin` of `anchor`.
     static func floatingWindows(near anchor: CGRect) -> [CGRect] {
@@ -35,7 +59,10 @@ enum FloatingWindowLocator {
                   let bounds = info[kCGWindowBounds as String] as? [String: CGFloat]
             else { return nil }
             let cgRect = CGRect(x: bounds["X"] ?? 0, y: bounds["Y"] ?? 0, width: bounds["Width"] ?? 0, height: bounds["Height"] ?? 0)
-            guard !cgRect.isEmpty, cgRect.width <= maximumObstacleSize.width, cgRect.height <= maximumObstacleSize.height,
+            // The converter picks the display by the rect's midpoint; mirror that to know how wide it is.
+            let midpoint = CGPoint(x: cgRect.midX, y: cgRect.midY)
+            let displayWidth = displays.first { $0.coreGraphicsBounds.contains(midpoint) }?.coreGraphicsBounds.width
+            guard !cgRect.isEmpty, isObstacle(size: cgRect.size, displayWidth: displayWidth),
                   let rect = DisplayCoordinateConverter.appKitRect(fromCoreGraphicsRect: cgRect, displays: displays),
                   rect.intersects(region)
             else { return nil }

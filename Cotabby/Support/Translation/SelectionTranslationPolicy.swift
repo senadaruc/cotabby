@@ -42,6 +42,19 @@ nonisolated enum SelectionTranslationPolicy {
         passwordManagerBundlePrefixes.contains { bundleIdentifier.hasPrefix($0) }
     }
 
+    /// Apps whose chat bubbles expose no text selection at all but describe each message in one
+    /// accessibility sentence (`WhatsAppMessageDescriptionParser`). In these apps a selection gesture
+    /// that every ordinary read path missed translates the whole message under the pointer instead.
+    /// Exact identifiers, not prefixes: the bubble walk runs only for an app whose sentence shape was
+    /// measured, so adding another app is one line here once its shape is known to match.
+    static let wholeMessageBundleIdentifiers: Set<String> = [
+        "net.whatsapp.WhatsApp"
+    ]
+
+    static func readsWholeMessage(bundleIdentifier: String) -> Bool {
+        wholeMessageBundleIdentifiers.contains(bundleIdentifier)
+    }
+
     static func verdict(
         for capture: SelectedTextCapture,
         targetLanguage: String,

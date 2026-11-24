@@ -19,6 +19,9 @@ nonisolated enum SelectedTextReadPath: String, Sendable {
     case marker
     /// The element under the pointer, or one of its parents, when the focused element had nothing.
     case hitTest
+    /// No path found a selection, and the app (WhatsApp) describes each chat bubble in one
+    /// accessibility sentence: the whole message under the pointer, not the dragged-across part.
+    case wholeMessage
 }
 
 /// One read of the text the user selected on screen.

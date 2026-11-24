@@ -113,6 +113,15 @@ final class SelectionTranslationPolicyTests: XCTestCase {
         )
     }
 
+    /// The whole-message fallback is an exact allowlist: WhatsApp only, not lookalike identifiers
+    /// and not ordinary apps, so the bubble walk never runs where its sentence shape is unmeasured.
+    func test_wholeMessageReadingIsLimitedToWhatsApp() {
+        XCTAssertTrue(SelectionTranslationPolicy.readsWholeMessage(bundleIdentifier: "net.whatsapp.WhatsApp"))
+        for bundle in ["com.apple.mail", "net.whatsapp.WhatsAppHelper", "net.whatsapp", "com.tinyspeck.slackmacgap"] {
+            XCTAssertFalse(SelectionTranslationPolicy.readsWholeMessage(bundleIdentifier: bundle), bundle)
+        }
+    }
+
     /// "abc" has enough letters to pass the size floor, but neither detector can answer for three
     /// letters, so the verdict depends only on the trigger: the automatic path stays quiet while the
     /// shortcut, an explicit request, translates with no source language named.
