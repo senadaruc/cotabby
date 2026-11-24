@@ -55,6 +55,65 @@ nonisolated enum SelectionTranslationPolicy {
         wholeMessageBundleIdentifiers.contains(bundleIdentifier)
     }
 
+    /// Whether a message looks like it carries a one-time code (a verification or login code).
+    ///
+    /// Why it exists: the whole-message path translates a bubble the user never selected exactly, and
+    /// double-clicking a code to copy it is a natural gesture. The bubble is static text, so no field
+    /// detector runs on it, and the text could go to a cloud provider. This content check is what
+    /// stands in for those detectors there.
+    ///
+    /// The rule, over ASCII digit runs (maximal, so a run is never part of a longer run):
+    /// - a run of 5 to 8 digits matches when no letter touches either side, it is not preceded by "+",
+    ///   and no digit continues the token across a single space, hyphen, dot, comma, colon or slash
+    ///   (before or after it). That excludes phone numbers ("+31 6 12345678", "+31612345678"),
+    ///   decimals ("12345.50"), and runs of nine or more digits (a run of 8 or fewer is checked whole).
+    /// - a grouped code matches: a run of exactly 3 digits, one space or hyphen, a run of exactly 3
+    ///   digits ("123 456", "123-456"), with the same neighbour rules on the outer sides only, so
+    ///   "123-456-7890" and "555 123 456 789" do not match.
+    ///
+    /// Deliberately missed: 4-digit codes (years, amounts and room numbers would match too), 9 or more
+    /// digit codes, codes with letters ("G482913" with no separator, alphanumeric codes), and codes
+    /// spelled out in words. A miss only means the message is translated; a false hit only means no
+    /// strip, which is why the rule leans on digits and shape rather than on keywords like "code".
+    static func looksLikeOneTimeCode(_ text: String) -> Bool {
+        let chars = Array(text)
+        func isDigit(_ index: Int) -> Bool {
+            chars.indices.contains(index) && chars[index].isASCII && chars[index].isNumber
+        }
+        func isSeparator(_ char: Character) -> Bool { " -.,:/".contains(char) }
+        // Maximal digit runs as (start, end exclusive).
+        var runs: [(start: Int, end: Int)] = []
+        var index = 0
+        while index < chars.count {
+            guard isDigit(index) else { index += 1; continue }
+            let start = index
+            while isDigit(index) { index += 1 }
+            runs.append((start, index))
+        }
+        func leftBlocked(_ run: (start: Int, end: Int)) -> Bool {
+            guard run.start > 0 else { return false }
+            let previous = chars[run.start - 1]
+            if previous.isLetter || previous == "+" { return true }
+            return isSeparator(previous) && isDigit(run.start - 2)
+        }
+        func rightBlocked(_ run: (start: Int, end: Int)) -> Bool {
+            guard run.end < chars.count else { return false }
+            let next = chars[run.end]
+            if next.isLetter { return true }
+            return isSeparator(next) && isDigit(run.end + 1)
+        }
+        for (position, run) in runs.enumerated() {
+            let length = run.end - run.start
+            if (5...8).contains(length), !leftBlocked(run), !rightBlocked(run) { return true }
+            guard length == 3, position + 1 < runs.count, !leftBlocked(run) else { continue }
+            let next = runs[position + 1]
+            if next.start == run.end + 1, next.end - next.start == 3,
+               chars[run.end] == " " || chars[run.end] == "-",
+               !rightBlocked(next) { return true }
+        }
+        return false
+    }
+
     static func verdict(
         for capture: SelectedTextCapture,
         targetLanguage: String,

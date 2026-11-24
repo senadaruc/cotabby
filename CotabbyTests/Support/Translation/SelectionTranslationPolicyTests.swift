@@ -150,4 +150,21 @@ final class SelectionTranslationPolicyTests: XCTestCase {
     func test_differentTextIsNotAnEcho() {
         XCTAssertFalse(SelectionTranslationPolicy.isEcho(output: "Hallo", input: "Hello"))
     }
+
+    // MARK: One-time codes (whole-message path)
+
+    func test_oneTimeCode_matchesCodesInMessages() {
+        for text in ["Your code is 482913", "G-482913 is your verification code", "code: 123-456", "123 456",
+                     "482913", "Use 12345678 to log in."] {
+            XCTAssertTrue(SelectionTranslationPolicy.looksLikeOneTimeCode(text), text)
+        }
+    }
+
+    func test_oneTimeCode_ignoresOrdinaryNumbersAndProse() {
+        for text in ["See you in 2026", "at 10:19 tomorrow", "it costs 12.50", "call +31 6 12345678",
+                     "we were 12 people", "Hello, how are you doing today?", "call +31612345678",
+                     "555 123 456 789", "123-456-7890", "it costs 12345.50", "id 1234567890123"] {
+            XCTAssertFalse(SelectionTranslationPolicy.looksLikeOneTimeCode(text), text)
+        }
+    }
 }
