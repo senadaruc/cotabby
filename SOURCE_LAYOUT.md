@@ -139,7 +139,8 @@ Cotabby/
 │   │   ├── TranslationCoverStyle.swift
 │   │   ├── TranslationLanguagePolicy.swift
 │   │   ├── TranslationScrollFollow.swift
-│   │   └── TranslationStripPlacement.swift
+│   │   ├── TranslationStripPlacement.swift
+│   │   └── WhatsAppMessageDescriptionParser.swift
 │   └── Utilities/                    small cross-subsystem value helpers
 └── UI/
     ├── Components/                   application-wide reusable views
@@ -215,7 +216,8 @@ CotabbyTests/
     ├── TranslationCoreTests.swift
     ├── TranslationCoverStyleTests.swift
     ├── TranslationScrollFollowTests.swift
-    └── TranslationStripPlacementTests.swift
+    ├── TranslationStripPlacementTests.swift
+    └── WhatsAppMessageDescriptionParserTests.swift
 ~~~
 
 Tests that exercise several production values may stay at the nearest shared subsystem root. Evals
