@@ -167,4 +167,25 @@ final class SelectionTranslationPolicyTests: XCTestCase {
             XCTAssertFalse(SelectionTranslationPolicy.looksLikeOneTimeCode(text), text)
         }
     }
+
+    func test_mentionsCredential_matchesKeywordsInEnglishDutchAndTurkish() {
+        for text in ["My password is hunter2", "wat is het wachtwoord van de wifi?", "PIN is 4821", "Şifre: abc",
+                     "ŞİFRE nedir", "your verification code", "CVV?", "Je pincode is geheim",
+                     "use the one-time code", "doğrulama kodu gönderildi", "2FA is on"] {
+            XCTAssertTrue(SelectionTranslationPolicy.mentionsCredential(text), text)
+        }
+    }
+
+    func test_mentionsCredential_ignoresSubstringsAndPlainProse() {
+        for text in ["spinning class tonight", "pineapple", "the dress code is casual", "enter the code",
+                     "Heeft iemand een extra paar keepershandschoenen?", "See you at 7, bring the ball"] {
+            XCTAssertFalse(SelectionTranslationPolicy.mentionsCredential(text), text)
+        }
+    }
+
+    func test_isSensitiveMessage_combinesDigitShapeAndKeywords() {
+        XCTAssertTrue(SelectionTranslationPolicy.isSensitiveMessage("482913"))
+        XCTAssertTrue(SelectionTranslationPolicy.isSensitiveMessage("Send me the password please"))
+        XCTAssertFalse(SelectionTranslationPolicy.isSensitiveMessage("See you at the gym tomorrow"))
+    }
 }
