@@ -437,6 +437,24 @@ struct FocusSnapshotResolver {
             }
         }
 
+        // A one-line input inside a web page (First Name, Job Title, ...): Tab belongs to the page
+        // there, so Cotabby stays silent. Asked the way the search check asks, through the
+        // `AXWebArea` ancestry, never `vendsDOMAttributes`: Chrome's address bar vends a DOM id too
+        // and must stay supported. Multi-line text areas and contenteditable editors are another
+        // role and keep completing. The climb runs only for a one-line role, and is cached per field.
+        if FormFieldDetector.isFormField(
+            role: candidate.role,
+            isInWebPage: {
+                webAreaAncestryCache.value(
+                    forKey: candidate.elementIdentifier, focusChangeSequence: focusChangeSequence
+                ) {
+                    AXHelper.isInsideWebArea(candidate.element)
+                }
+            }
+        ) {
+            return FormFieldDetector.blockedReason
+        }
+
         guard selection.length > 0 else { return nil }
         if BrowserAppDetector.isChromiumBrowser(bundleIdentifier: bundleIdentifier) {
             CotabbyLogger.focus.debug(
