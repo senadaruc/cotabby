@@ -138,7 +138,7 @@ resolver and held as the host's marked text, never treated as a user selection) 
 bounds query with a zero rect (the caret comes from its pixels, `PixelCaretLocator`); Mail's compose
 header rows are `AXTextField`s with identifiers `Mail.toField`, `Mail.ccField`, `Mail.subjectField`
 where Tab moves to the next field, so they are blocked (`MailHeaderFieldDetector`), and the body is
-an `AXWebArea` described "message body". A Chromium or Electron host reports its font size in CSS
+an `AXWebArea` described "message body". A one-line web input (`AXTextField` or `AXComboBox` inside an `AXWebArea`) is blocked too (`FormFieldDetector`), because Tab moves to the next form field there; text areas, contenteditable editors, the address bar and native fields keep completing. A Chromium or Electron host reports its font size in CSS
 pixels and nothing of its zoom (the Claude desktop composer reports 14 and paints 15.4 at 110%),
 and a contenteditable answers no width query: the ghost's size there follows the advance measured
 from the caret's own movement (`CaretAdvanceSampler`), and the faces such a host bundles in its

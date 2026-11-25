@@ -1069,6 +1069,28 @@ enum AXHelper {
         return unsafeBitCast(value, to: AXUIElement.self)
     }
 
+    /// Whether `element` sits inside a web page: an ancestor is an `AXWebArea`, which Chromium,
+    /// WebKit and Gecko all put at the root of a document (page content, an Electron app's UI, a
+    /// web view inside a native app), while a browser's own toolbar and any native control climb
+    /// to their `AXWindow` without passing one. The climb stops at the window, the application, a
+    /// missing parent, or `maxClimb` levels (web apps nest inputs ~20-40 levels deep), and any of
+    /// those answers false, the "native control" side. Never mutates AX state.
+    static func isInsideWebArea(_ element: AXUIElement, maxClimb: Int = 128) -> Bool {
+        var current = element
+        for _ in 0..<maxClimb {
+            guard let parent = parentElement(of: current) else { return false }
+            switch stringValue(for: kAXRoleAttribute as CFString, on: parent) {
+            case "AXWebArea":
+                return true
+            case kAXWindowRole as String, kAXApplicationRole as String:
+                return false
+            default:
+                current = parent
+            }
+        }
+        return false
+    }
+
     /// Best-effort, fail-safe read of the title of the window containing `element`. Most apps vend
     /// `kAXWindowAttribute` directly on any descendant element; when that misses, nil is returned
     /// rather than walking the tree, so the read stays a single bounded round-trip on the focus

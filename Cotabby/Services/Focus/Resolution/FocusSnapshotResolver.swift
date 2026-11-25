@@ -45,6 +45,12 @@ struct FocusSnapshotResolver {
     /// fields (see `FocusSessionScopedCache`).
     private let secureFieldVerdictCache = FocusSessionScopedCache<Bool>()
     private let terminalDetectionCache = FocusSessionScopedCache<Bool>()
+    /// Whether a one-line field sits inside a web page (`AXHelper.isInsideWebArea`), which
+    /// `FormFieldDetector` needs. The climb is one AX round trip pair per level (~30 levels in web
+    /// apps) and `blockedReason` runs on every focus poll, so the answer is paid at most once per
+    /// focus session per field: an element's ancestry cannot change while it stays the same element,
+    /// and a new `focusChangeSequence` drops the entry (see `FocusSessionScopedCache`).
+    private let webAreaAncestryCache = FocusSessionScopedCache<Bool>()
     /// The text margin the caret's paragraph wraps to, which a field's `AXFrame` does not reveal
     /// (Word's frame is the page edge, not the text margin). Up to three AX round trips, so each
     /// result is cached per focus session *and* per paragraph: the margin changes between an indented
@@ -356,8 +362,12 @@ struct FocusSnapshotResolver {
             selectionRect: selectionBounds(for: resolvedCandidate, selectionLength: selection.length)
         )
 
-        if let reason = Self.blockedReason(
-            for: resolvedCandidate, bundleIdentifier: bundleIdentifier, selection: selection, rawSelection: rawSelection
+        if let reason = blockedReason(
+            for: resolvedCandidate,
+            bundleIdentifier: bundleIdentifier,
+            selection: selection,
+            rawSelection: rawSelection,
+            focusChangeSequence: focusChangeSequence
         ) {
             return FocusSnapshot(
                 applicationName: applicationName,
@@ -400,11 +410,12 @@ struct FocusSnapshotResolver {
         return rect.isEmpty ? nil : rect
     }
 
-    private static func blockedReason(
+    private func blockedReason(
         for candidate: AXFocusCandidate,
         bundleIdentifier: String,
         selection: NSRange,
-        rawSelection: NSRange
+        rawSelection: NSRange,
+        focusChangeSequence: UInt64
     ) -> String? {
         if candidate.isSecure {
             return "Secure text input is active."
@@ -451,6 +462,24 @@ struct FocusSnapshotResolver {
             ) {
                 return SearchFieldDetector.blockedReason
             }
+        }
+
+        // A one-line input inside a web page (First Name, Job Title, ...): Tab belongs to the page
+        // there, so Cotabby stays silent. Asked through the `AXWebArea` ancestry, never
+        // `vendsDOMAttributes`: Chrome's address bar vends a DOM id too and must stay supported.
+        // Multi-line text areas and contenteditable editors are another role and keep completing.
+        // The climb runs only for a one-line role, and is cached per field and focus session.
+        if FormFieldDetector.isFormField(
+            role: candidate.role,
+            isInWebPage: {
+                webAreaAncestryCache.value(
+                    forKey: candidate.elementIdentifier, focusChangeSequence: focusChangeSequence
+                ) {
+                    AXHelper.isInsideWebArea(candidate.element)
+                }
+            }
+        ) {
+            return FormFieldDetector.blockedReason
         }
 
         guard selection.length > 0 else { return nil }
